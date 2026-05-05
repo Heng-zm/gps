@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base href="$FLUTTER_BASE_HREF">
+
+  <meta charset="UTF-8">
+  <meta content="IE=Edge" http-equiv="X-UA-Compatible">
+  <meta name="description" content="High-precision GPS Tracker — live speed, route, and trip stats.">
+
+  <!-- Permissions Policy: Critical for keeping screen on during trips -->
+  <meta http-equiv="Permissions-Policy" content="screen-wake-lock=(self)">
+
+  <!-- iOS PWA meta tags & icons -->
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="GPS Tracker">
+  <link rel="apple-touch-icon" href="icons/Icon-192.png">
+
+  <!-- Theme Color: Matches app background for seamless browser integration -->
+  <meta name="theme-color" content="#0D0D0D">
+
+  <link rel="icon" type="image/png" href="favicon.png"/>
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+
+  <title>GPS Tracker</title>
+  <link rel="manifest" href="manifest.json">
+
+  <style>
+    body {
+      margin: 0;
+      background-color: #0D0D0D;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+      width: 100vw;
+      overflow: hidden;
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    }
+
+    #loading {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      transition: opacity 0.4s ease-out;
+    }
+
+    /* UPGRADE: Gauge-style spinner to match Speedometer theme */
+    .gauge-loader {
+      width: 60px;
+      height: 60px;
+      position: relative;
+      border: 4px solid #1A1A1A;
+      border-radius: 50%;
+      border-top: 4px solid #4ECDC4;
+      animation: sweep 1.5s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+    }
+
+    .gauge-loader::after {
+      content: '';
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      width: 4px;
+      height: 25px;
+      background: #4ECDC4;
+      transform-origin: bottom center;
+      transform: translate(-50%, -100%) rotate(0deg);
+      border-radius: 2px;
+      animation: needle 1.5s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+    }
+
+    @keyframes sweep {
+      0% { transform: rotate(0deg); border-top-color: #1A8C85; }
+      50% { border-top-color: #4ECDC4; }
+      100% { transform: rotate(360deg); border-top-color: #1A8C85; }
+    }
+
+    @keyframes needle {
+      0% { transform: translate(-50%, -100%) rotate(-120deg); }
+      50% { transform: translate(-50%, -100%) rotate(120deg); }
+      100% { transform: translate(-50%, -100%) rotate(-120deg); }
+    }
+
+    .loading-text {
+      color: #FFFFFF;
+      margin-top: 24px;
+      font-size: 11px;
+      letter-spacing: 3px;
+      font-weight: 800;
+      text-transform: uppercase;
+      opacity: 0.6;
+    }
+  </style>
+</head>
+<body>
+  <!-- Themed Loading Screen -->
+  <div id="loading">
+    <div class="gauge-loader"></div>
+    <div class="loading-text">Calibrating Satellites</div>
+  </div>
+
+  <script>
+    // FIX: Optimized and safe removal of loading indicator
+    function removeLoader() {
+      const loader = document.querySelector('#loading');
+      if (loader) {
+        loader.style.opacity = '0';
+        setTimeout(() => {
+          if (loader.parentNode) {
+            loader.remove();
+          }
+        }, 400);
+      }
+    }
+
+    window.addEventListener('load', function(ev) {
+      // Modern Flutter 3.24+ Initialization
+      _flutter.loader.load({
+        config: {
+          renderer: "canvaskit", // Critical for high-framerate speedometer draws
+          serviceWorker: {
+            serviceWorkerVersion: {{flutter_service_worker_version}},
+          }
+        },
+        onEntrypointLoaded: function(engineInitializer) {
+          engineInitializer.initializeEngine().then(function(appRunner) {
+            removeLoader();
+            appRunner.runApp();
+          });
+        }
+      });
+    });
+
+    // RECOVERY: If the engine fails to load within 10 seconds, hide loader
+    // to let the framework try to display an error or fallback.
+    setTimeout(removeLoader, 10000);
+
+    // WAKE LOCK REJECTION HANDLER: Prevents JS exceptions on insecure origins
+    window.addEventListener('unhandledrejection', function(event) {
+      if (event.reason && event.reason.name === 'NotAllowedError' && event.reason.message.includes('wake-lock')) {
+        console.warn('WakeLock restricted. Run via HTTPS to enable auto-screen-on.');
+        event.preventDefault();
+      }
+    });
+  </script>
+  <script src="flutter_bootstrap.js" async></script>
+</body>
+</html>
