@@ -4,22 +4,23 @@ publish_to: 'none'
 version: 1.1.0+2
 
 environment:
-  # Upgraded to target modern Dart features (3.5+ recommended for latest Flutter)
   sdk: '>=3.5.0 <4.0.0'
 
 dependencies:
   flutter:
     sdk: flutter
 
-  # GPS & Location (Upgraded for better iOS 18 support)
+  # GPS & Location
+  build_runner: ^2.4.9        # ← add this
+  hive_generator: ^2.0.1      # ← add this if missing too
   geolocator: ^13.0.1
   permission_handler: ^11.3.1
 
-  # Maps (Upgraded to v8.0.0 - Major performance and API improvements)
+  # Maps
   flutter_map: ^8.0.0
   latlong2: ^0.9.1
 
-  # Charts (Upgraded for smoother animations)
+  # Charts
   fl_chart: ^0.71.0
 
   # Network
@@ -34,17 +35,11 @@ dependencies:
   wakelock_plus: ^1.2.11
   google_generative_ai: ^0.4.5
 
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
-  # Upgraded lints to ensure high-quality modern Dart code
   flutter_lints: ^5.0.0
 
 flutter:
   uses-material-design: true
-
-  # If you plan to add custom fonts for the mono-spaced duration display:
-  # fonts:
-  #   - family: JetBrainsMono
-  #     fonts:
-  #       - asset: assets/fonts/JetBrainsMono-Bold.ttf
