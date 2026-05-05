@@ -1,4 +1,5 @@
-import 'package:google_generative_ai/google_generative_ai.dart';
+import 'dart:convert';
+import 'package:http/http.dart' as http;
 import '../models/trip_data.dart';
 import '../models/weather_data.dart';
 import 'settings_service.dart';
@@ -7,10 +8,8 @@ class AiService {
   AiService._internal();
   static final AiService instance = AiService._internal();
 
-  final GenerativeModel _model = GenerativeModel(
-    model: 'gemma-4-31b-it',
-    apiKey: 'AIzaSyA_u1xkFG6i1JzT_LrakEj1Yz9pCUmLcbc',
-  );
+  // Your Render endpoint URL
+  static const String _endpointUrl = 'https://bot-voice-sqnz.onrender.com/ai-assistant';
 
   /// Analyzes trip data with environmental context
   Future<String> analyzeTrip(TripSummary s, {WeatherData? weather}) async {
@@ -33,8 +32,27 @@ class AiService {
     ''';
 
     try {
-      final res = await _model.generateContent([Content.text(prompt)]);
-      return res.text ?? "Analysis currently unavailable.";
+      final response = await http.post(
+        Uri.parse(_endpointUrl),
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: jsonEncode({
+          'message': prompt,
+          'stream': false,
+        }),
+      );
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        if (data['ok'] == true) {
+          return data['reply'];
+        } else {
+          return "Analysis error: ${data['error']}";
+        }
+      }
+      
+      return "Server error: ${response.statusCode}";
     } catch (e) {
       return "AI Link offline. Please check your data connection.";
     }
@@ -42,17 +60,34 @@ class AiService {
 
   /// Specialized chat with history
   Future<String> chatWithAi(
-      TripSummary s, String query, List<Content> history) async {
-    final chat = _model.startChat(history: history);
-    final context =
-        "The user is asking about a trip of ${s.distanceMiles.toStringAsFixed(2)} miles. Answer helpfuly.";
+      TripSummary s, String query, List<Map<String, String>> history) async {
+    
+    final context = "The user is asking about a trip of ${s.distanceMiles.toStringAsFixed(2)} miles. Answer helpfully.\n\nQuestion: $query";
 
     try {
-      final res =
-          await chat.sendMessage(Content.text("$context\nQuestion: $query"));
-      return res.text ?? "I'm sorry, I couldn't process that.";
+      final response = await http.post(
+        Uri.parse(_endpointUrl),
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: jsonEncode({
+          'message': context,
+          'history': history,
+          'stream': false,
+        }),
+      );
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        if (data['ok'] == true) {
+          return data['reply'];
+        } else {
+          return "I'm sorry, I couldn't process that: ${data['error']}";
+        }
+      }
+      return "Server Error: ${response.statusCode}";
     } catch (e) {
-      return "Chat error.";
+      return "Chat error. Please check your connection.";
     }
   }
 }
