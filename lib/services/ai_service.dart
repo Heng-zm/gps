@@ -10,6 +10,10 @@ class AiService {
 
   // Your Render endpoint URL
   static const String _endpointUrl = 'https://bot-voice-sqnz.onrender.com/ai-assistant';
+  
+  // NOTE: If you configured the AI_API_KEY environment variable on Render, 
+  // put it here. If not, you can leave it empty.
+  static const String _apiKey = 'AIzaSyA_u1xkFG6i1JzT_LrakEj1Yz9pCUmLcbc';
 
   /// Analyzes trip data with environmental context
   Future<String> analyzeTrip(TripSummary s, {WeatherData? weather}) async {
@@ -36,6 +40,7 @@ class AiService {
         Uri.parse(_endpointUrl),
         headers: {
           'Content-Type': 'application/json',
+          'X-Api-Key': _apiKey, // Sent to your Render backend
         },
         body: jsonEncode({
           'message': prompt,
@@ -59,6 +64,7 @@ class AiService {
   }
 
   /// Specialized chat with history
+  /// Note: The 'history' type changed from List<Content> to List<Map<String, String>>
   Future<String> chatWithAi(
       TripSummary s, String query, List<Map<String, String>> history) async {
     
@@ -69,6 +75,7 @@ class AiService {
         Uri.parse(_endpointUrl),
         headers: {
           'Content-Type': 'application/json',
+          'X-Api-Key': _apiKey, // Sent to your Render backend
         },
         body: jsonEncode({
           'message': context,
