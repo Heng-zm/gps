@@ -38,13 +38,13 @@ class SavedTrip {
       };
 
   factory SavedTrip.fromJson(Map<String, dynamic> json) => SavedTrip(
-        id: json['id'] as String,
-        date: DateTime.fromMillisecondsSinceEpoch(json['date'] as int),
-        distanceMiles: (json['distanceMiles'] as num).toDouble(),
-        maxSpeedMph: (json['maxSpeedMph'] as num).toDouble(),
-        avgSpeedMph: (json['avgSpeedMph'] as num).toDouble(),
-        totalTime: Duration(seconds: json['totalTimeSeconds'] as int),
-        altitudeGainFt: (json['altitudeGainFt'] as num).toDouble(),
+        id: json['id'] as String? ?? '',
+        date: DateTime.fromMillisecondsSinceEpoch(json['date'] as int? ?? 0),
+        distanceMiles: (json['distanceMiles'] as num? ?? 0.0).toDouble(),
+        maxSpeedMph: (json['maxSpeedMph'] as num? ?? 0.0).toDouble(),
+        avgSpeedMph: (json['avgSpeedMph'] as num? ?? 0.0).toDouble(),
+        totalTime: Duration(seconds: json['totalTimeSeconds'] as int? ?? 0),
+        altitudeGainFt: (json['altitudeGainFt'] as num? ?? 0.0).toDouble(),
       );
 
   String get formattedDate => DateFormat('MMM d, yyyy · h:mm a').format(date);
@@ -79,7 +79,6 @@ class _HistoryScreenState extends State<HistoryScreen> {
   @override
   void initState() {
     super.initState();
-    // Re-calculate units if user toggles km/mi in settings
     _settings.addListener(_updateUI);
     _loadTrips();
   }
@@ -126,12 +125,14 @@ class _HistoryScreenState extends State<HistoryScreen> {
 
   Future<void> _deleteTrip(String id) async {
     await HapticFeedback.mediumImpact();
+
+    final prefs = await SharedPreferences.getInstance();
+
     setState(() {
       _trips.removeWhere((t) => t.id == id);
       _calculateLifetimeStats();
     });
 
-    final prefs = await SharedPreferences.getInstance();
     final updatedRaw = _trips.map((t) => jsonEncode(t.toJson())).toList();
     await prefs.setStringList('saved_trips', updatedRaw);
   }
@@ -167,28 +168,54 @@ class _HistoryScreenState extends State<HistoryScreen> {
   }
 
   @override
-  @override
   Widget build(BuildContext context) {
     return CupertinoPageScaffold(
       backgroundColor: const Color(0xFF0A0A0A),
       child: SafeArea(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            _buildHeader(),
-
-            // FIX: Removed curly braces { }.
-            // In a List, 'if (condition) widget' is the correct syntax.
-            if (_trips.isNotEmpty) _buildLifetimeSummary(),
-
-            const SizedBox(height: 12),
-            Expanded(
-              child: _loading
-                  ? const Center(child: CupertinoActivityIndicator(radius: 12))
-                  : _trips.isEmpty
-                      ? const _EmptyState()
-                      : _buildTripList(),
+        child: CustomScrollView(
+          physics: const BouncingScrollPhysics(),
+          slivers: [
+            CupertinoSliverRefreshControl(
+              onRefresh: _loadTrips,
             ),
+            SliverToBoxAdapter(
+              child: _buildHeader(),
+            ),
+            if (_trips.isNotEmpty)
+              SliverToBoxAdapter(
+                child: _buildLifetimeSummary(),
+              ),
+            const SliverToBoxAdapter(
+              child: SizedBox(height: 12),
+            ),
+            if (_loading)
+              const SliverToBoxAdapter(
+                child: Padding(
+                  padding: EdgeInsets.only(top: 60),
+                  child: Center(child: CupertinoActivityIndicator(radius: 12)),
+                ),
+              )
+            else if (_trips.isEmpty)
+              const SliverToBoxAdapter(
+                child: _EmptyState(),
+              )
+            else
+              SliverPadding(
+                padding: const EdgeInsets.fromLTRB(20, 0, 20, 40),
+                sliver: SliverList(
+                  delegate: SliverChildBuilderDelegate(
+                    (context, i) => Padding(
+                      padding: const EdgeInsets.only(bottom: 12),
+                      child: _TripCard(
+                        trip: _trips[i],
+                        onDelete: () => _confirmDelete(_trips[i]),
+                        settings: _settings,
+                      ),
+                    ),
+                    childCount: _trips.length,
+                  ),
+                ),
+              ),
           ],
         ),
       ),
@@ -210,6 +237,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
               letterSpacing: 1.5,
             ),
           ),
+          const SizedBox(height: 4),
           Text(
             '${_trips.length} recording${_trips.length == 1 ? '' : 's'} available',
             style: const TextStyle(color: Color(0xFF666666), fontSize: 13),
@@ -251,19 +279,6 @@ class _HistoryScreenState extends State<HistoryScreen> {
                 : '${_totalMinutes}m',
           ),
         ],
-      ),
-    );
-  }
-
-  Widget _buildTripList() {
-    return ListView.separated(
-      padding: const EdgeInsets.fromLTRB(20, 0, 20, 40),
-      itemCount: _trips.length,
-      separatorBuilder: (_, __) => const SizedBox(height: 12),
-      itemBuilder: (context, i) => _TripCard(
-        trip: _trips[i],
-        onDelete: () => _confirmDelete(_trips[i]),
-        settings: _settings,
       ),
     );
   }
@@ -311,6 +326,14 @@ class _TripCard extends StatelessWidget {
     required this.settings,
   });
 
+  String _getAltitudeDisplay() {
+    if (settings.useKmh) {
+      final meters = trip.altitudeGainFt * 0.3048;
+      return '+${meters.toInt()} m';
+    }
+    return '+${trip.altitudeGainFt.toInt()} ft';
+  }
+
   @override
   Widget build(BuildContext context) {
     return Dismissible(
@@ -321,7 +344,7 @@ class _TripCard extends StatelessWidget {
         alignment: Alignment.centerRight,
         padding: const EdgeInsets.only(right: 25),
         decoration: BoxDecoration(
-          color: const Color(0xFFE74C3C).withValues(alpha: 0.2),
+          color: const Color(0xFFE74C3C).withValues(alpha: 0.2), // FIXED
           borderRadius: BorderRadius.circular(18),
         ),
         child: const Icon(
@@ -395,7 +418,7 @@ class _TripCard extends StatelessWidget {
                 ),
                 _MiniStat(
                   label: 'ALT GAIN',
-                  value: '+${trip.altitudeGainFt.toInt()} ft',
+                  value: _getAltitudeDisplay(),
                 ),
               ],
             ),
@@ -409,7 +432,7 @@ class _TripCard extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.all(10),
       decoration: BoxDecoration(
-        color: const Color(0xFF4ECDC4).withValues(alpha: 0.1),
+        color: const Color(0xFF4ECDC4).withValues(alpha: 0.1), // FIXED
         borderRadius: BorderRadius.circular(12),
       ),
       child: const Icon(
@@ -464,30 +487,33 @@ class _EmptyState extends StatelessWidget {
   const _EmptyState();
   @override
   Widget build(BuildContext context) {
-    return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(
-            CupertinoIcons.tickets,
-            color: Colors.white.withValues(alpha: 0.1),
-            size: 60,
-          ),
-          const SizedBox(height: 20),
-          const Text(
-            'No Trips Found',
-            style: TextStyle(
-              color: Colors.white,
-              fontSize: 18,
-              fontWeight: FontWeight.w700,
+    return Padding(
+      padding: const EdgeInsets.only(top: 80),
+      child: Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              CupertinoIcons.tickets,
+              color: Colors.white.withValues(alpha: 0.1), // FIXED
+              size: 60,
             ),
-          ),
-          const SizedBox(height: 6),
-          const Text(
-            'Completed trips will appear here.',
-            style: TextStyle(color: Color(0xFF555555), fontSize: 14),
-          ),
-        ],
+            const SizedBox(height: 20),
+            const Text(
+              'No Trips Found',
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: 18,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+            const SizedBox(height: 6),
+            const Text(
+              'Completed trips will appear here.',
+              style: TextStyle(color: Color(0xFF555555), fontSize: 14),
+            ),
+          ],
+        ),
       ),
     );
   }

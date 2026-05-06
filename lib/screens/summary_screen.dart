@@ -60,7 +60,7 @@ class SummaryScreen extends StatelessWidget {
                         distUnit: distUnit),
                     const SizedBox(height: 16),
 
-                    // GEMINI: Automatic Trip Analysis
+                    // AI Automatic Trip Analysis
                     AiAnalysisCard(summary: summary),
 
                     const SizedBox(height: 16),
@@ -182,6 +182,7 @@ class SummaryScreen extends StatelessWidget {
   }
 
   Widget _buildMapButton(BuildContext context) {
+    const teal = Color(0xFF4ECDC4);
     return GestureDetector(
       onTap: () => Navigator.of(context).push(
         CupertinoPageRoute(
@@ -190,20 +191,17 @@ class SummaryScreen extends StatelessWidget {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
         decoration: BoxDecoration(
-          color: const Color(0xFF4ECDC4).withValues(alpha: 0.1),
+          color: teal.withValues(alpha: 0.1),
           borderRadius: BorderRadius.circular(10),
-          border:
-              Border.all(color: const Color(0xFF4ECDC4).withValues(alpha: 0.2)),
+          border: Border.all(color: teal.withValues(alpha: 0.2)),
         ),
         child: const Row(
           children: [
-            Icon(CupertinoIcons.map_fill, color: Color(0xFF4ECDC4), size: 14),
+            Icon(CupertinoIcons.map_fill, color: teal, size: 14),
             SizedBox(width: 6),
             Text('MAP',
                 style: TextStyle(
-                    color: Color(0xFF4ECDC4),
-                    fontSize: 12,
-                    fontWeight: FontWeight.w800)),
+                    color: teal, fontSize: 12, fontWeight: FontWeight.w800)),
           ],
         ),
       ),
@@ -237,6 +235,7 @@ class _HeroCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    const teal = Color(0xFF4ECDC4);
     return Container(
       padding: const EdgeInsets.all(24),
       decoration: BoxDecoration(
@@ -246,8 +245,7 @@ class _HeroCard extends StatelessWidget {
           end: Alignment.bottomRight,
         ),
         borderRadius: BorderRadius.circular(24),
-        border:
-            Border.all(color: const Color(0xFF4ECDC4).withValues(alpha: 0.2)),
+        border: Border.all(color: teal.withValues(alpha: 0.2)),
       ),
       child: Row(
         children: [
@@ -256,7 +254,7 @@ class _HeroCard extends StatelessWidget {
             children: [
               Text('TOTAL DISTANCE',
                   style: TextStyle(
-                      color: const Color(0xFF4ECDC4).withValues(alpha: 0.6),
+                      color: teal.withValues(alpha: 0.6),
                       fontSize: 10,
                       fontWeight: FontWeight.w900,
                       letterSpacing: 2)),
@@ -277,7 +275,7 @@ class _HeroCard extends StatelessWidget {
                   const SizedBox(width: 8),
                   Text(distUnit,
                       style: const TextStyle(
-                          color: Color(0xFF4ECDC4),
+                          color: teal,
                           fontSize: 18,
                           fontWeight: FontWeight.w900)),
                 ],
@@ -292,17 +290,16 @@ class _HeroCard extends StatelessWidget {
   }
 
   Widget _buildBadge() {
+    const teal = Color(0xFF4ECDC4);
     return Container(
       width: 60,
       height: 60,
       decoration: BoxDecoration(
-        color: const Color(0xFF4ECDC4).withValues(alpha: 0.1),
+        color: teal.withValues(alpha: 0.1),
         shape: BoxShape.circle,
-        border:
-            Border.all(color: const Color(0xFF4ECDC4).withValues(alpha: 0.1)),
+        border: Border.all(color: teal.withValues(alpha: 0.1)),
       ),
-      child: const Icon(CupertinoIcons.flag_fill,
-          color: Color(0xFF4ECDC4), size: 24),
+      child: const Icon(CupertinoIcons.flag_fill, color: teal, size: 24),
     );
   }
 }
@@ -373,17 +370,14 @@ class _StatBox extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final color = accent ? const Color(0xFF4ECDC4) : const Color(0xFF555555);
+    final teal = const Color(0xFF4ECDC4);
+    final color = accent ? teal : const Color(0xFF555555);
     return Container(
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: accent
-            ? const Color(0xFF4ECDC4).withValues(alpha: 0.05)
-            : const Color(0xFF111111),
+        color: accent ? teal.withValues(alpha: 0.05) : const Color(0xFF111111),
         borderRadius: BorderRadius.circular(14),
-        border: accent
-            ? Border.all(color: const Color(0xFF4ECDC4).withValues(alpha: 0.15))
-            : null,
+        border: accent ? Border.all(color: teal.withValues(alpha: 0.15)) : null,
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -425,6 +419,8 @@ class _SpeedChart extends StatelessWidget {
           FlSpot(i.toDouble(), settings.toDisplaySpeed(points[i].speedMph)));
     }
 
+    final blue = const Color(0xFF4A9EFF);
+
     return SizedBox(
       height: 90,
       child: LineChart(LineChartData(
@@ -436,7 +432,7 @@ class _SpeedChart extends StatelessWidget {
             spots: spots,
             isCurved: true,
             preventCurveOverShooting: true,
-            color: const Color(0xFF4A9EFF),
+            color: blue,
             barWidth: 3,
             dotData: const FlDotData(show: false),
             belowBarData: BarAreaData(
@@ -444,10 +440,7 @@ class _SpeedChart extends StatelessWidget {
               gradient: LinearGradient(
                 begin: Alignment.topCenter,
                 end: Alignment.bottomCenter,
-                colors: [
-                  const Color(0xFF4A9EFF).withValues(alpha: 0.2),
-                  Colors.transparent
-                ],
+                colors: [blue.withValues(alpha: 0.2), Colors.transparent],
               ),
             ),
           ),
@@ -470,6 +463,8 @@ class _AltitudeChart extends StatelessWidget {
       spots.add(FlSpot(i.toDouble(), points[i].altitudeFt * factor));
     }
 
+    final teal = const Color(0xFF4ECDC4);
+
     return SizedBox(
       height: 90,
       child: LineChart(LineChartData(
@@ -481,7 +476,7 @@ class _AltitudeChart extends StatelessWidget {
             spots: spots,
             isCurved: true,
             preventCurveOverShooting: true,
-            color: const Color(0xFF4ECDC4),
+            color: teal,
             barWidth: 3,
             dotData: const FlDotData(show: false),
             belowBarData: BarAreaData(
@@ -489,10 +484,7 @@ class _AltitudeChart extends StatelessWidget {
               gradient: LinearGradient(
                 begin: Alignment.topCenter,
                 end: Alignment.bottomCenter,
-                colors: [
-                  const Color(0xFF4ECDC4).withValues(alpha: 0.2),
-                  Colors.transparent
-                ],
+                colors: [teal.withValues(alpha: 0.2), Colors.transparent],
               ),
             ),
           ),

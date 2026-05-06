@@ -77,7 +77,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             child: const Text('Clear'),
           ),
           CupertinoDialogAction(
-            onPressed: () => Navigator.of(context).pop(),
+            onPressed: () => Navigator.pop(context),
             child: const Text('Cancel'),
           ),
         ],
@@ -87,10 +87,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   @override
   Widget build(BuildContext context) {
+    const teal = Color(0xFF4ECDC4);
+
     return CupertinoPageScaffold(
       backgroundColor: const Color(0xFF0D0D0D),
       child: SafeArea(
         child: SingleChildScrollView(
+          physics: const BouncingScrollPhysics(),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -100,7 +103,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     style: TextStyle(
                         color: Colors.white,
                         fontSize: 24,
-                        fontWeight: FontWeight.w800,
+                        fontWeight: FontWeight.w900,
                         letterSpacing: 2)),
               ),
 
@@ -172,20 +175,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     children: [
                       Row(
                         children: [
-                          const Text('Mode',
+                          const Text('Precision Mode',
                               style: TextStyle(
                                   color: Colors.white,
                                   fontSize: 15,
-                                  fontWeight: FontWeight.w500)),
+                                  fontWeight: FontWeight.w600)),
                           const Spacer(),
                           Text(_s.gpsAccuracyLabel,
                               style: const TextStyle(
-                                  color: Color(0xFF4ECDC4),
-                                  fontSize: 14,
-                                  fontWeight: FontWeight.w600)),
+                                  color: teal,
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w700)),
                         ],
                       ),
-                      const SizedBox(height: 12),
+                      const SizedBox(height: 16),
                       Row(
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
@@ -198,65 +201,53 @@ class _SettingsScreenState extends State<SettingsScreen> {
                               selected: _s.gpsAccuracyMode == 1,
                               onTap: () => _s.setGpsAccuracyMode(1)),
                           _AccuracyChip(
-                              label: 'Low Power',
+                              label: 'Eco',
                               selected: _s.gpsAccuracyMode == 2,
                               onTap: () => _s.setGpsAccuracyMode(2)),
                         ],
                       ),
-                      const SizedBox(height: 8),
+                      const SizedBox(height: 12),
                       Text(
                         _s.gpsAccuracyMode == 0
-                            ? 'Maximum accuracy. Uses more battery.'
+                            ? 'Maximum precision for professional driving. High battery.'
                             : _s.gpsAccuracyMode == 1
-                                ? 'Balanced accuracy and battery usage.'
-                                : 'Conserves battery. Less precise.',
+                                ? 'Standard accuracy for typical city driving.'
+                                : 'Aggressive battery conservation. Less precise tracking.',
                         style: const TextStyle(
-                            color: Color(0xFF555555), fontSize: 12),
+                            color: Color(0xFF666666),
+                            fontSize: 12,
+                            height: 1.4),
                       ),
                     ],
                   ),
                 ),
               ]),
 
-              // Trips
-              _Section(title: 'TRIPS', children: [
-                _ToggleRow(
-                  label: 'Auto-Save Trips',
-                  subtitle: 'Save trips automatically on stop',
-                  value: _s.autoSaveTrips,
-                  onChanged: (v) => _s.setAutoSaveTrips(v),
-                ),
-              ]),
-
               // Speed Alert
               _Section(title: 'SPEED ALERT', children: [
                 _ToggleRow(
-                  label: 'Speed Alert',
-                  subtitle: 'Notify when exceeding the speed limit',
+                  label: 'Over-speed Notification',
+                  subtitle: 'Dashboard turns red when limit is exceeded',
                   value: _s.speedAlertEnabled,
                   onChanged: (v) => _s.setSpeedAlertEnabled(v),
                 ),
                 if (_s.speedAlertEnabled) ...[
                   const _Sep(),
                   Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+                    padding: const EdgeInsets.fromLTRB(16, 16, 16, 4),
                     child: Row(children: [
-                      Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const Text('Alert Speed',
-                              style: TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 15,
-                                  fontWeight: FontWeight.w500)),
-                          Text(
-                            '${_s.speedAlertDisplayValue.toInt()} ${_s.speedUnit}',
-                            style: const TextStyle(
-                                color: Color(0xFF4ECDC4),
-                                fontSize: 13,
-                                fontWeight: FontWeight.w600),
-                          ),
-                        ],
+                      const Text('Alert Threshold',
+                          style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 15,
+                              fontWeight: FontWeight.w600)),
+                      const Spacer(),
+                      Text(
+                        '${_s.speedAlertDisplayValue.toInt()} ${_s.speedUnit}',
+                        style: const TextStyle(
+                            color: teal,
+                            fontSize: 15,
+                            fontWeight: FontWeight.w800),
                       ),
                     ]),
                   ),
@@ -267,24 +258,26 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           .clamp(_s.useKmh ? 30.0 : 20.0, _s.speedAlertMax),
                       min: _s.useKmh ? 30.0 : 20.0,
                       max: _s.speedAlertMax,
-                      divisions: _s.useKmh ? 290 : 180,
-                      activeColor: const Color(0xFF4ECDC4),
+                      divisions: _s.useKmh ? 27 : 18,
+                      activeColor: teal,
                       onChanged: (v) => _s.setSpeedAlertDisplayValue(v),
                     ),
                   ),
                   Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
                     child: Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
-                        Text(_s.useKmh ? '30 km/h' : '20 mph',
+                        Text(_s.useKmh ? '30' : '20',
                             style: TextStyle(
-                                color: Colors.white.withValues(alpha: 0.3),
-                                fontSize: 11)),
-                        Text(_s.useKmh ? '320 km/h' : '200 mph',
+                                color: Colors.white.withValues(alpha: 0.2),
+                                fontSize: 11,
+                                fontWeight: FontWeight.bold)),
+                        Text(_s.useKmh ? '300' : '180',
                             style: TextStyle(
-                                color: Colors.white.withValues(alpha: 0.3),
-                                fontSize: 11)),
+                                color: Colors.white.withValues(alpha: 0.2),
+                                fontSize: 11,
+                                fontWeight: FontWeight.bold)),
                       ],
                     ),
                   ),
@@ -292,37 +285,35 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ]),
 
               // About
-              _Section(title: 'ABOUT', children: [
-                const _InfoRow(label: 'Version', value: '1.0.0'),
+              _Section(title: 'SYSTEM', children: [
+                const _InfoRow(label: 'TrackPro Version', value: '1.2.0'),
                 const _Sep(),
-                const _InfoRow(label: 'Map Provider', value: 'OpenStreetMap'),
+                const _InfoRow(label: 'Map Engine', value: 'CartoDB Dark'),
                 const _Sep(),
-                const _InfoRow(label: 'Weather Provider', value: 'Open-Meteo'),
-                const _Sep(),
-                const _InfoRow(label: 'Accuracy Filter', value: '15m (GPS)'),
+                const _InfoRow(label: 'Weather API', value: 'Open-Meteo'),
               ]),
 
               // Danger zone
-              _Section(title: 'DATA', children: [
+              _Section(title: 'STORAGE', children: [
                 GestureDetector(
                   onTap: _confirmClearData,
                   child: const Padding(
-                    padding: EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                    padding: EdgeInsets.symmetric(horizontal: 16, vertical: 16),
                     child: Row(children: [
                       Icon(CupertinoIcons.trash,
                           color: Color(0xFFE74C3C), size: 18),
                       SizedBox(width: 12),
-                      Text('Clear All Data & Settings',
+                      Text('Delete All Cached Trips',
                           style: TextStyle(
                               color: Color(0xFFE74C3C),
                               fontSize: 15,
-                              fontWeight: FontWeight.w500)),
+                              fontWeight: FontWeight.w700)),
                     ]),
                   ),
                 ),
               ]),
 
-              const SizedBox(height: 40),
+              const SizedBox(height: 60),
             ],
           ),
         ),
@@ -341,23 +332,24 @@ class _Section extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(20, 0, 20, 16),
+      padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Padding(
-            padding: const EdgeInsets.only(bottom: 8),
+            padding: const EdgeInsets.only(bottom: 10, left: 4),
             child: Text(title,
                 style: const TextStyle(
                     color: Color(0xFF4ECDC4),
-                    fontSize: 11,
-                    fontWeight: FontWeight.w700,
+                    fontSize: 10,
+                    fontWeight: FontWeight.w900,
                     letterSpacing: 2)),
           ),
           Container(
             decoration: BoxDecoration(
-              color: const Color(0xFF1A1A1A),
-              borderRadius: BorderRadius.circular(16),
+              color: const Color(0xFF151515),
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(color: const Color(0xFF222222)),
             ),
             child: Column(children: children),
           ),
@@ -381,7 +373,7 @@ class _ToggleRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
       child: Row(
         children: [
           Expanded(
@@ -392,11 +384,11 @@ class _ToggleRow extends StatelessWidget {
                     style: const TextStyle(
                         color: Colors.white,
                         fontSize: 15,
-                        fontWeight: FontWeight.w500)),
-                const SizedBox(height: 2),
+                        fontWeight: FontWeight.w600)),
+                const SizedBox(height: 4),
                 Text(subtitle,
                     style: const TextStyle(
-                        color: Color(0xFF555555), fontSize: 12)),
+                        color: Color(0xFF666666), fontSize: 12, height: 1.3)),
               ],
             ),
           ),
@@ -422,22 +414,23 @@ class _InfoRow extends StatelessWidget {
   Widget build(BuildContext context) {
     return GestureDetector(
       onTap: onTap,
+      behavior: HitTestBehavior.opaque,
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
         child: Row(children: [
           Text(label,
               style: const TextStyle(
                   color: Colors.white,
                   fontSize: 15,
-                  fontWeight: FontWeight.w500)),
+                  fontWeight: FontWeight.w600)),
           const Spacer(),
           Text(value,
               style: TextStyle(
                   color: valueColor ?? const Color(0xFF666666),
                   fontSize: 14,
-                  fontWeight: FontWeight.w500)),
+                  fontWeight: FontWeight.w700)),
           if (onTap != null) ...[
-            const SizedBox(width: 6),
+            const SizedBox(width: 8),
             const Icon(CupertinoIcons.chevron_right,
                 color: Color(0xFF444444), size: 14),
           ],
@@ -451,9 +444,9 @@ class _Sep extends StatelessWidget {
   const _Sep();
 
   @override
-  Widget build(BuildContext context) => const Padding(
-        padding: EdgeInsets.only(left: 16),
-        child: Divider(color: Color(0xFF252525), height: 1),
+  Widget build(BuildContext context) => Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16),
+        child: Divider(color: const Color(0xFF222222), height: 1),
       );
 }
 
@@ -466,26 +459,25 @@ class _AccuracyChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    const teal = Color(0xFF4ECDC4);
     return GestureDetector(
       onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
         decoration: BoxDecoration(
-          color: selected
-              ? const Color(0xFF4ECDC4).withValues(alpha: 0.15)
-              : const Color(0xFF111111),
-          borderRadius: BorderRadius.circular(10),
+          color: selected ? teal.withValues(alpha: 0.1) : Colors.transparent,
+          borderRadius: BorderRadius.circular(12),
           border: Border.all(
-            color: selected ? const Color(0xFF4ECDC4) : const Color(0xFF333333),
+            color: selected ? teal : const Color(0xFF333333),
+            width: selected ? 1.5 : 1,
           ),
         ),
         child: Text(label,
             style: TextStyle(
-                color: selected
-                    ? const Color(0xFF4ECDC4)
-                    : const Color(0xFF666666),
+                color: selected ? teal : const Color(0xFF777777),
                 fontSize: 13,
-                fontWeight: FontWeight.w600)),
+                fontWeight: FontWeight.w800)),
       ),
     );
   }

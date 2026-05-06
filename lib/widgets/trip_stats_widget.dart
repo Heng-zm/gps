@@ -24,6 +24,7 @@ class TripStatsWidget extends StatelessWidget {
   });
 
   String _formatDuration(Duration d) {
+    if (d.isNegative) return "00:00";
     final h = d.inHours;
     final m = d.inMinutes.remainder(60);
     final s = d.inSeconds.remainder(60);
@@ -51,8 +52,8 @@ class TripStatsWidget extends StatelessWidget {
     return Container(
       decoration: BoxDecoration(
         color: const Color(0xFF151515),
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: const Color(0xFF222222)),
+        borderRadius: BorderRadius.circular(24),
+        border: Border.all(color: const Color(0xFF222222), width: 1.5),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -95,27 +96,25 @@ class TripStatsWidget extends StatelessWidget {
             ),
           ),
 
-          // ── Live Charts ────────────────────────────────────────────────────
+          // ── Live Line Charts ──────────────────────────────────────────────
           if (points.length > 2) ...[
             const Divider(color: Color(0xFF222222), height: 1),
             Padding(
-              padding: const EdgeInsets.all(20),
+              padding: const EdgeInsets.fromLTRB(20, 20, 20, 24),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   _ChartSection(
-                    title: 'SPEED HISTORY ($speedUnit)',
+                    title: 'SPEED PROFILE ($speedUnit)',
                     color: const Color(0xFF4A9EFF),
-                    // Map points to speed using preferred units
                     data: points
                         .map((p) => settings.toDisplaySpeed(p.speedMph))
                         .toList(),
                   ),
-                  const SizedBox(height: 24),
+                  const SizedBox(height: 28),
                   _ChartSection(
                     title: 'ALTITUDE PROFILE ($altUnit)',
                     color: const Color(0xFF4ECDC4),
-                    // Map points to altitude using preferred units
                     data: points
                         .map((p) => settings.useKmh
                             ? p.altitudeFt * 0.3048
@@ -135,25 +134,24 @@ class TripStatsWidget extends StatelessWidget {
 class _StatRow extends StatelessWidget {
   final String label;
   final Widget left, right;
-
   const _StatRow(
       {required this.label, required this.left, required this.right});
 
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 14),
+      padding: const EdgeInsets.symmetric(vertical: 16),
       child: Row(
         children: [
           SizedBox(
-            width: 70,
+            width: 75,
             child: Text(
               label,
               style: const TextStyle(
-                color: Color(0xFF555555),
+                color: Color(0xFF444444),
                 fontSize: 10,
-                fontWeight: FontWeight.w800,
-                letterSpacing: 1,
+                fontWeight: FontWeight.w900,
+                letterSpacing: 1.5,
               ),
             ),
           ),
@@ -177,11 +175,11 @@ class _StatCell extends StatelessWidget {
         Text(
           title,
           style: const TextStyle(
-              color: Color(0xFF777777),
+              color: Color(0xFF666666),
               fontSize: 10,
-              fontWeight: FontWeight.w600),
+              fontWeight: FontWeight.w700),
         ),
-        const SizedBox(height: 4),
+        const SizedBox(height: 5),
         Text(
           value,
           style: const TextStyle(
@@ -200,7 +198,7 @@ class _Divider extends StatelessWidget {
   const _Divider();
   @override
   Widget build(BuildContext context) =>
-      const Divider(color: Color(0xFF222222), height: 1);
+      const Divider(color: Color(0xFF222222), height: 1, thickness: 1);
 }
 
 class _ChartSection extends StatelessWidget {
@@ -213,21 +211,22 @@ class _ChartSection extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // PERFORMANCE FIX: Data Downsampling
-    // LineChart cannot handle thousands of points. We sample a maximum of 50 spots.
-    final int samplingStep = (data.length / 50).ceil().clamp(1, data.length);
-    final List<double> sampledData = [];
-    for (int i = 0; i < data.length; i += samplingStep) {
-      sampledData.add(data[i]);
+    if (data.length < 2) return const SizedBox.shrink();
+
+    // PERFORMANCE: Sample max 60 points for high-frequency live rendering
+    final int step = (data.length / 60).ceil().clamp(1, data.length);
+    final List<double> sampled = [];
+    for (int i = 0; i < data.length; i += step) {
+      sampled.add(data[i]);
     }
 
-    final double minVal = sampledData.reduce((a, b) => a < b ? a : b);
-    final double maxVal = sampledData.reduce((a, b) => a > b ? a : b);
+    final double minVal = sampled.reduce((a, b) => a < b ? a : b);
+    final double maxVal = sampled.reduce((a, b) => a > b ? a : b);
     final double range = (maxVal - minVal).clamp(1.0, double.infinity);
 
     final List<FlSpot> spots = List.generate(
-      sampledData.length,
-      (i) => FlSpot(i.toDouble(), sampledData[i]),
+      sampled.length,
+      (i) => FlSpot(i.toDouble(), sampled[i]),
     );
 
     return Column(
@@ -236,10 +235,10 @@ class _ChartSection extends StatelessWidget {
         Text(
           title,
           style: TextStyle(
-            color: color.withValues(alpha: 0.7),
-            fontSize: 11,
-            fontWeight: FontWeight.w800,
-            letterSpacing: 1,
+            color: color.withValues(alpha: 0.6), // FIXED
+            fontSize: 10,
+            fontWeight: FontWeight.w900,
+            letterSpacing: 1.2,
           ),
         ),
         const SizedBox(height: 16),
@@ -250,16 +249,14 @@ class _ChartSection extends StatelessWidget {
               gridData: const FlGridData(show: false),
               titlesData: const FlTitlesData(show: false),
               borderData: FlBorderData(show: false),
-              minY: minVal - (range * 0.15),
-              maxY: maxVal + (range * 0.15),
+              minY: minVal - (range * 0.1),
+              maxY: maxVal + (range * 0.1),
               lineBarsData: [
                 LineChartBarData(
                   spots: spots,
                   isCurved: true,
-                  // UPGRADE: Prevents the curve from dipping below 0 or overshooting peaks
-                  preventCurveOverShooting: true,
-                  // Optimization: Adjust smoothness (0.35 is the sweet spot for GPS data)
                   curveSmoothness: 0.35,
+                  preventCurveOverShooting: true,
                   color: color,
                   barWidth: 3,
                   isStrokeCapRound: true,
@@ -270,8 +267,8 @@ class _ChartSection extends StatelessWidget {
                       begin: Alignment.topCenter,
                       end: Alignment.bottomCenter,
                       colors: [
-                        color.withValues(alpha: 0.25),
-                        color.withValues(alpha: 0.0),
+                        color.withValues(alpha: 0.2), // FIXED
+                        color.withValues(alpha: 0.0), // FIXED
                       ],
                     ),
                   ),

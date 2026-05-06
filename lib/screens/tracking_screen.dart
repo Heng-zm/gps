@@ -27,7 +27,7 @@ class _TrackingScreenState extends State<TrackingScreen> {
   final WeatherService _weatherService = WeatherService.instance;
   final SettingsService _settings = SettingsService.instance;
 
-  // Performance Notifiers (Preventing full-screen rebuilds)
+  // Performance Notifiers (Avoids full screen rebuilds)
   final ValueNotifier<int> _tickNotifier = ValueNotifier<int>(0);
   final ValueNotifier<double> _speedNotifier = ValueNotifier<double>(0.0);
   final ValueNotifier<int> _signalNotifier = ValueNotifier<int>(0);
@@ -69,9 +69,9 @@ class _TrackingScreenState extends State<TrackingScreen> {
   void _openAiAssistant() {
     HapticFeedback.lightImpact();
 
-    // Create a live snapshot of progress for the AI to analyze
+    // Create a live snapshot for the AI to analyze current progress
     final liveSnapshot = TripSummary(
-      id: 'live_tracking_${DateTime.now().millisecondsSinceEpoch}',
+      id: 'live_session_${DateTime.now().millisecondsSinceEpoch}',
       date: DateTime.now(),
       totalTime: _gpsService.currentTripTime,
       stoppedTime: _gpsService.currentStoppedTime,
@@ -102,6 +102,8 @@ class _TrackingScreenState extends State<TrackingScreen> {
         _weather = await _weatherService.fetchWeather(
             position.latitude, position.longitude);
       }
+    } catch (e) {
+      debugPrint("Initial weather fetch failed: $e");
     } finally {
       if (mounted) setState(() => _weatherLoading = false);
     }
@@ -121,11 +123,9 @@ class _TrackingScreenState extends State<TrackingScreen> {
       _speedNotifier.value = point.speedMph;
       _currentAltitude = point.altitudeFt;
 
-      // Accuracy 0-15m mapped to 4-bar signal
-      _signalNotifier.value =
-          ((15 - point.accuracyMeters.clamp(0, 15)) / 15 * 4)
-              .round()
-              .clamp(0, 4);
+      // Accuracy 0-20m mapped to 4-bar signal indicator
+      int signal = ((20 - point.accuracyMeters.clamp(0, 20)) / 20 * 4).round();
+      _signalNotifier.value = signal.clamp(0, 4);
 
       if (_gpsService.currentPoints.length >= 2) {
         final pts = _gpsService.currentPoints;
@@ -155,7 +155,7 @@ class _TrackingScreenState extends State<TrackingScreen> {
   }
 
   void _openMap() {
-    HapticFeedback.lightImpact();
+    HapticFeedback.selectionClick();
     Navigator.of(context).push(CupertinoPageRoute(
       builder: (_) => MapScreen(
         points: _gpsService.currentPoints,
@@ -193,6 +193,8 @@ class _TrackingScreenState extends State<TrackingScreen> {
           child: Column(
             children: [
               _buildHeader(),
+
+              // Real-time Dashboard (Speed & Signal)
               ValueListenableBuilder<double>(
                 valueListenable: _speedNotifier,
                 builder: (context, speed, _) {
@@ -213,9 +215,11 @@ class _TrackingScreenState extends State<TrackingScreen> {
                   );
                 },
               ),
+
               _buildStatsGrid(),
               const SizedBox(height: 24),
               _buildControlButtons(),
+
               if (_settings.showWeather)
                 Padding(
                   padding: const EdgeInsets.all(20),
@@ -224,6 +228,7 @@ class _TrackingScreenState extends State<TrackingScreen> {
                       isLoading: _weatherLoading,
                       onRetry: _fetchWeather),
                 ),
+
               if (_isTracking)
                 Padding(
                   padding:
@@ -258,7 +263,6 @@ class _TrackingScreenState extends State<TrackingScreen> {
                     fontSize: 16,
                     fontWeight: FontWeight.bold)),
           const Spacer(),
-          // Live AI Access from header
           GestureDetector(
             onTap: _openAiAssistant,
             child: Container(
@@ -397,13 +401,11 @@ class _TrackingScreenState extends State<TrackingScreen> {
       padding: const EdgeInsets.symmetric(horizontal: 20),
       child: Row(
         children: [
-          // 1. MAP
           Expanded(
             child: _SecondaryButton(
                 icon: CupertinoIcons.map_fill, label: 'MAP', onTap: _openMap),
           ),
           const SizedBox(width: 10),
-          // 2. LIVE AI
           Expanded(
             child: _SecondaryButton(
                 icon: Icons.auto_awesome,
@@ -412,7 +414,6 @@ class _TrackingScreenState extends State<TrackingScreen> {
                 color: const Color(0xFFA855F7)),
           ),
           const SizedBox(width: 10),
-          // 3. START/STOP
           Expanded(
             flex: 2,
             child: GestureDetector(

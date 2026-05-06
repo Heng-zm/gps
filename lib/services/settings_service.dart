@@ -3,13 +3,16 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 
 /// Single source of truth for all user-configurable settings.
-/// Reactive via [ChangeNotifier].
+/// Fully reactive via [ChangeNotifier].
 class SettingsService extends ChangeNotifier {
   // Singleton pattern
   SettingsService._();
   static final SettingsService instance = SettingsService._();
 
   static const double _milesToKm = 1.609344;
+  static const double _feetToMeters = 0.3048;
+
+  // Persistence Keys
   static const String _prefUseKmh = 'use_kmh';
   static const String _prefKeepScreenOn = 'keep_screen_on';
   static const String _prefAutoSave = 'auto_save_trips';
@@ -26,7 +29,7 @@ class SettingsService extends ChangeNotifier {
 
   bool get isLoaded => _isLoaded;
 
-  // ── Persisted Settings ────────────────────────────────────────────────────
+  // ── Persisted Settings (Internal) ─────────────────────────────────────────
   late bool _useKmh;
   late bool _keepScreenOn;
   late bool _autoSaveTrips;
@@ -48,23 +51,35 @@ class SettingsService extends ChangeNotifier {
   bool get showHeading => _showHeading;
   int get gpsAccuracyMode => _gpsAccuracyMode;
 
-  // ── Derived Helpers (Dart 3.0 Switch Expressions) ─────────────────────────
+  // ── High Performance Derived Getters ──────────────────────────────────────
+
+  /// Returns the speed alert limit formatted for the current UI unit (KM or MI)
   double get speedAlertDisplayValue =>
-      _useKmh ? _speedAlertMph * _milesToKm : _speedAlertMph;
-  double get speedAlertMax => _useKmh ? 320.0 : 200.0;
+      _useKmh ? (_speedAlertMph * _milesToKm).roundToDouble() : _speedAlertMph;
+
+  double get speedAlertMax => _useKmh ? 300.0 : 180.0;
+
   String get speedUnit => _useKmh ? 'km/h' : 'mph';
   String get distanceUnit => _useKmh ? 'km' : 'mi';
+  String get altitudeUnit => _useKmh ? 'm' : 'ft';
+
+  // --- Converters ---
 
   double toDisplaySpeed(double mph) => _useKmh ? mph * _milesToKm : mph;
-  double fromDisplaySpeed(double display) =>
-      _useKmh ? display / _milesToKm : display;
+
+  double fromDisplaySpeed(double displayValue) =>
+      _useKmh ? displayValue / _milesToKm : displayValue;
+
   double toDisplayDistance(double miles) =>
       _useKmh ? miles * _milesToKm : miles;
+
+  double toDisplayAltitude(double feet) =>
+      _useKmh ? feet * _feetToMeters : feet;
 
   String get gpsAccuracyLabel => switch (_gpsAccuracyMode) {
         1 => 'Balanced',
         2 => 'Low Power',
-        _ => 'Best',
+        _ => 'High Precision',
       };
 
   // ── Initialization ────────────────────────────────────────────────────────
@@ -74,18 +89,22 @@ class SettingsService extends ChangeNotifier {
 
     try {
       _prefs = await SharedPreferences.getInstance();
+
+      // Load values with sensible defaults
       _useKmh = _prefs?.getBool(_prefUseKmh) ?? false;
       _keepScreenOn = _prefs?.getBool(_prefKeepScreenOn) ?? true;
       _autoSaveTrips = _prefs?.getBool(_prefAutoSave) ?? true;
       _showWeather = _prefs?.getBool(_prefWeather) ?? true;
       _speedAlertEnabled = _prefs?.getBool(_prefAlertEnabled) ?? false;
-      _speedAlertMph = _prefs?.getDouble(_prefAlertMph) ?? 80.0;
+      _speedAlertMph = _prefs?.getDouble(_prefAlertMph) ?? 75.0;
       _showAltitude = _prefs?.getBool(_prefAltitude) ?? true;
       _showHeading = _prefs?.getBool(_prefHeading) ?? true;
       _gpsAccuracyMode = _prefs?.getInt(_prefGpsMode) ?? 0;
 
       _isLoaded = true;
       await _applyScreenWake();
+    } catch (e) {
+      debugPrint('Settings Load Error: $e');
     } finally {
       _isLoading = false;
       notifyListeners();
@@ -93,14 +112,21 @@ class SettingsService extends ChangeNotifier {
   }
 
   // ── Universal Persistence Helper ──────────────────────────────────────────
-  /// Saves the value to disk and triggers UI rebuilds.
+  /// Updates local state instantly for UI fluidness, then persists to disk.
   Future<void> _set<T>(
       String key, T value, void Function(T) updateState) async {
     updateState(value);
-    if (value is bool) await _prefs?.setBool(key, value);
-    if (value is double) await _prefs?.setDouble(key, value);
-    if (value is int) await _prefs?.setInt(key, value);
-    notifyListeners();
+    notifyListeners(); // Immediate UI feedback
+
+    if (_prefs == null) return;
+
+    if (value is bool) {
+      await _prefs!.setBool(key, value);
+    } else if (value is double) {
+      await _prefs!.setDouble(key, value);
+    } else if (value is int) {
+      await _prefs!.setInt(key, value);
+    }
   }
 
   // ── Public Setters ────────────────────────────────────────────────────────
@@ -116,12 +142,15 @@ class SettingsService extends ChangeNotifier {
 
   Future<void> setAutoSaveTrips(bool v) =>
       _set(_prefAutoSave, v, (val) => _autoSaveTrips = val);
+
   Future<void> setShowWeather(bool v) =>
       _set(_prefWeather, v, (val) => _showWeather = val);
+
   Future<void> setSpeedAlertEnabled(bool v) =>
       _set(_prefAlertEnabled, v, (val) => _speedAlertEnabled = val);
 
   Future<void> setSpeedAlertDisplayValue(double displayValue) async {
+    // Internal state is always stored as MPH for calculation consistency
     _speedAlertMph = fromDisplaySpeed(displayValue);
     await _prefs?.setDouble(_prefAlertMph, _speedAlertMph);
     notifyListeners();
@@ -129,20 +158,23 @@ class SettingsService extends ChangeNotifier {
 
   Future<void> setShowAltitude(bool v) =>
       _set(_prefAltitude, v, (val) => _showAltitude = val);
+
   Future<void> setShowHeading(bool v) =>
       _set(_prefHeading, v, (val) => _showHeading = val);
+
   Future<void> setGpsAccuracyMode(int v) =>
       _set(_prefGpsMode, v, (val) => _gpsAccuracyMode = val);
 
+  /// Resets all user settings to factory defaults
   Future<void> clearAllData() async {
     await _prefs?.clear();
-    // Re-initialize local state to defaults
+
     _useKmh = false;
     _keepScreenOn = true;
     _autoSaveTrips = true;
     _showWeather = true;
     _speedAlertEnabled = false;
-    _speedAlertMph = 80.0;
+    _speedAlertMph = 75.0;
     _showAltitude = true;
     _showHeading = true;
     _gpsAccuracyMode = 0;
@@ -151,19 +183,17 @@ class SettingsService extends ChangeNotifier {
     notifyListeners();
   }
 
-  // ── WakeLock Management (Upgraded for Web safety) ─────────────────────────
+  // ── WakeLock Management ───────────────────────────────────────────────────
   Future<void> _applyScreenWake() async {
     try {
       if (_keepScreenOn) {
-        // Only trigger on mobile or if browser permissions are likely granted
         await WakelockPlus.enable();
       } else {
         await WakelockPlus.disable();
       }
     } catch (e) {
-      // Browsers often block WakeLock without a user gesture or HTTPS.
-      // We swallow this to prevent app crashes, but log in debug mode.
-      debugPrint('Wakelock Exception: $e');
+      // Wakelock can fail on browsers without user interaction or non-HTTPS
+      debugPrint('WakeLock Exception: $e');
     }
   }
 }
