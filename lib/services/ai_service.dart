@@ -8,118 +8,84 @@ class AiService {
   AiService._internal();
   static final AiService instance = AiService._internal();
 
-  // Your Render endpoint URL
-<<<<<<< HEAD
   static const String _endpointUrl =
       'https://bot-voice-sqnz.onrender.com/ai-assistant';
-=======
-  static const String _endpointUrl = 'https://bot-voice-sqnz.onrender.com/ai-assistant';
-  
-  // NOTE: If you configured the AI_API_KEY environment variable on Render, 
-  // put it here. If not, you can leave it empty.
-  static const String _apiKey = 'AIzaSyA_u1xkFG6i1JzT_LrakEj1Yz9pCUmLcbc';
->>>>>>> 333a344cc1e6b199ff2f8f6d42b5438d49baae50
 
   /// Analyzes trip data with environmental context
   Future<String> analyzeTrip(TripSummary s, {WeatherData? weather}) async {
     final settings = SettingsService.instance;
 
     final prompt = '''
-      You are "TrackPro AI," a professional driving coach.
-      
-      TRIP DATA:
-      - Distance: ${settings.toDisplayDistance(s.distanceMiles).toStringAsFixed(2)} ${settings.distanceUnit}
-      - Avg Speed: ${settings.toDisplaySpeed(s.avgSpeedMph).toInt()} ${settings.speedUnit}
-      - Max Speed: ${settings.toDisplaySpeed(s.maxSpeedMph).toInt()} ${settings.speedUnit}
-      - Duration: ${s.formattedTotalTime} (Stopped: ${s.formattedStoppedTime})
-      ${weather != null ? "- Weather: ${weather.condition}, ${weather.temperature}°" : ""}
+You are "TrackPro AI," a professional driving coach.
 
-      TASK:
-      1. Provide a "Safety Score" and "Efficiency Score".
-      2. Give 2 highly specific insights.
-      
-      FORMATTING RULES:
-      - Use **Bold** for all numbers and scores.
-      - Use `code blocks` for technical terms or GPS coordinates.
-      - Use bullet points for the insights.
-      - Be concise.
-    ''';
+TRIP DATA:
+- Distance: ${settings.toDisplayDistance(s.distanceMiles).toStringAsFixed(2)} ${settings.distanceUnit}
+- Avg Speed: ${settings.toDisplaySpeed(s.avgSpeedMph).toInt()} ${settings.speedUnit}
+- Max Speed: ${settings.toDisplaySpeed(s.maxSpeedMph).toInt()} ${settings.speedUnit}
+- Duration: ${s.formattedTotalTime} (Stopped: ${s.formattedStoppedTime})
+${weather != null ? "- Weather: ${weather.condition}, ${weather.temperature}°" : ""}
+
+TASK:
+1. Provide a "Safety Score" and "Efficiency Score".
+2. Give 2 highly specific insights.
+
+FORMATTING RULES:
+- Use **Bold** for all numbers and scores.
+- Use bullet points for the insights.
+- Be concise.
+''';
 
     try {
-      final response = await http.post(
-        Uri.parse(_endpointUrl),
-        headers: {
-          'Content-Type': 'application/json',
-<<<<<<< HEAD
-=======
-          'X-Api-Key': _apiKey, // Sent to your Render backend
->>>>>>> 333a344cc1e6b199ff2f8f6d42b5438d49baae50
-        },
-        body: jsonEncode({
-          'message': prompt,
-          'stream': false,
-        }),
-      );
+      final response = await http
+          .post(
+            Uri.parse(_endpointUrl),
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode({'message': prompt, 'stream': false}),
+          )
+          .timeout(const Duration(seconds: 15));
 
       if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-        if (data['ok'] == true) {
-          return data['reply'];
-        } else {
-          return "Analysis error: ${data['error']}";
-        }
+        final data = jsonDecode(response.body) as Map<String, dynamic>;
+        if (data['ok'] == true) return data['reply'] as String;
+        return 'Analysis error: ${data['error']}';
       }
-<<<<<<< HEAD
-
-=======
-      
->>>>>>> 333a344cc1e6b199ff2f8f6d42b5438d49baae50
-      return "Server error: ${response.statusCode}";
+      return 'Server error: ${response.statusCode}';
     } catch (e) {
-      return "AI Link offline. Please check your data connection.";
+      return 'AI Link offline. Please check your data connection.';
     }
   }
 
   /// Specialized chat with history
-  /// Note: The 'history' type changed from List<Content> to List<Map<String, String>>
   Future<String> chatWithAi(
-      TripSummary s, String query, List<Map<String, String>> history) async {
-<<<<<<< HEAD
-    final context =
-        "The user is asking about a trip of ${s.distanceMiles.toStringAsFixed(2)} miles. Answer helpfully.\n\nQuestion: $query";
-=======
-    
-    final context = "The user is asking about a trip of ${s.distanceMiles.toStringAsFixed(2)} miles. Answer helpfully.\n\nQuestion: $query";
->>>>>>> 333a344cc1e6b199ff2f8f6d42b5438d49baae50
+    TripSummary s,
+    String query,
+    List<Map<String, String>> history,
+  ) async {
+    final prompt = 'The user is asking about a trip of '
+        '${s.distanceMiles.toStringAsFixed(2)} miles. '
+        'Answer helpfully.\n\nQuestion: $query';
 
     try {
-      final response = await http.post(
-        Uri.parse(_endpointUrl),
-        headers: {
-          'Content-Type': 'application/json',
-<<<<<<< HEAD
-=======
-          'X-Api-Key': _apiKey, // Sent to your Render backend
->>>>>>> 333a344cc1e6b199ff2f8f6d42b5438d49baae50
-        },
-        body: jsonEncode({
-          'message': context,
-          'history': history,
-          'stream': false,
-        }),
-      );
+      final response = await http
+          .post(
+            Uri.parse(_endpointUrl),
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode({
+              'message': prompt,
+              'history': history,
+              'stream': false,
+            }),
+          )
+          .timeout(const Duration(seconds: 15));
 
       if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-        if (data['ok'] == true) {
-          return data['reply'];
-        } else {
-          return "I'm sorry, I couldn't process that: ${data['error']}";
-        }
+        final data = jsonDecode(response.body) as Map<String, dynamic>;
+        if (data['ok'] == true) return data['reply'] as String;
+        return "I'm sorry, I couldn't process that: ${data['error']}";
       }
-      return "Server Error: ${response.statusCode}";
+      return 'Server error: ${response.statusCode}';
     } catch (e) {
-      return "Chat error. Please check your connection.";
+      return 'Chat error. Please check your connection.';
     }
   }
 }
