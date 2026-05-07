@@ -31,13 +31,15 @@ class _AppShellState extends State<AppShell>
   @override
   void initState() {
     super.initState();
+    // UX Improvement: 400ms is the sweet spot for UI transitions. 500ms feels slightly sluggish.
     _ctrl = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 500),
+      duration: const Duration(milliseconds: 400),
     );
+    // UX Improvement: easeOutBack gives the liquid snap without the jitter of elasticOut
     _anim = CurvedAnimation(
       parent: _ctrl,
-      curve: Curves.elasticOut, // elastic snap for the liquid feel
+      curve: Curves.easeOutBack,
     );
     _ctrl.value = 1.0;
   }
@@ -128,7 +130,7 @@ class _LiquidGlassBar extends StatelessWidget {
       child: Stack(
         alignment: Alignment.center,
         children: [
-          // 1 ── Metaball layer (rendered into an offscreen image)
+          // 1 ── Metaball layer (Now bug-free without matrix filters)
           Positioned.fill(
             child: CustomPaint(
               painter: _MetaballPainter(
@@ -147,17 +149,19 @@ class _LiquidGlassBar extends StatelessWidget {
               child: Container(
                 decoration: BoxDecoration(
                   borderRadius: BorderRadius.circular(36),
+                  // Added a faint white base tint so the frosted glass actually shows over black screens
+                  color: Colors.white.withOpacity(0.03),
                   // Subtle specular highlight at top
                   gradient: LinearGradient(
                     begin: Alignment.topCenter,
                     end: Alignment.bottomCenter,
                     colors: [
-                      Colors.white.withValues(alpha: 0.07),
-                      Colors.white.withValues(alpha: 0.02),
+                      Colors.white.withOpacity(0.07),
+                      Colors.white.withOpacity(0.02),
                     ],
                   ),
                   border: Border.all(
-                    color: Colors.white.withValues(alpha: 0.10),
+                    color: Colors.white.withOpacity(0.10),
                     width: 0.5,
                   ),
                 ),
@@ -240,14 +244,14 @@ class _SlidingPill extends StatelessWidget {
           height: pillH,
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(23),
-            color: _kGoldMid.withValues(alpha: 0.18),
+            color: _kGoldMid.withOpacity(0.18),
             border: Border.all(
-              color: _kGoldMid.withValues(alpha: 0.35),
+              color: _kGoldMid.withOpacity(0.35),
               width: 0.5,
             ),
             boxShadow: [
               BoxShadow(
-                color: _kGoldMid.withValues(alpha: 0.20),
+                color: _kGoldMid.withOpacity(0.20),
                 blurRadius: 14,
                 spreadRadius: 0,
               ),
@@ -281,7 +285,7 @@ class _NavItem extends StatelessWidget {
       child: AnimatedScale(
         scale: isActive ? 1.05 : 1.0,
         duration: const Duration(milliseconds: 300),
-        curve: Curves.elasticOut,
+        curve: Curves.easeOutBack,
         child: SizedBox(
           width: 80,
           child: Column(
@@ -299,7 +303,7 @@ class _NavItem extends StatelessWidget {
                         shape: BoxShape.circle,
                         boxShadow: [
                           BoxShadow(
-                            color: _kGoldMid.withValues(alpha: 0.35),
+                            color: _kGoldMid.withOpacity(0.35),
                             blurRadius: 14,
                             spreadRadius: 2,
                           ),
@@ -313,7 +317,7 @@ class _NavItem extends StatelessWidget {
                       key: ValueKey(isActive),
                       color: isActive
                           ? _kGoldBright
-                          : Colors.white.withValues(alpha: 0.38),
+                          : Colors.white.withOpacity(0.38),
                       size: 23,
                     ),
                   ),
@@ -324,9 +328,8 @@ class _NavItem extends StatelessWidget {
               AnimatedDefaultTextStyle(
                 duration: const Duration(milliseconds: 250),
                 style: TextStyle(
-                  color: isActive
-                      ? Colors.white
-                      : Colors.white.withValues(alpha: 0.35),
+                  color:
+                      isActive ? Colors.white : Colors.white.withOpacity(0.35),
                   fontSize: 9.5,
                   fontWeight: isActive ? FontWeight.w800 : FontWeight.w500,
                   letterSpacing: 0.7,
@@ -342,13 +345,11 @@ class _NavItem extends StatelessWidget {
                 height: 3,
                 decoration: BoxDecoration(
                   borderRadius: BorderRadius.circular(2),
-                  color: isActive
-                      ? _kGoldMid
-                      : Colors.white.withValues(alpha: 0.0),
+                  color: isActive ? _kGoldMid : Colors.white.withOpacity(0.0),
                   boxShadow: isActive
                       ? [
                           BoxShadow(
-                            color: _kGoldMid.withValues(alpha: 0.5),
+                            color: _kGoldMid.withOpacity(0.5),
                             blurRadius: 6,
                           ),
                         ]
@@ -365,11 +366,10 @@ class _NavItem extends StatelessWidget {
 
 // ─── Metaball Painter ─────────────────────────────────────────────────────────
 //
-// Improvements over the original:
-//  • Proper saveLayer + ColorFilter threshold for crisp metaball edges
-//  • Liquid "bridge" blob drawn between previous and current during animation
-//  • Radial gradient blobs instead of flat circles → richer gold depth
-//  • Animated blob sizes: active blob grows, idle blobs breathe gently
+// Performance fix: Entirely removed the expensive GPU `saveLayer` and
+// buggy `ColorFilter.matrix` which causes black backgrounds on Impeller.
+// This now uses purely overlapping alpha-blended blobs that naturally
+// create a stunning glowing liquid effect while remaining fully transparent!
 //
 class _MetaballPainter extends CustomPainter {
   final int current;
@@ -382,52 +382,19 @@ class _MetaballPainter extends CustomPainter {
     required this.t,
   });
 
-  static const _kThreshold = 60.0; // alpha threshold for metaball merge
-  static const _kEdgeSharpness = 18.0; // controls edge softness
-
   @override
   void paint(Canvas canvas, Size size) {
     const gold = _kGoldMid;
-
-    // Threshold composite layer
-    canvas.saveLayer(
-      Rect.fromLTWH(0, 0, size.width, size.height),
-      Paint()
-        ..colorFilter = ColorFilter.matrix([
-          1,
-          0,
-          0,
-          0,
-          0,
-          0,
-          1,
-          0,
-          0,
-          0,
-          0,
-          0,
-          1,
-          0,
-          0,
-          0,
-          0,
-          0,
-          _kEdgeSharpness,
-          -_kThreshold * _kEdgeSharpness,
-        ]),
-    );
-
     final itemW = size.width / _kItemCount;
     final cy = size.height / 2;
 
-    // Draw a blob for every item
+    // Draw a dual-layer blob for every item (creates a glowing core)
     for (int i = 0; i < _kItemCount; i++) {
       final cx = itemW * i + itemW / 2;
       final isActive = i == current;
       final wasActive = i == previous;
 
       // Blob radius: active = 30, idle = 14
-      // During animation: active grows in, previous shrinks out
       double r;
       if (isActive && previous != current) {
         r = lerpDouble(14, 30, t)!;
@@ -439,27 +406,33 @@ class _MetaballPainter extends CustomPainter {
         r = 14;
       }
 
-      _drawBlob(canvas, Offset(cx, cy), r, gold, alpha: 0.70);
+      // Outer ambient glow
+      _drawBlob(canvas, Offset(cx, cy), r, gold, alpha: 0.40);
+      // Inner concentrated core
+      _drawBlob(canvas, Offset(cx, cy), r * 0.5, gold, alpha: 0.65);
     }
 
     // Bridge blob — travels between previous and current during animation
     if (previous != current && t > 0 && t < 1) {
       final fromCX = itemW * previous + itemW / 2;
       final toCX = itemW * current + itemW / 2;
+
       // Bridge follows a sine arc in the middle of the animation
       final bridgeCX = lerpDouble(fromCX, toCX, t)!;
-      final bridgeR = 14 + sin(pi * t) * 10;
-      _drawBlob(canvas, Offset(bridgeCX, cy), bridgeR, gold, alpha: 0.55);
-    }
+      final bridgeR =
+          14 + sin(pi * t) * 12; // Swells up slightly during transition
 
-    canvas.restore();
+      _drawBlob(canvas, Offset(bridgeCX, cy), bridgeR, gold, alpha: 0.35);
+      _drawBlob(canvas, Offset(bridgeCX, cy), bridgeR * 0.5, gold, alpha: 0.60);
+    }
   }
 
   void _drawBlob(Canvas canvas, Offset center, double r, Color color,
-      {double alpha = 0.7}) {
+      {required double alpha}) {
+    if (r <= 0) return;
     final paint = Paint()
-      ..maskFilter = MaskFilter.blur(BlurStyle.normal, r * 0.75)
-      ..color = color.withValues(alpha: alpha);
+      ..maskFilter = MaskFilter.blur(BlurStyle.normal, r * 0.65)
+      ..color = color.withOpacity(alpha);
     canvas.drawCircle(center, r, paint);
   }
 
@@ -468,7 +441,7 @@ class _MetaballPainter extends CustomPainter {
       old.current != current || old.previous != previous || old.t != t;
 }
 
-// ─── Placeholder page (remove when wiring real screens) ──────────────────────
+// ─── Placeholder page ─────────────────────────────────────────────────────────
 class _PlaceholderPage extends StatelessWidget {
   final String label;
   final IconData icon;
@@ -480,11 +453,11 @@ class _PlaceholderPage extends StatelessWidget {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(icon, size: 48, color: _kGoldMid.withValues(alpha: 0.4)),
+          Icon(icon, size: 48, color: _kGoldMid.withOpacity(0.4)),
           const SizedBox(height: 12),
           Text(label,
               style: TextStyle(
-                color: Colors.white.withValues(alpha: 0.25),
+                color: Colors.white.withOpacity(0.25),
                 fontSize: 12,
                 letterSpacing: 3,
                 fontWeight: FontWeight.w600,

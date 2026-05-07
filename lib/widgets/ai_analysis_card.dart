@@ -49,10 +49,11 @@ class _AiAnalysisCardState extends State<AiAnalysisCard>
   @override
   void initState() {
     super.initState();
+    // FIX: Do not call .repeat() here. It drains battery when not loading.
     _shimmerCtrl = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 1400),
-    )..repeat();
+    );
   }
 
   @override
@@ -76,18 +77,26 @@ class _AiAnalysisCardState extends State<AiAnalysisCard>
   }
 
   Future<void> _getAiInsights() async {
+    // FIX: Prevent spam-clicking which fires multiple API requests
+    if (_loading) return;
+
     HapticFeedback.mediumImpact();
     setState(() {
       _loading = true;
       _errorMessage = null;
       _pulseTarget = 1.2;
     });
+
+    // FIX: Start shimmer animation only when loading
+    _shimmerCtrl.repeat();
     _startThinkingAnimation();
+
     try {
       final result =
           await AiService.instance.analyzeTrip(widget.summary, weather: null);
       if (mounted) {
         _statusTimer?.cancel();
+        _shimmerCtrl.stop(); // Stop wasting CPU when done
         setState(() {
           _analysis = result;
           _loading = false;
@@ -96,6 +105,7 @@ class _AiAnalysisCardState extends State<AiAnalysisCard>
     } catch (e) {
       if (mounted) {
         _statusTimer?.cancel();
+        _shimmerCtrl.stop();
         setState(() {
           _errorMessage = 'AI connection failed. Please try again.';
           _loading = false;
@@ -111,10 +121,10 @@ class _AiAnalysisCardState extends State<AiAnalysisCard>
       decoration: BoxDecoration(
         color: _Gold.cardBg,
         borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: _Gold.dark.withValues(alpha: 0.4), width: 1),
+        border: Border.all(color: _Gold.dark.withOpacity(0.4), width: 1),
         boxShadow: [
           BoxShadow(
-            color: _Gold.mid.withValues(alpha: 0.07),
+            color: _Gold.mid.withOpacity(0.07),
             blurRadius: 24,
             spreadRadius: -4,
           ),
@@ -130,7 +140,7 @@ class _AiAnalysisCardState extends State<AiAnalysisCard>
               isLoading: _loading,
               onRefresh: _getAiInsights,
             ),
-            _GoldDivider(),
+            const _GoldDivider(),
             AnimatedSwitcher(
               duration: const Duration(milliseconds: 350),
               switchInCurve: Curves.easeOutCubic,
@@ -197,7 +207,7 @@ class _CardHeader extends StatelessWidget {
               ),
               boxShadow: [
                 BoxShadow(
-                  color: _Gold.mid.withValues(alpha: 0.35),
+                  color: _Gold.mid.withOpacity(0.35),
                   blurRadius: 10,
                 ),
               ],
@@ -230,10 +240,10 @@ class _CardHeader extends StatelessWidget {
               child: Container(
                 padding: const EdgeInsets.all(6),
                 decoration: BoxDecoration(
-                  color: _Gold.dark.withValues(alpha: 0.15),
+                  color: _Gold.dark.withOpacity(0.15),
                   borderRadius: BorderRadius.circular(8),
                   border: Border.all(
-                    color: _Gold.dark.withValues(alpha: 0.3),
+                    color: _Gold.dark.withOpacity(0.3),
                   ),
                 ),
                 child: const Icon(
@@ -252,6 +262,8 @@ class _CardHeader extends StatelessWidget {
 // ─── Divider ──────────────────────────────────────────────────────────────────
 
 class _GoldDivider extends StatelessWidget {
+  const _GoldDivider();
+
   @override
   Widget build(BuildContext context) {
     return Padding(
@@ -306,7 +318,7 @@ class _LoadingBody extends StatelessWidget {
                   shape: BoxShape.circle,
                   boxShadow: [
                     BoxShadow(
-                      color: _Gold.mid.withValues(alpha: 0.15 * value),
+                      color: _Gold.mid.withOpacity(0.15 * value),
                       blurRadius: 20 * value,
                       spreadRadius: 4 * value,
                     ),
@@ -322,7 +334,7 @@ class _LoadingBody extends StatelessWidget {
             Text(
               thinkingStatus,
               style: TextStyle(
-                color: _Gold.dark.withValues(alpha: 0.9),
+                color: _Gold.dark.withOpacity(0.9),
                 fontSize: 12,
                 letterSpacing: 0.5,
                 fontStyle: FontStyle.italic,
@@ -400,8 +412,8 @@ class _ErrorBody extends StatelessWidget {
           padding: const EdgeInsets.all(10),
           decoration: BoxDecoration(
             shape: BoxShape.circle,
-            color: _Gold.red.withValues(alpha: 0.1),
-            border: Border.all(color: _Gold.red.withValues(alpha: 0.3)),
+            color: _Gold.red.withOpacity(0.1),
+            border: Border.all(color: _Gold.red.withOpacity(0.3)),
           ),
           child: const Icon(Icons.wifi_off_rounded, color: _Gold.red, size: 20),
         ),
@@ -417,9 +429,9 @@ class _ErrorBody extends StatelessWidget {
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 10),
             decoration: BoxDecoration(
-              color: _Gold.dark.withValues(alpha: 0.08),
+              color: _Gold.dark.withOpacity(0.08),
               borderRadius: BorderRadius.circular(10),
-              border: Border.all(color: _Gold.dark.withValues(alpha: 0.5)),
+              border: Border.all(color: _Gold.dark.withOpacity(0.5)),
             ),
             child: const Text(
               'TRY AGAIN',
@@ -453,8 +465,8 @@ class _IdleBody extends StatelessWidget {
           margin: const EdgeInsets.only(bottom: 14),
           decoration: BoxDecoration(
             shape: BoxShape.circle,
-            color: _Gold.dark.withValues(alpha: 0.1),
-            border: Border.all(color: _Gold.dark.withValues(alpha: 0.25)),
+            color: _Gold.dark.withOpacity(0.1),
+            border: Border.all(color: _Gold.dark.withOpacity(0.25)),
           ),
           child:
               const Icon(Icons.insights_rounded, color: _Gold.dark, size: 22),
@@ -462,7 +474,7 @@ class _IdleBody extends StatelessWidget {
         Text(
           'Unlock your trip intelligence',
           style: TextStyle(
-            color: Colors.white.withValues(alpha: 0.45),
+            color: Colors.white.withOpacity(0.45),
             fontSize: 12,
             letterSpacing: 0.5,
           ),
@@ -481,7 +493,7 @@ class _IdleBody extends StatelessWidget {
               borderRadius: BorderRadius.circular(12),
               boxShadow: [
                 BoxShadow(
-                  color: _Gold.mid.withValues(alpha: 0.22),
+                  color: _Gold.mid.withOpacity(0.22),
                   blurRadius: 16,
                   spreadRadius: -4,
                   offset: const Offset(0, 4),
@@ -544,7 +556,7 @@ class _ResultBody extends StatelessWidget {
                   data: text,
                   styleSheet: MarkdownStyleSheet(
                     p: TextStyle(
-                      color: Colors.white.withValues(alpha: 0.85),
+                      color: Colors.white.withOpacity(0.85),
                       fontSize: 13.5,
                       height: 1.65,
                       letterSpacing: 0.2,
@@ -555,12 +567,12 @@ class _ResultBody extends StatelessWidget {
                     ),
                     em: TextStyle(
                       fontStyle: FontStyle.italic,
-                      color: Colors.white.withValues(alpha: 0.6),
+                      color: Colors.white.withOpacity(0.6),
                     ),
                     listBullet: const TextStyle(color: _Gold.mid),
                     code: TextStyle(
                       color: _Gold.bright,
-                      backgroundColor: _Gold.dark.withValues(alpha: 0.15),
+                      backgroundColor: _Gold.dark.withOpacity(0.15),
                       fontFamily: 'monospace',
                       fontSize: 12,
                     ),
@@ -568,11 +580,11 @@ class _ResultBody extends StatelessWidget {
                       color: _Gold.surface,
                       borderRadius: BorderRadius.circular(8),
                       border: Border.all(
-                        color: _Gold.dark.withValues(alpha: 0.3),
+                        color: _Gold.dark.withOpacity(0.3),
                       ),
                     ),
                     blockquote: TextStyle(
-                      color: Colors.white.withValues(alpha: 0.55),
+                      color: Colors.white.withOpacity(0.55),
                       fontSize: 13,
                       fontStyle: FontStyle.italic,
                     ),
@@ -588,13 +600,13 @@ class _ResultBody extends StatelessWidget {
             Container(
               width: 16,
               height: 1,
-              color: _Gold.dark.withValues(alpha: 0.5),
+              color: _Gold.dark.withOpacity(0.5),
             ),
             const SizedBox(width: 6),
             Text(
               'AI GENERATED',
               style: TextStyle(
-                color: _Gold.dark.withValues(alpha: 0.6),
+                color: _Gold.dark.withOpacity(0.6),
                 fontSize: 9,
                 fontWeight: FontWeight.w700,
                 letterSpacing: 2.5,

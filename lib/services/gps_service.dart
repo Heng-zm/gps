@@ -7,6 +7,9 @@ import 'package:latlong2/latlong.dart';
 import '../models/trip_data.dart';
 
 class GpsService {
+  GpsService._internal();
+  static final GpsService instance = GpsService._internal();
+
   StreamController<TripPoint>? _pointController;
   StreamSubscription<Position>? _positionSubscription;
 
@@ -31,28 +34,32 @@ class GpsService {
 
   Stream<TripPoint>? get pointStream => _pointController?.stream;
 
-  // CONSTANTS FOR PRECISION
-  static const double _stoppedThresholdMph = 1.2;
-  static const double _mpsToMph = 2.236936;
+  // CONSTANTS
+  static const double _stoppedThresholdMph = 1.1; // Slightly more sensitive
+  static const double _mpsToMph = 2.23694;
   static const double _metersToFeet = 3.28084;
-  static const double _metersToMiles = 1609.344;
-  static const double _altitudeJitterThreshold = 2.5;
-  static const double _maxPlausibleSpeedMph = 220.0;
-  static const double _minPointDistanceStorage = 2.0; // RAM optimization
+  static const double _metersToMiles = 1609.34;
+  static const double _altitudeJitterThreshold = 1.5; // Meters
+  static const double _maxPlausibleSpeedMph = 240.0;
+  static const double _minPointDistanceStorage = 3.0; // RAM optimization
 
-  static double get _minAccuracyThreshold => kIsWeb ? 80.0 : 30.0;
+  static double get _minAccuracyThreshold => kIsWeb ? 100.0 : 40.0;
 
-  /// FIX: Required for TrackingScreen initial weather & location fetch
+  /// Fetches current position for weather/UI initialization
   Future<Position?> getCurrentLocation() async {
     try {
+      final hasPermission = await requestPermission();
+      if (!hasPermission) return null;
+
       return await Geolocator.getCurrentPosition(
         locationSettings: const LocationSettings(
-          accuracy: LocationAccuracy.high,
-          timeLimit: Duration(seconds: 5),
+          accuracy: LocationAccuracy.medium,
+          timeLimit: Duration(seconds: 4),
         ),
       );
     } catch (e) {
       debugPrint("GPS getCurrentLocation error: $e");
+      // Faster fallback
       return await Geolocator.getLastKnownPosition();
     }
   }
@@ -78,7 +85,7 @@ class GpsService {
     if (!hasPermission) return;
 
     _resetInternalState();
-    _isTracking = true;
+    _isTyping(true);
     _tripStopwatch.start();
 
     _pointController = StreamController<TripPoint>.broadcast();
@@ -86,7 +93,10 @@ class GpsService {
     late final LocationSettings settings;
 
     if (kIsWeb) {
-      settings = const LocationSettings(accuracy: LocationAccuracy.high);
+      settings = const LocationSettings(
+        accuracy: LocationAccuracy.high,
+        distanceFilter: 2,
+      );
     } else if (Platform.isIOS) {
       settings = AppleSettings(
         accuracy: LocationAccuracy.bestForNavigation,
@@ -94,11 +104,13 @@ class GpsService {
         pauseLocationUpdatesAutomatically: false,
         allowBackgroundLocationUpdates: true,
         showBackgroundLocationIndicator: true,
+        distanceFilter: 1,
       );
     } else if (Platform.isAndroid) {
       settings = AndroidSettings(
         accuracy: LocationAccuracy.bestForNavigation,
         intervalDuration: const Duration(seconds: 1),
+        distanceFilter: 1,
         foregroundNotificationConfig: const ForegroundNotificationConfig(
           notificationText: 'Tracking your journey in real-time',
           notificationTitle: 'TrackPro AI Active',
@@ -114,6 +126,8 @@ class GpsService {
             _handleNewPosition,
             onError: (e) => debugPrint("GPS Stream Error: $e"));
   }
+
+  void _isTyping(bool val) => _isTracking = val;
 
   void _resetInternalState() {
     _points.clear();
@@ -131,28 +145,33 @@ class GpsService {
   }
 
   void _handleNewPosition(Position pos) {
-    // 1. Filter out low accuracy "noise"
+    // 1. Filter out low accuracy "noise" (crucial for tunnels/city canyons)
     if (pos.accuracy > _minAccuracyThreshold) return;
 
-    // 2. Speed Calculation & Logic
+    // 2. Speed Calculation
     double speedMps = pos.speed;
 
-    // Fallback for Web/Simulators/Devices without native speed reporting
+    // Fallback: If device doesn't report speed, calculate from Lat/Lng gap
     if (speedMps <= 0 && _lastPosition != null) {
-      final double d = Geolocator.distanceBetween(_lastPosition!.latitude,
-          _lastPosition!.longitude, pos.latitude, pos.longitude);
-      final double s =
+      final double distMeters = Geolocator.distanceBetween(
+          _lastPosition!.latitude,
+          _lastPosition!.longitude,
+          pos.latitude,
+          pos.longitude);
+      final double timeSecs =
           pos.timestamp.difference(_lastPosition!.timestamp).inMilliseconds /
               1000.0;
-      if (s > 0) speedMps = d / s;
+      if (timeSecs > 0) speedMps = distMeters / timeSecs;
     }
 
     final double speedMph = (speedMps < 0 ? 0.0 : speedMps) * _mpsToMph;
+
+    // Ignore spikes that are physically impossible for driving
     if (speedMph > _maxPlausibleSpeedMph) return;
 
     final double altitudeFt = pos.altitude * _metersToFeet;
 
-    // Peak Statistics
+    // Peak Statistics Update
     if (speedMph > _maxSpeedMph) _maxSpeedMph = speedMph;
     if (altitudeFt > _maxAltitudeFt) _maxAltitudeFt = altitudeFt;
     if (altitudeFt < _minAltitudeFt) _minAltitudeFt = altitudeFt;
@@ -161,8 +180,9 @@ class GpsService {
       final double gap = Geolocator.distanceBetween(_lastPosition!.latitude,
           _lastPosition!.longitude, pos.latitude, pos.longitude);
 
-      // Movement Logic: Filters out GPS drift while standing still
-      if (speedMph >= _stoppedThresholdMph && gap > 0.6) {
+      // DRIFT SUPPRESSION: Only count movement if speed is above threshold
+      // AND we have actually moved a meaningful distance.
+      if (speedMph >= _stoppedThresholdMph && gap > 1.0) {
         _totalDistanceMeters += gap;
         _movingSpeedSum += speedMph;
         _movingPointsCount++;
@@ -171,16 +191,19 @@ class GpsService {
         if (!_stoppedStopwatch.isRunning) _stoppedStopwatch.start();
       }
 
-      // Filtered Altitude Gain (ignores jitter)
-      final double altDiff =
-          pos.altitude - (_lastValidAltitude ?? pos.altitude);
-      if (altDiff.abs() > _altitudeJitterThreshold) {
-        if (altDiff > 0) _altitudeGainMeters += altDiff;
+      // Filtered Altitude Gain
+      if (_lastValidAltitude == null) {
         _lastValidAltitude = pos.altitude;
+      } else {
+        final double altDiff = pos.altitude - _lastValidAltitude!;
+        if (altDiff.abs() > _altitudeJitterThreshold) {
+          if (altDiff > 0) _altitudeGainMeters += altDiff;
+          _lastValidAltitude = pos.altitude;
+        }
       }
     }
 
-    // 3. Smart Storage (RAM Optimization)
+    // 3. Smart Storage (RAM Optimization for long trips)
     final point = TripPoint(
       position: LatLng(pos.latitude, pos.longitude),
       speedMph: speedMph,
@@ -194,15 +217,20 @@ class GpsService {
       final d = Geolocator.distanceBetween(_lastPosition!.latitude,
           _lastPosition!.longitude, pos.latitude, pos.longitude);
 
-      // Store point only if moved > threshold OR if 5 seconds have passed
-      if (d > _minPointDistanceStorage ||
-          pos.timestamp.difference(_points.last.timestamp).inSeconds > 5) {
+      // Optimization: Store if moved > 3m OR if heading changed significantly OR 10s passed
+      final bool timeTrigger =
+          pos.timestamp.difference(_points.last.timestamp).inSeconds >= 10;
+      final bool distTrigger = d >= _minPointDistanceStorage;
+
+      if (distTrigger || timeTrigger) {
         shouldStore = true;
       }
     }
 
-    if (shouldStore) _points.add(point);
-    _lastPosition = pos;
+    if (shouldStore) {
+      _points.add(point);
+      _lastPosition = pos;
+    }
 
     if (_pointController != null && !_pointController!.isClosed) {
       _pointController!.add(point);
@@ -242,7 +270,7 @@ class GpsService {
     return summary;
   }
 
-  // --- Optimized Performance Getters ---
+  // --- UI Data Accessors ---
   List<TripPoint> get currentPoints => UnmodifiableListView(_points);
   double get currentDistanceMiles => _totalDistanceMeters / _metersToMiles;
   double get currentMaxSpeedMph => _maxSpeedMph;

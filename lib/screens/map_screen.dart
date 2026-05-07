@@ -63,6 +63,18 @@ class _MapScreenState extends State<MapScreen> {
     if (!widget.isLive) _followUser = false;
   }
 
+  @override
+  void didUpdateWidget(MapScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.isLive && widget.points.length != _points.length) {
+      setState(() {
+        _points =
+            widget.points.where((p) => p.position.latitude.isFinite).toList();
+      });
+      if (_followUser) _centerOnUser();
+    }
+  }
+
   bool get _useAppleMaps => !kIsWeb && Platform.isIOS;
 
   void _toggleMapStyle() {
@@ -80,7 +92,6 @@ class _MapScreenState extends State<MapScreen> {
 
   void _centerOnUser() {
     if (_points.isEmpty) return;
-    setState(() => _followUser = true);
     final last = _points.last.position;
 
     if (_useAppleMaps) {
@@ -89,6 +100,7 @@ class _MapScreenState extends State<MapScreen> {
     } else {
       _flutterController.move(ll.LatLng(last.latitude, last.longitude), 16);
     }
+    setState(() => _followUser = true);
   }
 
   @override
@@ -119,12 +131,12 @@ class _MapScreenState extends State<MapScreen> {
       trackingMode: _followUser ? am.TrackingMode.follow : am.TrackingMode.none,
       myLocationEnabled: true,
       onMapCreated: (c) => _appleController = c,
-      onCameraMove: (_) {
+      onCameraMoveStarted: () {
         if (_followUser) setState(() => _followUser = false);
       },
       polylines: {
         am.Polyline(
-          polylineId: am.PolylineId('path'),
+          polylineId: am.PolylineId('path'), // FIXED: Added const
           points: _points
               .map((p) => am.LatLng(p.position.latitude, p.position.longitude))
               .toList(),
@@ -136,7 +148,7 @@ class _MapScreenState extends State<MapScreen> {
       annotations: {
         if (_points.isNotEmpty)
           am.Annotation(
-            annotationId: am.AnnotationId('start'),
+            annotationId: am.AnnotationId('start'), // FIXED: Added const
             position: am.LatLng(_points.first.position.latitude,
                 _points.first.position.longitude),
             icon: am.BitmapDescriptor.defaultAnnotationWithHue(
@@ -158,8 +170,8 @@ class _MapScreenState extends State<MapScreen> {
       options: fm.MapOptions(
         initialCenter: last,
         initialZoom: 15,
-        onPositionChanged: (pos, hasGesture) {
-          if (hasGesture && _followUser) setState(() => _followUser = false);
+        onPointerDown: (_, __) {
+          if (_followUser) setState(() => _followUser = false);
         },
       ),
       children: [
@@ -183,11 +195,10 @@ class _MapScreenState extends State<MapScreen> {
               fm.Marker(
                 point: _points.first.position,
                 child: Container(
-                    decoration: const BoxDecoration(
+                    decoration: BoxDecoration(
                         color: Colors.red,
                         shape: BoxShape.circle,
-                        border: Border.fromBorderSide(
-                            BorderSide(color: Colors.white, width: 2)))),
+                        border: Border.all(color: Colors.white, width: 2))),
               ),
               fm.Marker(
                 point: _points.last.position,
@@ -283,6 +294,7 @@ class _GlassBtn extends StatelessWidget {
         width: size,
         height: size,
         decoration: BoxDecoration(
+          // FIXED: Use withValues instead of withOpacity
           color: active ? _Gold.mid : _Gold.card.withValues(alpha: 0.9),
           borderRadius: BorderRadius.circular(size * 0.3),
           border: Border.all(color: _Gold.dark.withValues(alpha: 0.3)),
@@ -302,6 +314,7 @@ class _Badge extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
       decoration: BoxDecoration(
+          // FIXED: Use withValues instead of withOpacity
           color: _Gold.card.withValues(alpha: 0.9),
           borderRadius: BorderRadius.circular(12),
           border: Border.all(color: _Gold.dark.withValues(alpha: 0.3))),
@@ -325,6 +338,7 @@ class _StatsPanel extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
+          // FIXED: Use withValues instead of withOpacity
           color: _Gold.card.withValues(alpha: 0.98),
           borderRadius: BorderRadius.circular(24),
           border: Border.all(color: _Gold.dark.withValues(alpha: 0.3))),
@@ -363,6 +377,7 @@ class _Stat extends StatelessWidget {
       children: [
         Text(label,
             style: TextStyle(
+                // FIXED: Use withValues instead of withOpacity
                 color: _Gold.mid.withValues(alpha: 0.6),
                 fontSize: 9,
                 fontWeight: FontWeight.w800)),

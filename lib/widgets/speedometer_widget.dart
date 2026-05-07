@@ -15,49 +15,68 @@ class SpeedometerWidget extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final settings = SettingsService.instance;
-    final displaySpeed = settings.toDisplaySpeed(speedMph);
+    final displaySpeed = settings.toDisplaySpeed(speedMph).clamp(0.0, 999.0);
     final unitLabel = settings.speedUnit.toUpperCase();
     final double maxGaugeVal = settings.useKmh ? 220.0 : 140.0;
 
-    return TweenAnimationBuilder<double>(
-      tween: Tween<double>(begin: 0, end: displaySpeed),
-      duration: const Duration(milliseconds: 900),
-      curve: Curves.easeOutExpo,
-      builder: (context, animatedSpeed, _) {
-        return AspectRatio(
-          aspectRatio: 1,
-          child: Stack(
-            alignment: Alignment.center,
-            children: [
-              // Outer glass rim
-              CustomPaint(
-                painter: _GlassRimPainter(),
-                child: const SizedBox.expand(),
-              ),
-              // Main gauge
-              CustomPaint(
-                painter: _SpeedometerPainter(
+    return Semantics(
+      label: 'Speedometer showing ${displaySpeed.toInt()} $unitLabel',
+      value: displaySpeed.toInt().toString(),
+      child: TweenAnimationBuilder<double>(
+        tween: Tween<double>(begin: 0, end: displaySpeed),
+        duration: const Duration(milliseconds: 600),
+        curve: Curves.easeOutQuart,
+        builder: (context, animatedSpeed, _) {
+          return AspectRatio(
+            aspectRatio: 1,
+            child: Stack(
+              alignment: Alignment.center,
+              children: [
+                // 1. Static Hardware Layer (Cached for Performance)
+                const RepaintBoundary(
+                  child: _StaticGlassBackground(),
+                ),
+
+                // 2. Dynamic Gauge Layer
+                RepaintBoundary(
+                  child: CustomPaint(
+                    painter: _SpeedometerPainter(
+                      speed: animatedSpeed,
+                      maxSpeed: maxGaugeVal,
+                      isOverLimit: isOverLimit,
+                    ),
+                    child: const SizedBox.expand(),
+                  ),
+                ),
+
+                // 3. Center Digital Readout
+                _CenterReadout(
                   speed: animatedSpeed,
-                  maxSpeed: maxGaugeVal,
+                  unitLabel: unitLabel,
                   isOverLimit: isOverLimit,
                 ),
-                child: const SizedBox.expand(),
-              ),
-              // Center readout
-              _CenterReadout(
-                speed: animatedSpeed,
-                unitLabel: unitLabel,
-                isOverLimit: isOverLimit,
-              ),
-            ],
-          ),
-        );
-      },
+              ],
+            ),
+          );
+        },
+      ),
     );
   }
 }
 
-// ─── Glass Rim Painter ────────────────────────────────────────────────────────
+// ─── Static Glass Background ──────────────────────────────────────────────────
+
+class _StaticGlassBackground extends StatelessWidget {
+  const _StaticGlassBackground();
+
+  @override
+  Widget build(BuildContext context) {
+    return CustomPaint(
+      painter: _GlassRimPainter(),
+      child: const SizedBox.expand(),
+    );
+  }
+}
 
 class _GlassRimPainter extends CustomPainter {
   @override
@@ -65,48 +84,47 @@ class _GlassRimPainter extends CustomPainter {
     final center = Offset(size.width / 2, size.height / 2);
     final outerRadius = size.width / 2;
 
-    // Deep shadow ring (outermost)
+    // Deep OLED Black Drop Shadow
     final shadowPaint = Paint()
       ..shader = RadialGradient(
         colors: [
           Colors.transparent,
           const Color(0xFF000000).withValues(alpha: 0.6),
         ],
-        stops: const [0.78, 1.0],
+        stops: const [0.85, 1.0],
       ).createShader(Rect.fromCircle(center: center, radius: outerRadius));
     canvas.drawCircle(center, outerRadius, shadowPaint);
 
-    // Gold rim highlight (top-left)
-    final rimHighlightPaint = Paint()
+    // Primary Gold Bezel
+    final rimPaint = Paint()
       ..shader = SweepGradient(
         colors: [
-          const Color(0xFFD4A843).withValues(alpha: 0.9),
+          const Color(0xFFD4A843),
           const Color(0xFF8B6914).withValues(alpha: 0.2),
-          const Color(0xFFEDD068).withValues(alpha: 0.6),
-          const Color(0xFF6B4F0A).withValues(alpha: 0.1),
-          const Color(0xFFD4A843).withValues(alpha: 0.9),
+          const Color(0xFFEDD068),
+          const Color(0xFF8B6914).withValues(alpha: 0.2),
+          const Color(0xFFD4A843),
         ],
-        stops: const [0.0, 0.25, 0.5, 0.75, 1.0],
       ).createShader(Rect.fromCircle(center: center, radius: outerRadius))
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 3;
-    canvas.drawCircle(center, outerRadius - 2, rimHighlightPaint);
+      ..strokeWidth = 2.0;
+    canvas.drawCircle(center, outerRadius - 2, rimPaint);
 
-    // Inner glass bevel
-    final innerBevelPaint = Paint()
+    // Glass Inner Specular Edge
+    final bevelPaint = Paint()
       ..shader = SweepGradient(
         colors: [
-          const Color(0xFFFFFFFF).withValues(alpha: 0.08),
-          const Color(0xFFFFFFFF).withValues(alpha: 0.02),
-          const Color(0xFF000000).withValues(alpha: 0.15),
-          const Color(0xFFFFFFFF).withValues(alpha: 0.05),
-          const Color(0xFFFFFFFF).withValues(alpha: 0.08),
+          Colors.white.withValues(alpha: 0.15),
+          Colors.white.withValues(alpha: 0.02),
+          Colors.black.withValues(alpha: 0.25),
+          Colors.white.withValues(alpha: 0.05),
+          Colors.white.withValues(alpha: 0.15),
         ],
         stops: const [0.0, 0.3, 0.5, 0.75, 1.0],
       ).createShader(Rect.fromCircle(center: center, radius: outerRadius))
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 8;
-    canvas.drawCircle(center, outerRadius - 8, innerBevelPaint);
+      ..strokeWidth = 5;
+    canvas.drawCircle(center, outerRadius - 5, bevelPaint);
   }
 
   @override
@@ -129,131 +147,106 @@ class _SpeedometerPainter extends CustomPainter {
   static const double _startAngleDeg = 145;
   static const double _sweepAngleDeg = 250;
 
-  // Gold palette
   static const Color _goldBright = Color(0xFFEDD068);
   static const Color _goldMid = Color(0xFFD4A843);
-  static const Color _goldDark = Color(0xFF8B6914);
   static const Color _redAlert = Color(0xFFE8412A);
   static const Color _redGlow = Color(0xFFFF6B55);
 
   @override
   void paint(Canvas canvas, Size size) {
     final center = Offset(size.width / 2, size.height / 2);
-    final trackRadius = size.width / 2 - 22;
+    final trackRadius = size.width / 2 - 25;
     final startAngle = _startAngleDeg * pi / 180;
     final sweepAngle = _sweepAngleDeg * pi / 180;
-    final fraction = (speed / maxSpeed).clamp(0.0, 1.0);
+    final fraction = (speed / maxSpeed).clamp(0.001, 1.0);
 
     final trackRect = Rect.fromCircle(center: center, radius: trackRadius);
 
-    // 1. Dark track groove
+    // 1. Physical Track Background (The "Groove")
     final groovePaint = Paint()
-      ..color = const Color(0xFF0D0D0D)
+      ..color = const Color(0xFF080808)
       ..strokeWidth = 18
-      ..style = PaintingStyle.stroke
-      ..strokeCap = StrokeCap.butt;
+      ..style = PaintingStyle.stroke;
     canvas.drawArc(trackRect, startAngle, sweepAngle, false, groovePaint);
 
-    // Groove inner highlight
-    final grooveHighlightPaint = Paint()
-      ..color = const Color(0xFF1E1E1E)
+    // Specular highlight on the bottom of the groove
+    final innerHighlight = Paint()
+      ..color = Colors.white.withValues(alpha: 0.03)
       ..strokeWidth = 12
+      ..style = PaintingStyle.stroke;
+    canvas.drawArc(trackRect, startAngle, sweepAngle, false, innerHighlight);
+
+    // 2. Active Speed Arc
+    final Color arcColor = isOverLimit ? _redAlert : _goldMid;
+    final Color arcColorBright = isOverLimit ? _redGlow : _goldBright;
+
+    // Outer Neon Glow
+    final glowPaint = Paint()
+      ..color = arcColor.withValues(alpha: 0.25)
+      ..strokeWidth = 26
       ..style = PaintingStyle.stroke
-      ..strokeCap = StrokeCap.butt;
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 12);
     canvas.drawArc(
-        trackRect, startAngle, sweepAngle, false, grooveHighlightPaint);
+        trackRect, startAngle, sweepAngle * fraction, false, glowPaint);
 
-    // 2. Active arc
-    if (fraction > 0) {
-      final Color arcColorA = isOverLimit ? _redAlert : _goldDark;
-      final Color arcColorB = isOverLimit ? _redGlow : _goldBright;
+    // Main Gradient Needle Arc
+    final activePaint = Paint()
+      ..shader = SweepGradient(
+        startAngle: startAngle,
+        endAngle: startAngle + sweepAngle,
+        colors: [arcColor.withValues(alpha: 0.1), arcColorBright],
+        stops: const [0.0, 1.0],
+        transform: GradientRotation(startAngle),
+      ).createShader(trackRect)
+      ..strokeWidth = 14
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.round;
+    canvas.drawArc(
+        trackRect, startAngle, sweepAngle * fraction, false, activePaint);
 
-      // Outer glow
-      final glowPaint = Paint()
-        ..color = (isOverLimit ? _redAlert : _goldMid).withValues(alpha: 0.25)
-        ..strokeWidth = 28
-        ..style = PaintingStyle.stroke
-        ..strokeCap = StrokeCap.butt
-        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 12);
-      canvas.drawArc(
-          trackRect, startAngle, sweepAngle * fraction, false, glowPaint);
+    // 3. Leading Tip (Pill Flare)
+    final tipAngle = startAngle + (sweepAngle * fraction);
+    final tipPos = Offset(
+      center.dx + trackRadius * cos(tipAngle),
+      center.dy + trackRadius * sin(tipAngle),
+    );
 
-      // Tight inner glow
-      final innerGlowPaint = Paint()
-        ..color = (isOverLimit ? _redGlow : _goldBright).withValues(alpha: 0.4)
-        ..strokeWidth = 10
-        ..style = PaintingStyle.stroke
-        ..strokeCap = StrokeCap.butt
-        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 5);
-      canvas.drawArc(
-          trackRect, startAngle, sweepAngle * fraction, false, innerGlowPaint);
+    final tipGlow = Paint()
+      ..color = arcColorBright
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 6);
+    canvas.drawCircle(tipPos, 6, tipGlow);
 
-      // Main gradient arc
-      final activePaint = Paint()
-        ..shader = SweepGradient(
-          startAngle: startAngle,
-          endAngle: startAngle + sweepAngle,
-          colors: [arcColorA.withValues(alpha: 0.5), arcColorB],
-          stops: const [0.0, 1.0],
-          transform: GradientRotation(startAngle),
-        ).createShader(trackRect)
-        ..strokeWidth = 16
-        ..style = PaintingStyle.stroke
-        ..strokeCap = StrokeCap.butt;
-      canvas.drawArc(
-          trackRect, startAngle, sweepAngle * fraction, false, activePaint);
+    final tipCore = Paint()..color = Colors.white;
+    canvas.drawCircle(tipPos, 2.2, tipCore);
 
-      // Leading edge dot flare
-      final tipAngle = startAngle + sweepAngle * fraction;
-      final tipX = center.dx + trackRadius * cos(tipAngle);
-      final tipY = center.dy + trackRadius * sin(tipAngle);
-      final tipFlare = Paint()
-        ..color = isOverLimit ? _redGlow : _goldBright
-        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 6);
-      canvas.drawCircle(Offset(tipX, tipY), 7, tipFlare);
-      final tipCore = Paint()..color = Colors.white.withValues(alpha: 0.9);
-      canvas.drawCircle(Offset(tipX, tipY), 3, tipCore);
-    }
-
-    // 3. Luxury tick marks — two rings
+    // 4. Luxury Tick Marks
     _drawTicks(canvas, center, trackRadius, startAngle, sweepAngle, fraction);
-
-    // 4. Speed labels
-    _drawLabel(canvas, center, '0', startAngle, trackRadius - 30);
-    _drawLabel(canvas, center, maxSpeed.toInt().toString(),
-        startAngle + sweepAngle, trackRadius - 30);
   }
 
   void _drawTicks(Canvas canvas, Offset center, double trackRadius,
       double startAngle, double sweepAngle, double fraction) {
-    const int majorCount = 10;
-    const int minorPerMajor = 4;
-    const int totalTicks = majorCount * minorPerMajor + majorCount;
+    const int tickCount = 60;
+    final outerTickR = trackRadius - 22;
 
-    final outerTickR = trackRadius - 26;
+    for (int i = 0; i <= tickCount; i++) {
+      final bool isMajor = i % 10 == 0;
+      final angle = startAngle + (sweepAngle / tickCount) * i;
+      final tickFraction = i / tickCount;
+      final isActive = tickFraction <= fraction;
 
-    for (int i = 0; i <= totalTicks; i++) {
-      final bool isMajor = i % (minorPerMajor + 1) == 0;
-      final angle = startAngle + (sweepAngle / totalTicks) * i;
-      final tickFraction = i / totalTicks;
-      final isFilled = tickFraction <= fraction;
+      final double tickLen = isMajor ? 12 : 6;
+      final double strokeW = isMajor ? 1.8 : 0.8;
 
-      final double tickLen = isMajor ? 14 : 7;
-      final double strokeW = isMajor ? 2.0 : 1.0;
-
-      Color tickColor;
-      if (isFilled) {
-        tickColor = isOverLimit
-            ? const Color(0xFFE8412A).withValues(alpha: isMajor ? 1.0 : 0.7)
-            : (isMajor ? _goldBright : _goldMid.withValues(alpha: 0.7));
+      Color color;
+      if (isActive) {
+        color = isOverLimit ? _redGlow : _goldBright;
       } else {
-        tickColor = isMajor ? const Color(0xFF3A3020) : const Color(0xFF222017);
+        color = isMajor ? const Color(0xFF2A2616) : const Color(0xFF1A1810);
       }
 
       final innerR = outerTickR - tickLen;
-
       final paint = Paint()
-        ..color = tickColor
+        ..color = color
         ..strokeWidth = strokeW
         ..strokeCap = StrokeCap.round;
 
@@ -264,51 +257,12 @@ class _SpeedometerPainter extends CustomPainter {
             center.dy + outerTickR * sin(angle)),
         paint,
       );
-
-      // Dot accent on major filled ticks
-      if (isMajor && isFilled) {
-        final dotPaint = Paint()
-          ..color = (isOverLimit ? const Color(0xFFE8412A) : _goldBright)
-              .withValues(alpha: 0.5)
-          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 3);
-        final dotPos = Offset(
-          center.dx + (innerR - 4) * cos(angle),
-          center.dy + (innerR - 4) * sin(angle),
-        );
-        canvas.drawCircle(dotPos, 2.5, dotPaint);
-      }
     }
-  }
-
-  void _drawLabel(
-      Canvas canvas, Offset center, String text, double angle, double r) {
-    final tp = TextPainter(
-      text: TextSpan(
-        text: text,
-        style: const TextStyle(
-          color: Color(0xFF5A4A20),
-          fontSize: 10,
-          fontWeight: FontWeight.w700,
-          letterSpacing: 1.5,
-        ),
-      ),
-      textDirection: TextDirection.ltr,
-    )..layout();
-
-    tp.paint(
-      canvas,
-      Offset(
-        center.dx + r * cos(angle) - tp.width / 2,
-        center.dy + r * sin(angle) - tp.height / 2,
-      ),
-    );
   }
 
   @override
   bool shouldRepaint(_SpeedometerPainter old) =>
-      old.speed != speed ||
-      old.isOverLimit != isOverLimit ||
-      old.maxSpeed != maxSpeed;
+      old.speed != speed || old.isOverLimit != isOverLimit;
 }
 
 // ─── Center Readout ───────────────────────────────────────────────────────────
@@ -326,99 +280,71 @@ class _CenterReadout extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final Color dimColor = isOverLimit
-        ? const Color(0xFFE8412A).withValues(alpha: 0.5)
-        : const Color(0xFF8B6914);
+    final Color baseColor =
+        isOverLimit ? const Color(0xFFE8412A) : const Color(0xFFD4A843);
+    final Color mutedColor = baseColor.withValues(alpha: 0.4);
 
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
-        // Thin decorative line above
-        Container(
-          width: 36,
-          height: 1,
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              colors: [
-                Colors.transparent,
-                dimColor,
-                Colors.transparent,
-              ],
-            ),
-          ),
-        ),
+        _divider(mutedColor),
         const SizedBox(height: 8),
 
-        // Speed number
+        // Animated Number
         ShaderMask(
           shaderCallback: (bounds) => LinearGradient(
             begin: Alignment.topCenter,
             end: Alignment.bottomCenter,
             colors: isOverLimit
-                ? [const Color(0xFFFF6B55), const Color(0xFFE8412A)]
-                : [const Color(0xFFF5DFA0), const Color(0xFFD4A843)],
+                ? [const Color(0xFFFF8A7A), const Color(0xFFE8412A)]
+                : [const Color(0xFFFEE79B), const Color(0xFFD4A843)],
           ).createShader(bounds),
           child: Text(
             speed.toInt().toString(),
             style: const TextStyle(
-              color: Colors.white, // masked by ShaderMask
-              fontSize: 96,
-              fontWeight: FontWeight.w100,
-              letterSpacing: -6,
+              color: Colors.white,
+              fontSize: 100,
+              fontWeight: FontWeight.w200,
+              letterSpacing: -5,
               height: 0.9,
             ),
           ),
         ),
 
-        const SizedBox(height: 6),
+        const SizedBox(height: 4),
 
-        // Unit label with decorative dots
+        // Unit Label
         Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            _dot(dimColor),
-            const SizedBox(width: 6),
+            _dot(mutedColor),
+            const SizedBox(width: 8),
             Text(
               unitLabel,
               style: TextStyle(
-                color: dimColor,
+                color: mutedColor,
                 fontSize: 10,
-                fontWeight: FontWeight.w800,
-                letterSpacing: 5,
+                fontWeight: FontWeight.w900,
+                letterSpacing: 4,
               ),
             ),
-            const SizedBox(width: 6),
-            _dot(dimColor),
+            const SizedBox(width: 8),
+            _dot(mutedColor),
           ],
         ),
 
-        const SizedBox(height: 8),
+        const SizedBox(height: 12),
+        _divider(mutedColor),
 
-        // Thin decorative line below
-        Container(
-          width: 36,
-          height: 1,
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              colors: [
-                Colors.transparent,
-                dimColor,
-                Colors.transparent,
-              ],
-            ),
-          ),
-        ),
-
-        // Over-limit warning
         if (isOverLimit) ...[
-          const SizedBox(height: 10),
-          Text(
+          const SizedBox(height: 12),
+          const Text(
             '⚠  OVER LIMIT',
             style: TextStyle(
-              color: const Color(0xFFE8412A).withValues(alpha: 0.9),
+              color: Color(0xFFE8412A),
               fontSize: 9,
-              fontWeight: FontWeight.w800,
-              letterSpacing: 3,
+              fontWeight: FontWeight.w900,
+              letterSpacing: 2.5,
             ),
           ),
         ],
@@ -426,12 +352,19 @@ class _CenterReadout extends StatelessWidget {
     );
   }
 
+  Widget _divider(Color color) => Container(
+        width: 45,
+        height: 1,
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            colors: [Colors.transparent, color, Colors.transparent],
+          ),
+        ),
+      );
+
   Widget _dot(Color color) => Container(
         width: 3,
         height: 3,
-        decoration: BoxDecoration(
-          color: color,
-          shape: BoxShape.circle,
-        ),
+        decoration: BoxDecoration(color: color, shape: BoxShape.circle),
       );
 }

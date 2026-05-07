@@ -78,18 +78,25 @@ class _AiChatSheetState extends State<AiChatSheet> {
   }
 
   void _scrollToBottom() {
-    Future.delayed(const Duration(milliseconds: 150), () {
-      if (_scrollCtrl.hasClients) {
-        _scrollCtrl.animateTo(
-          _scrollCtrl.position.maxScrollExtent,
-          duration: const Duration(milliseconds: 400),
-          curve: Curves.easeOutQuart,
-        );
-      }
+    // FIX: Using post-frame callback ensures the layout is built before scrolling,
+    // avoiding jitter and ensuring it always reaches the very bottom.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      Future.delayed(const Duration(milliseconds: 50), () {
+        if (_scrollCtrl.hasClients) {
+          _scrollCtrl.animateTo(
+            _scrollCtrl.position.maxScrollExtent,
+            duration: const Duration(milliseconds: 300),
+            curve: Curves.easeOutQuart,
+          );
+        }
+      });
     });
   }
 
   Future<void> _sendMessage([String? text]) async {
+    // FIX: Prevent double-submission and API spam while AI is already generating
+    if (_isTyping) return;
+
     final query = (text ?? _controller.text).trim();
     if (query.isEmpty) return;
 
@@ -132,24 +139,30 @@ class _AiChatSheetState extends State<AiChatSheet> {
       decoration: BoxDecoration(
         color: _Gold.sheet,
         borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
-        border: Border.all(color: _Gold.dark.withValues(alpha: 0.3), width: 1),
+        border: Border.all(color: _Gold.dark.withOpacity(0.3), width: 1),
       ),
       child: Column(
         children: [
-          _SheetHandle(),
-          _SheetTitle(),
-          _GoldDivider(),
+          const _SheetHandle(),
+          const _SheetTitle(),
+          const _GoldDivider(),
           Expanded(
-              child: _MessageList(
-            messages: _messages,
-            isTyping: _isTyping,
-            thinkingStatus: _thinkingStatus,
-            scrollCtrl: _scrollCtrl,
-          )),
+            child: _MessageList(
+              messages: _messages,
+              isTyping: _isTyping,
+              thinkingStatus: _thinkingStatus,
+              scrollCtrl: _scrollCtrl,
+            ),
+          ),
           if (_messages.isEmpty && !_isTyping)
-            _SmartChips(chips: _smartChips, onChipTap: _sendMessage),
+            _SmartChips(
+              chips: _smartChips,
+              isTyping: _isTyping,
+              onChipTap: _sendMessage,
+            ),
           _InputBar(
             controller: _controller,
+            isTyping: _isTyping,
             onSend: _sendMessage,
           ),
         ],
@@ -161,6 +174,7 @@ class _AiChatSheetState extends State<AiChatSheet> {
 // ─── Handle ───────────────────────────────────────────────────────────────────
 
 class _SheetHandle extends StatelessWidget {
+  const _SheetHandle();
   @override
   Widget build(BuildContext context) {
     return Container(
@@ -168,7 +182,7 @@ class _SheetHandle extends StatelessWidget {
       width: 40,
       height: 4,
       decoration: BoxDecoration(
-        color: _Gold.dark.withValues(alpha: 0.4),
+        color: _Gold.dark.withOpacity(0.4),
         borderRadius: BorderRadius.circular(2),
       ),
     );
@@ -178,6 +192,7 @@ class _SheetHandle extends StatelessWidget {
 // ─── Title ────────────────────────────────────────────────────────────────────
 
 class _SheetTitle extends StatelessWidget {
+  const _SheetTitle();
   @override
   Widget build(BuildContext context) {
     return Padding(
@@ -196,7 +211,7 @@ class _SheetTitle extends StatelessWidget {
               ),
               boxShadow: [
                 BoxShadow(
-                  color: _Gold.mid.withValues(alpha: 0.3),
+                  color: _Gold.mid.withOpacity(0.3),
                   blurRadius: 8,
                 ),
               ],
@@ -222,6 +237,7 @@ class _SheetTitle extends StatelessWidget {
 // ─── Divider ──────────────────────────────────────────────────────────────────
 
 class _GoldDivider extends StatelessWidget {
+  const _GoldDivider();
   @override
   Widget build(BuildContext context) {
     return ShaderMask(
@@ -303,13 +319,12 @@ class _ChatBubble extends StatelessWidget {
             bottomRight: isUser ? Radius.zero : const Radius.circular(18),
             bottomLeft: isUser ? const Radius.circular(18) : Radius.zero,
           ),
-          border: isUser
-              ? null
-              : Border.all(color: _Gold.dark.withValues(alpha: 0.2)),
+          border:
+              isUser ? null : Border.all(color: _Gold.dark.withOpacity(0.2)),
           boxShadow: isUser
               ? [
                   BoxShadow(
-                    color: _Gold.mid.withValues(alpha: 0.2),
+                    color: _Gold.mid.withOpacity(0.2),
                     blurRadius: 12,
                     offset: const Offset(0, 3),
                   ),
@@ -330,7 +345,7 @@ class _ChatBubble extends StatelessWidget {
                 data: text,
                 styleSheet: MarkdownStyleSheet(
                   p: TextStyle(
-                    color: Colors.white.withValues(alpha: 0.88),
+                    color: Colors.white.withOpacity(0.88),
                     fontSize: 14,
                     height: 1.5,
                   ),
@@ -340,12 +355,12 @@ class _ChatBubble extends StatelessWidget {
                   ),
                   em: TextStyle(
                     fontStyle: FontStyle.italic,
-                    color: Colors.white.withValues(alpha: 0.6),
+                    color: Colors.white.withOpacity(0.6),
                   ),
                   listBullet: const TextStyle(color: _Gold.mid),
                   code: TextStyle(
                     color: _Gold.bright,
-                    backgroundColor: _Gold.dark.withValues(alpha: 0.2),
+                    backgroundColor: _Gold.dark.withOpacity(0.2),
                     fontFamily: 'monospace',
                     fontSize: 12,
                   ),
@@ -353,7 +368,7 @@ class _ChatBubble extends StatelessWidget {
                     color: _Gold.surface,
                     borderRadius: BorderRadius.circular(8),
                     border: Border.all(
-                      color: _Gold.dark.withValues(alpha: 0.3),
+                      color: _Gold.dark.withOpacity(0.3),
                     ),
                   ),
                 ),
@@ -380,7 +395,7 @@ class _ThinkingBubble extends StatelessWidget {
           color: _Gold.bubble,
           borderRadius:
               BorderRadius.circular(18).copyWith(bottomLeft: Radius.zero),
-          border: Border.all(color: _Gold.dark.withValues(alpha: 0.2)),
+          border: Border.all(color: _Gold.dark.withOpacity(0.2)),
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
@@ -393,7 +408,7 @@ class _ThinkingBubble extends StatelessWidget {
             Text(
               status,
               style: TextStyle(
-                color: Colors.white.withValues(alpha: 0.45),
+                color: Colors.white.withOpacity(0.45),
                 fontSize: 13,
                 fontStyle: FontStyle.italic,
               ),
@@ -409,9 +424,14 @@ class _ThinkingBubble extends StatelessWidget {
 
 class _SmartChips extends StatelessWidget {
   final List<String> chips;
+  final bool isTyping;
   final void Function(String) onChipTap;
 
-  const _SmartChips({required this.chips, required this.onChipTap});
+  const _SmartChips({
+    required this.chips,
+    required this.isTyping,
+    required this.onChipTap,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -423,23 +443,27 @@ class _SmartChips extends StatelessWidget {
         itemCount: chips.length,
         separatorBuilder: (_, __) => const SizedBox(width: 8),
         itemBuilder: (context, i) => GestureDetector(
-          onTap: () => onChipTap(chips[i]),
-          child: Container(
-            alignment: Alignment.center,
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-            decoration: BoxDecoration(
-              color: _Gold.dark.withValues(alpha: 0.1),
-              borderRadius: BorderRadius.circular(20),
-              border: Border.all(
-                color: _Gold.dark.withValues(alpha: 0.35),
+          onTap: isTyping ? null : () => onChipTap(chips[i]),
+          child: AnimatedOpacity(
+            duration: const Duration(milliseconds: 200),
+            opacity: isTyping ? 0.5 : 1.0,
+            child: Container(
+              alignment: Alignment.center,
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+              decoration: BoxDecoration(
+                color: _Gold.dark.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(
+                  color: _Gold.dark.withOpacity(0.35),
+                ),
               ),
-            ),
-            child: Text(
-              chips[i],
-              style: const TextStyle(
-                color: _Gold.mid,
-                fontSize: 12,
-                fontWeight: FontWeight.w600,
+              child: Text(
+                chips[i],
+                style: const TextStyle(
+                  color: _Gold.mid,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                ),
               ),
             ),
           ),
@@ -453,9 +477,14 @@ class _SmartChips extends StatelessWidget {
 
 class _InputBar extends StatelessWidget {
   final TextEditingController controller;
+  final bool isTyping;
   final VoidCallback onSend;
 
-  const _InputBar({required this.controller, required this.onSend});
+  const _InputBar({
+    required this.controller,
+    required this.isTyping,
+    required this.onSend,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -467,9 +496,10 @@ class _InputBar extends StatelessWidget {
             Expanded(
               child: CupertinoTextField(
                 controller: controller,
-                placeholder: 'Ask your coach…',
+                enabled: !isTyping,
+                placeholder: isTyping ? 'Thinking…' : 'Ask your coach…',
                 placeholderStyle: TextStyle(
-                  color: Colors.white.withValues(alpha: 0.22),
+                  color: Colors.white.withOpacity(0.22),
                 ),
                 style: const TextStyle(color: Colors.white),
                 padding:
@@ -478,36 +508,40 @@ class _InputBar extends StatelessWidget {
                   color: _Gold.bubble,
                   borderRadius: BorderRadius.circular(16),
                   border: Border.all(
-                    color: _Gold.dark.withValues(alpha: 0.3),
+                    color: _Gold.dark.withOpacity(0.3),
                   ),
                 ),
-                onSubmitted: (_) => onSend(),
+                onSubmitted: (_) => isTyping ? null : onSend(),
               ),
             ),
             const SizedBox(width: 10),
             GestureDetector(
-              onTap: onSend,
-              child: Container(
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  gradient: const LinearGradient(
-                    colors: [_Gold.dark, _Gold.mid],
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                  ),
-                  boxShadow: [
-                    BoxShadow(
-                      color: _Gold.mid.withValues(alpha: 0.3),
-                      blurRadius: 12,
-                      offset: const Offset(0, 3),
+              onTap: isTyping ? null : onSend,
+              child: AnimatedOpacity(
+                duration: const Duration(milliseconds: 200),
+                opacity: isTyping ? 0.4 : 1.0,
+                child: Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    gradient: const LinearGradient(
+                      colors: [_Gold.dark, _Gold.mid],
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
                     ),
-                  ],
-                ),
-                child: const Icon(
-                  CupertinoIcons.arrow_up,
-                  color: _Gold.ink,
-                  size: 20,
+                    boxShadow: [
+                      BoxShadow(
+                        color: _Gold.mid.withOpacity(isTyping ? 0.0 : 0.3),
+                        blurRadius: 12,
+                        offset: const Offset(0, 3),
+                      ),
+                    ],
+                  ),
+                  child: const Icon(
+                    CupertinoIcons.arrow_up,
+                    color: _Gold.ink,
+                    size: 20,
+                  ),
                 ),
               ),
             ),
