@@ -26,9 +26,16 @@ dependencies:
 dev_dependencies:
   flutter_test:
     sdk: flutter
+<<<<<<< HEAD
   build_runner: ^2.4.9
   hive_generator: ^2.0.1
   flutter_lints: ^5.0.0
 
 flutter:
   uses-material-design: true
+=======
+  flutter_lints: ^5.0.0
+
+flutter:
+  uses-material-design: true
+>>>>>>> 88c2e0948bfb8e17fadabe40b0cc4fcc6d18f473
