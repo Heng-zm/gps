@@ -78,8 +78,6 @@ class _AiChatSheetState extends State<AiChatSheet> {
   }
 
   void _scrollToBottom() {
-    // FIX: Using post-frame callback ensures the layout is built before scrolling,
-    // avoiding jitter and ensuring it always reaches the very bottom.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       Future.delayed(const Duration(milliseconds: 50), () {
         if (_scrollCtrl.hasClients) {
@@ -94,7 +92,6 @@ class _AiChatSheetState extends State<AiChatSheet> {
   }
 
   Future<void> _sendMessage([String? text]) async {
-    // FIX: Prevent double-submission and API spam while AI is already generating
     if (_isTyping) return;
 
     final query = (text ?? _controller.text).trim();
@@ -139,7 +136,7 @@ class _AiChatSheetState extends State<AiChatSheet> {
       decoration: BoxDecoration(
         color: _Gold.sheet,
         borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
-        border: Border.all(color: _Gold.dark.withOpacity(0.3), width: 1),
+        border: Border.all(color: _Gold.dark.withValues(alpha: 0.3), width: 1),
       ),
       child: Column(
         children: [
@@ -182,7 +179,7 @@ class _SheetHandle extends StatelessWidget {
       width: 40,
       height: 4,
       decoration: BoxDecoration(
-        color: _Gold.dark.withOpacity(0.4),
+        color: _Gold.dark.withValues(alpha: 0.4),
         borderRadius: BorderRadius.circular(2),
       ),
     );
@@ -211,7 +208,7 @@ class _SheetTitle extends StatelessWidget {
               ),
               boxShadow: [
                 BoxShadow(
-                  color: _Gold.mid.withOpacity(0.3),
+                  color: _Gold.mid.withValues(alpha: 0.3),
                   blurRadius: 8,
                 ),
               ],
@@ -319,12 +316,13 @@ class _ChatBubble extends StatelessWidget {
             bottomRight: isUser ? Radius.zero : const Radius.circular(18),
             bottomLeft: isUser ? const Radius.circular(18) : Radius.zero,
           ),
-          border:
-              isUser ? null : Border.all(color: _Gold.dark.withOpacity(0.2)),
+          border: isUser
+              ? null
+              : Border.all(color: _Gold.dark.withValues(alpha: 0.2)),
           boxShadow: isUser
               ? [
                   BoxShadow(
-                    color: _Gold.mid.withOpacity(0.2),
+                    color: _Gold.mid.withValues(alpha: 0.2),
                     blurRadius: 12,
                     offset: const Offset(0, 3),
                   ),
@@ -345,7 +343,7 @@ class _ChatBubble extends StatelessWidget {
                 data: text,
                 styleSheet: MarkdownStyleSheet(
                   p: TextStyle(
-                    color: Colors.white.withOpacity(0.88),
+                    color: Colors.white.withValues(alpha: 0.88),
                     fontSize: 14,
                     height: 1.5,
                   ),
@@ -355,12 +353,12 @@ class _ChatBubble extends StatelessWidget {
                   ),
                   em: TextStyle(
                     fontStyle: FontStyle.italic,
-                    color: Colors.white.withOpacity(0.6),
+                    color: Colors.white.withValues(alpha: 0.6),
                   ),
                   listBullet: const TextStyle(color: _Gold.mid),
                   code: TextStyle(
                     color: _Gold.bright,
-                    backgroundColor: _Gold.dark.withOpacity(0.2),
+                    backgroundColor: _Gold.dark.withValues(alpha: 0.2),
                     fontFamily: 'monospace',
                     fontSize: 12,
                   ),
@@ -368,7 +366,7 @@ class _ChatBubble extends StatelessWidget {
                     color: _Gold.surface,
                     borderRadius: BorderRadius.circular(8),
                     border: Border.all(
-                      color: _Gold.dark.withOpacity(0.3),
+                      color: _Gold.dark.withValues(alpha: 0.3),
                     ),
                   ),
                 ),
@@ -395,7 +393,7 @@ class _ThinkingBubble extends StatelessWidget {
           color: _Gold.bubble,
           borderRadius:
               BorderRadius.circular(18).copyWith(bottomLeft: Radius.zero),
-          border: Border.all(color: _Gold.dark.withOpacity(0.2)),
+          border: Border.all(color: _Gold.dark.withValues(alpha: 0.2)),
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
@@ -408,7 +406,7 @@ class _ThinkingBubble extends StatelessWidget {
             Text(
               status,
               style: TextStyle(
-                color: Colors.white.withOpacity(0.45),
+                color: Colors.white.withValues(alpha: 0.45),
                 fontSize: 13,
                 fontStyle: FontStyle.italic,
               ),
@@ -451,10 +449,10 @@ class _SmartChips extends StatelessWidget {
               alignment: Alignment.center,
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
               decoration: BoxDecoration(
-                color: _Gold.dark.withOpacity(0.1),
+                color: _Gold.dark.withValues(alpha: 0.1),
                 borderRadius: BorderRadius.circular(20),
                 border: Border.all(
-                  color: _Gold.dark.withOpacity(0.35),
+                  color: _Gold.dark.withValues(alpha: 0.35),
                 ),
               ),
               child: Text(
@@ -499,7 +497,7 @@ class _InputBar extends StatelessWidget {
                 enabled: !isTyping,
                 placeholder: isTyping ? 'Thinking…' : 'Ask your coach…',
                 placeholderStyle: TextStyle(
-                  color: Colors.white.withOpacity(0.22),
+                  color: Colors.white.withValues(alpha: 0.22),
                 ),
                 style: const TextStyle(color: Colors.white),
                 padding:
@@ -508,7 +506,7 @@ class _InputBar extends StatelessWidget {
                   color: _Gold.bubble,
                   borderRadius: BorderRadius.circular(16),
                   border: Border.all(
-                    color: _Gold.dark.withOpacity(0.3),
+                    color: _Gold.dark.withValues(alpha: 0.3),
                   ),
                 ),
                 onSubmitted: (_) => isTyping ? null : onSend(),
@@ -531,7 +529,8 @@ class _InputBar extends StatelessWidget {
                     ),
                     boxShadow: [
                       BoxShadow(
-                        color: _Gold.mid.withOpacity(isTyping ? 0.0 : 0.3),
+                        color:
+                            _Gold.mid.withValues(alpha: isTyping ? 0.0 : 0.3),
                         blurRadius: 12,
                         offset: const Offset(0, 3),
                       ),

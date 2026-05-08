@@ -25,17 +25,20 @@ class TripPoint {
         'acc': accuracyMeters,
       };
 
-  factory TripPoint.fromJson(Map<String, dynamic> json) => TripPoint(
-        position: LatLng(
-          (json['lat'] as num? ?? 0.0).toDouble(),
-          (json['lng'] as num? ?? 0.0).toDouble(),
-        ),
-        speedMph: (json['speed'] as num? ?? 0.0).toDouble(),
-        altitudeFt: (json['alt'] as num? ?? 0.0).toDouble(),
-        timestamp:
-            DateTime.fromMillisecondsSinceEpoch(json['time'] as int? ?? 0),
-        accuracyMeters: (json['acc'] as num? ?? 0.0).toDouble(),
-      );
+  factory TripPoint.fromJson(Map<String, dynamic> json) {
+    return TripPoint(
+      position: LatLng(
+        (json['lat'] as num?)?.toDouble() ?? 0.0,
+        (json['lng'] as num?)?.toDouble() ?? 0.0,
+      ),
+      speedMph: (json['speed'] as num?)?.toDouble() ?? 0.0,
+      altitudeFt: (json['alt'] as num?)?.toDouble() ?? 0.0,
+      timestamp: DateTime.fromMillisecondsSinceEpoch(
+        (json['time'] as num?)?.toInt() ?? 0,
+      ),
+      accuracyMeters: (json['acc'] as num?)?.toDouble() ?? 0.0,
+    );
+  }
 }
 
 /// Represents the completed statistics and path of a recorded journey.
@@ -53,7 +56,13 @@ class TripSummary {
   final double distanceMiles;
   final List<TripPoint> points;
 
-  const TripSummary({
+  // PERFORMANCE: Cached formatters.
+  // These run only once per trip, preventing lag during list scrolling.
+  late final String formattedTotalTime = _formatDuration(totalTime);
+  late final String formattedStoppedTime = _formatDuration(stoppedTime);
+  late final String formattedMovingTime = _formatDuration(movingTime);
+
+  TripSummary({
     required this.id,
     required this.date,
     required this.totalTime,
@@ -67,12 +76,6 @@ class TripSummary {
     required this.distanceMiles,
     required this.points,
   });
-
-  // --- Formatting Getters ---
-
-  String get formattedTotalTime => _formatDuration(totalTime);
-  String get formattedStoppedTime => _formatDuration(stoppedTime);
-  String get formattedMovingTime => _formatDuration(movingTime);
 
   static String _formatDuration(Duration d) {
     if (d.isNegative) return "0s";
@@ -106,25 +109,35 @@ class TripSummary {
         'pts': points.map((p) => p.toJson()).toList(),
       };
 
-  /// FIX: Added missing factory to allow HistoryScreen to load saved data
+  // BUG FIX: Uses num type-casting for safe JSON decoding from Supabase/Cloud sources.
   factory TripSummary.fromJson(Map<String, dynamic> json) {
-    var ptsList = (json['pts'] as List? ?? []);
+    // Optimized list parsing
+    final ptsRaw = json['pts'] as List? ?? [];
+    final parsedPoints = ptsRaw
+        .map((p) => TripPoint.fromJson(p as Map<String, dynamic>))
+        .toList(growable: false);
 
     return TripSummary(
-      id: json['id'] as String? ?? '',
-      date: DateTime.fromMillisecondsSinceEpoch(json['date'] as int? ?? 0),
-      totalTime: Duration(seconds: json['totalSec'] as int? ?? 0),
-      stoppedTime: Duration(seconds: json['stopSec'] as int? ?? 0),
-      movingTime: Duration(seconds: json['movSec'] as int? ?? 0),
-      maxSpeedMph: (json['maxSpd'] as num? ?? 0.0).toDouble(),
-      avgSpeedMph: (json['avgSpd'] as num? ?? 0.0).toDouble(),
-      altitudeGainFt: (json['altGain'] as num? ?? 0.0).toDouble(),
-      maxAltitudeFt: (json['maxAlt'] as num? ?? 0.0).toDouble(),
-      minAltitudeFt: (json['minAlt'] as num? ?? 0.0).toDouble(),
-      distanceMiles: (json['dist'] as num? ?? 0.0).toDouble(),
-      points: ptsList
-          .map((p) => TripPoint.fromJson(p as Map<String, dynamic>))
-          .toList(),
+      id: json['id']?.toString() ?? '',
+      date: DateTime.fromMillisecondsSinceEpoch(
+        (json['date'] as num?)?.toInt() ?? 0,
+      ),
+      totalTime: Duration(
+        seconds: (json['totalSec'] as num?)?.toInt() ?? 0,
+      ),
+      stoppedTime: Duration(
+        seconds: (json['stopSec'] as num?)?.toInt() ?? 0,
+      ),
+      movingTime: Duration(
+        seconds: (json['movSec'] as num?)?.toInt() ?? 0,
+      ),
+      maxSpeedMph: (json['maxSpd'] as num?)?.toDouble() ?? 0.0,
+      avgSpeedMph: (json['avgSpd'] as num?)?.toDouble() ?? 0.0,
+      altitudeGainFt: (json['altGain'] as num?)?.toDouble() ?? 0.0,
+      maxAltitudeFt: (json['maxAlt'] as num?)?.toDouble() ?? 0.0,
+      minAltitudeFt: (json['minAlt'] as num?)?.toDouble() ?? 0.0,
+      distanceMiles: (json['dist'] as num?)?.toDouble() ?? 0.0,
+      points: parsedPoints,
     );
   }
 }

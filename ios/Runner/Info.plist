@@ -39,39 +39,47 @@
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
 
-	<!-- 1. Location Permissions (iOS 14+ Compatible) -->
+	<!-- 1. Location Permissions (Updated to include Heading/Compass) -->
 	<key>NSLocationWhenInUseUsageDescription</key>
-	<string>GPS Tracker requires your location to display your current speed, bearing, and trip distance while you are using the app.</string>
+	<string>GPS Tracker requires your location to display your speed, trip distance, and compass heading while you are using the app.</string>
 	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
-	<string>GPS Tracker needs background access to record your route and stats even when the screen is off or you are using other apps.</string>
+	<string>GPS Tracker needs background access to record your route, stats, and direction even when the screen is off.</string>
 	<key>NSLocationAlwaysUsageDescription</key>
-	<string>GPS Tracker needs background access to record your route and stats even when the screen is off or you are using other apps.</string>
+	<string>GPS Tracker needs background access to record your route, stats, and direction even when the screen is off.</string>
 
-	<!-- 2. Enable Background Tasks -->
+	<!-- 2. Hardware Requirements (Crucial for Compass) -->
+	<key>UIRequiredDeviceCapabilities</key>
+	<array>
+		<string>armv7</string>
+		<string>location-services</string>
+		<string>gps</string>
+		<string>magnetometer</string> <!-- Required for the Compass sensor -->
+	</array>
+
+	<!-- 3. Enable Background Tasks -->
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>location</string>
 		<string>processing</string>
 	</array>
 
-	<!-- 3. Network & Map Security -->
-	<!-- Removed Arbitrary Loads (Apple Rejection Risk) in favor of HTTPS compliance -->
+	<!-- 4. Network & Map Security -->
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsLocalConnections</key>
 		<true/>
 	</dict>
 
-	<!-- 4. UI Polish -->
+	<!-- 5. UI Polish -->
 	<key>UIStatusBarStyle</key>
 	<string>UIStatusBarStyleLightContent</string>
 
-	<!-- 5. App Store Compliance -->
+	<!-- 6. App Store Compliance -->
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
 	
-	<!-- 6. Motion Permission (Optional but recommended for GpsService) -->
+	<!-- 7. Motion Permission -->
 	<key>NSMotionUsageDescription</key>
-	<string>Motion detection helps optimize battery usage by pausing GPS updates when your vehicle is stationary.</string>
+	<string>Motion detection helps optimize battery usage by pausing GPS and Compass updates when you are stationary.</string>
 </dict>
 </plist>

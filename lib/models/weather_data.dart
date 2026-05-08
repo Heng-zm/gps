@@ -44,8 +44,9 @@ class WeatherData {
     if (_c.contains('shower')) return '🌦️';
     if (_c.contains('rain')) return '🌧️';
     if (_c.contains('drizzle')) return '🌦️';
-    if (_c.contains('fog') || _c.contains('mist') || _c.contains('haze'))
+    if (_c.contains('fog') || _c.contains('mist') || _c.contains('haze')) {
       return '🌫️';
+    }
     if (_c.contains('overcast')) return '☁️';
     if (_c.contains('partly') || _c.contains('few')) return '⛅';
     if (_c.contains('cloudy')) return '☁️';
@@ -64,16 +65,21 @@ class WeatherData {
         _c.contains('sleet') ||
         _c.contains('ice')) return const Color(0xFFADDEFF); // icy blue
     if (_c.contains('freezing')) return const Color(0xFFADDEFF);
-    if (_c.contains('rain') || _c.contains('shower') || _c.contains('drizzle'))
+    if (_c.contains('rain') ||
+        _c.contains('shower') ||
+        _c.contains('drizzle')) {
       return const Color(0xFF4A9EFF); // rain blue
+    }
     if (_c.contains('fog') ||
         _c.contains('mist') ||
         _c.contains('haze') ||
         _c.contains('overcast')) return const Color(0xFF8899AA); // grey
-    if (_c.contains('clear') || _c.contains('sunny'))
+    if (_c.contains('clear') || _c.contains('sunny')) {
       return const Color(0xFFEDD068); // gold-bright
-    if (_c.contains('partly') || _c.contains('few'))
+    }
+    if (_c.contains('partly') || _c.contains('few')) {
       return const Color(0xFFD4A843); // gold-mid
+    }
     return const Color(0xFFD4A843); // gold-mid default
   }
 
@@ -160,12 +166,14 @@ class WeatherData {
   String get drivingAdvisory {
     if (_c.contains('thunder')) return 'Seek shelter — storm risk';
     if (_c.contains('blizzard')) return 'Avoid driving — blizzard';
-    if (_c.contains('snow') || _c.contains('sleet'))
+    if (_c.contains('snow') || _c.contains('sleet')) {
       return 'Slippery roads possible';
+    }
     if (_c.contains('freezing')) return 'Black ice risk';
     if (_c.contains('fog') || _c.contains('mist')) return 'Reduced visibility';
-    if (hasPrecipRisk && precipProbabilityPct > 50)
+    if (hasPrecipRisk && precipProbabilityPct > 50) {
       return 'Wet roads — drive carefully';
+    }
     if (windSpeed >= 60) return 'High crosswind alert';
     return 'Conditions look fine';
   }

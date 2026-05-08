@@ -1,137 +1,189 @@
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:fl_chart/fl_chart.dart';
 import '../models/trip_data.dart';
 import '../services/settings_service.dart';
 import '../widgets/ai_analysis_card.dart';
 import '../widgets/ai_chat_sheet.dart';
 import 'map_screen.dart';
+// Important: SavedTrip model and logic are imported from history_screen
+import 'history_screen.dart';
 
-class SummaryScreen extends StatelessWidget {
+class SummaryScreen extends StatefulWidget {
   final TripSummary summary;
   const SummaryScreen({super.key, required this.summary});
 
   @override
+  State<SummaryScreen> createState() => _SummaryScreenState();
+}
+
+class _SummaryScreenState extends State<SummaryScreen> {
+  bool _isSaving = false;
+  bool _isSaved = false;
+
+  /// Handles the Supabase upload logic
+  Future<void> _handleSaveTrip() async {
+    if (_isSaved || _isSaving) return;
+
+    setState(() => _isSaving = true);
+    await HapticFeedback.mediumImpact();
+
+    // Convert TripSummary (live data) to SavedTrip (DB format)
+    final tripToSave = SavedTrip(
+      id: widget.summary.id,
+      date: widget.summary.date,
+      distanceMiles: widget.summary.distanceMiles,
+      maxSpeedMph: widget.summary.maxSpeedMph,
+      avgSpeedMph: widget.summary.avgSpeedMph,
+      totalTime: widget.summary.totalTime,
+      altitudeGainFt: widget.summary.altitudeGainFt,
+    );
+
+    final success = await SavedTrip.saveTrip(tripToSave);
+
+    if (mounted) {
+      setState(() {
+        _isSaving = false;
+        if (success) _isSaved = true;
+      });
+
+      if (success) {
+        await HapticFeedback.lightImpact();
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Trip successfully synced to cloud.'),
+              backgroundColor: Color(0xFF4ECDC4),
+              duration: Duration(seconds: 2),
+            ),
+          );
+        }
+      } else {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Cloud sync failed. Check connection.'),
+              backgroundColor: Color(0xFFE74C3C),
+            ),
+          );
+        }
+      }
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
     final settings = SettingsService.instance;
-    final speedUnit = settings.speedUnit.toUpperCase();
     final distUnit = settings.distanceUnit.toUpperCase();
-
-    // Altitude logic: Metric (Meters) vs Imperial (Feet)
+    final speedUnit = settings.speedUnit.toUpperCase();
     final altUnit = settings.useKmh ? 'M' : 'FT';
     final altFactor = settings.useKmh ? 0.3048 : 1.0;
 
     return Scaffold(
-      backgroundColor: const Color(0xFF0D0D0D),
-      // ── FEATURE: Floating AI Chat Assistant ────────────────────────────
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: () {
-          showModalBottomSheet(
-            context: context,
-            isScrollControlled: true,
-            backgroundColor: Colors.transparent,
-            builder: (context) => AiChatSheet(summary: summary),
-          );
-        },
-        backgroundColor: const Color(0xFFA855F7),
-        icon: const Icon(Icons.auto_awesome, color: Colors.white, size: 20),
-        label: const Text(
-          'ASK AI',
-          style: TextStyle(
-            color: Colors.white,
-            fontWeight: FontWeight.bold,
-            letterSpacing: 1,
-          ),
-        ),
-      ),
+      backgroundColor: const Color(0xFF0A0A0A),
+      floatingActionButton: _AiFab(summary: widget.summary),
       body: SafeArea(
+        bottom: false,
         child: Column(
           children: [
             _buildAppBar(context),
             Expanded(
               child: SingleChildScrollView(
                 physics: const BouncingScrollPhysics(),
-                padding: const EdgeInsets.all(20),
+                padding: const EdgeInsets.fromLTRB(20, 10, 20, 100),
                 child: Column(
                   children: [
-                    _HeroCard(
-                        summary: summary,
-                        settings: settings,
-                        distUnit: distUnit),
+                    _HeroDistanceCard(
+                      distance: settings
+                          .toDisplayDistance(widget.summary.distanceMiles),
+                      unit: distUnit,
+                    ),
                     const SizedBox(height: 16),
-
-                    // AI Automatic Trip Analysis
-                    AiAnalysisCard(summary: summary),
-
+                    AiAnalysisCard(summary: widget.summary),
                     const SizedBox(height: 16),
-
-                    // TIME SECTION
-                    _SectionCard(title: 'TIME', children: [
-                      _StatRow2(
+                    _SectionCard(title: 'TIME METRICS', children: [
+                      _StatRow(
                         left: _StatBox(
-                            label: 'Total Time',
-                            value: summary.formattedTotalTime,
-                            icon: CupertinoIcons.clock),
+                            label: 'TOTAL TIME',
+                            value: widget.summary.formattedTotalTime,
+                            icon: CupertinoIcons.timer),
                         right: _StatBox(
-                            label: 'Stopped',
-                            value: summary.formattedStoppedTime,
+                            label: 'STOPPED',
+                            value: widget.summary.formattedStoppedTime,
                             icon: CupertinoIcons.pause_circle),
                       ),
                     ]),
                     const SizedBox(height: 12),
-
-                    // SPEED SECTION
-                    _SectionCard(title: 'SPEED ($speedUnit)', children: [
-                      _StatRow2(
-                        left: _StatBox(
-                            label: 'Max Speed',
-                            value:
-                                '${settings.toDisplaySpeed(summary.maxSpeedMph).toInt()} $speedUnit',
-                            icon: CupertinoIcons.speedometer,
-                            accent: true),
-                        right: _StatBox(
-                            label: 'Avg Speed',
-                            value:
-                                '${settings.toDisplaySpeed(summary.avgSpeedMph).toInt()} $speedUnit',
-                            icon: CupertinoIcons.arrow_right_circle),
-                      ),
-                      if (summary.points.length > 2) ...[
-                        const SizedBox(height: 20),
-                        _SpeedChart(points: summary.points, settings: settings),
-                      ],
-                    ]),
+                    _SectionCard(
+                        title: 'SPEED ANALYTICS ($speedUnit)',
+                        children: [
+                          _StatRow(
+                            left: _StatBox(
+                                label: 'MAXIMUM',
+                                value:
+                                    '${settings.toDisplaySpeed(widget.summary.maxSpeedMph).toInt()}',
+                                icon: CupertinoIcons.speedometer,
+                                accent: true),
+                            right: _StatBox(
+                                label: 'AVERAGE',
+                                value:
+                                    '${settings.toDisplaySpeed(widget.summary.avgSpeedMph).toInt()}',
+                                icon: CupertinoIcons.chart_bar),
+                          ),
+                          if (widget.summary.points.length > 5) ...[
+                            const SizedBox(height: 20),
+                            _PerformantChart(
+                                points: widget.summary.points,
+                                getValue: (p) =>
+                                    settings.toDisplaySpeed(p.speedMph),
+                                color: const Color(0xFF4A9EFF)),
+                          ],
+                        ]),
                     const SizedBox(height: 12),
-
-                    // ALTITUDE SECTION
-                    _SectionCard(title: 'ALTITUDE ($altUnit)', children: [
-                      _StatRow3(
-                        s1: _StatBox(
-                            label: 'Gain',
-                            value:
-                                '+${(summary.altitudeGainFt * altFactor).toInt()} $altUnit',
-                            icon: CupertinoIcons.arrow_up,
-                            accent: true),
-                        s2: _StatBox(
-                            label: 'Max',
-                            value:
-                                '${(summary.maxAltitudeFt * altFactor).toInt()} $altUnit',
-                            icon: CupertinoIcons.chevron_up),
-                        s3: _StatBox(
-                            label: 'Min',
-                            value:
-                                '${(summary.minAltitudeFt * altFactor).toInt()} $altUnit',
-                            icon: CupertinoIcons.chevron_down),
-                      ),
-                      if (summary.points.length > 2) ...[
-                        const SizedBox(height: 20),
-                        _AltitudeChart(
-                            points: summary.points, factor: altFactor),
-                      ],
-                    ]),
-
+                    _SectionCard(
+                        title: 'ELEVATION PROFILE ($altUnit)',
+                        children: [
+                          Row(
+                            children: [
+                              Expanded(
+                                  child: _StatBox(
+                                      label: 'GAIN',
+                                      value:
+                                          '+${(widget.summary.altitudeGainFt * altFactor).toInt()}',
+                                      icon: CupertinoIcons.graph_square,
+                                      accent: true)),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                  child: _StatBox(
+                                      label: 'MAX',
+                                      value:
+                                          '${(widget.summary.maxAltitudeFt * altFactor).toInt()}',
+                                      icon: CupertinoIcons.chevron_up)),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                  child: _StatBox(
+                                      label: 'MIN',
+                                      value:
+                                          '${(widget.summary.minAltitudeFt * altFactor).toInt()}',
+                                      icon: CupertinoIcons.chevron_down)),
+                            ],
+                          ),
+                          if (widget.summary.points.length > 5) ...[
+                            const SizedBox(height: 20),
+                            _PerformantChart(
+                                points: widget.summary.points,
+                                getValue: (p) => p.altitudeFt * altFactor,
+                                color: const Color(0xFF4ECDC4)),
+                          ],
+                        ]),
                     const SizedBox(height: 32),
-                    _buildDoneButton(context),
-                    const SizedBox(height: 60), // Extra space for FAB
+                    _SaveButton(
+                        isSaving: _isSaving,
+                        isSaved: _isSaved,
+                        onTap: _handleSaveTrip),
+                    const SizedBox(height: 12),
+                    _DismissButton(),
                   ],
                 ),
               ),
@@ -144,218 +196,123 @@ class SummaryScreen extends StatelessWidget {
 
   Widget _buildAppBar(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(20, 16, 20, 10),
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
       child: Row(
         children: [
-          GestureDetector(
-            onTap: () => Navigator.of(context).pop(),
-            child: Container(
-              width: 40,
-              height: 40,
-              decoration: BoxDecoration(
-                color: const Color(0xFF1A1A1A),
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: const Icon(CupertinoIcons.chevron_back,
-                  color: Colors.white, size: 18),
-            ),
-          ),
+          _RoundIconButton(
+              icon: CupertinoIcons.chevron_back,
+              onTap: () => Navigator.pop(context)),
           const SizedBox(width: 16),
           const Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text('TRIP SUMMARY',
+              Text('SESSION OVERVIEW',
                   style: TextStyle(
                       color: Colors.white,
-                      fontSize: 18,
+                      fontSize: 16,
                       fontWeight: FontWeight.w900,
-                      letterSpacing: 1.5)),
+                      letterSpacing: 1)),
               Text('Performance Analytics',
-                  style: TextStyle(color: Color(0xFF666666), fontSize: 11)),
+                  style: TextStyle(
+                      color: Color(0xFF555555),
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600)),
             ],
           ),
           const Spacer(),
-          _buildMapButton(context),
+          _MapPreviewButton(points: widget.summary.points),
         ],
       ),
     );
   }
+}
 
-  Widget _buildMapButton(BuildContext context) {
+class _SaveButton extends StatelessWidget {
+  final bool isSaving, isSaved;
+  final VoidCallback onTap;
+  const _SaveButton(
+      {required this.isSaving, required this.isSaved, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
     const teal = Color(0xFF4ECDC4);
-    return GestureDetector(
-      onTap: () => Navigator.of(context).push(
-        CupertinoPageRoute(
-            builder: (_) => MapScreen(points: summary.points, isLive: false)),
-      ),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-        decoration: BoxDecoration(
-          color: teal.withValues(alpha: 0.1),
-          borderRadius: BorderRadius.circular(10),
-          border: Border.all(color: teal.withValues(alpha: 0.2)),
-        ),
-        child: const Row(
-          children: [
-            Icon(CupertinoIcons.map_fill, color: teal, size: 14),
-            SizedBox(width: 6),
-            Text('MAP',
-                style: TextStyle(
-                    color: teal, fontSize: 12, fontWeight: FontWeight.w800)),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildDoneButton(BuildContext context) {
     return SizedBox(
       width: double.infinity,
       child: CupertinoButton(
-        color: const Color(0xFF1A1A1A),
-        borderRadius: BorderRadius.circular(16),
-        onPressed: () => Navigator.of(context).pop(),
-        child: const Text('DISMISS',
-            style: TextStyle(
-                color: Colors.white,
-                fontSize: 14,
-                fontWeight: FontWeight.w800,
-                letterSpacing: 2)),
-      ),
-    );
-  }
-}
-
-class _HeroCard extends StatelessWidget {
-  final TripSummary summary;
-  final SettingsService settings;
-  final String distUnit;
-  const _HeroCard(
-      {required this.summary, required this.settings, required this.distUnit});
-
-  @override
-  Widget build(BuildContext context) {
-    const teal = Color(0xFF4ECDC4);
-    return Container(
-      padding: const EdgeInsets.all(24),
-      decoration: BoxDecoration(
-        gradient: const LinearGradient(
-          colors: [Color(0xFF0F3330), Color(0xFF1A1A1A)],
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-        ),
-        borderRadius: BorderRadius.circular(24),
-        border: Border.all(color: teal.withValues(alpha: 0.2)),
-      ),
-      child: Row(
-        children: [
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text('TOTAL DISTANCE',
-                  style: TextStyle(
-                      color: teal.withValues(alpha: 0.6),
-                      fontSize: 10,
-                      fontWeight: FontWeight.w900,
-                      letterSpacing: 2)),
-              const SizedBox(height: 8),
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.baseline,
-                textBaseline: TextBaseline.alphabetic,
+        padding: const EdgeInsets.symmetric(vertical: 18),
+        color: isSaved ? const Color(0xFF1A1A1A) : teal,
+        borderRadius: BorderRadius.circular(20),
+        onPressed: onTap,
+        child: isSaving
+            ? const CupertinoActivityIndicator(color: Colors.white)
+            : Row(
+                mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  Text(
-                      settings
-                          .toDisplayDistance(summary.distanceMiles)
-                          .toStringAsFixed(2),
-                      style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 56,
-                          fontWeight: FontWeight.w200,
-                          height: 1)),
-                  const SizedBox(width: 8),
-                  Text(distUnit,
-                      style: const TextStyle(
-                          color: teal,
-                          fontSize: 18,
-                          fontWeight: FontWeight.w900)),
+                  Icon(
+                      isSaved
+                          ? CupertinoIcons.check_mark_circled_solid
+                          : CupertinoIcons.cloud_upload_fill,
+                      color: isSaved ? teal : Colors.black,
+                      size: 18),
+                  const SizedBox(width: 10),
+                  Text(isSaved ? 'TRIP SAVED' : 'SAVE TO HISTORY',
+                      style: TextStyle(
+                          color: isSaved ? teal : Colors.black,
+                          fontSize: 14,
+                          fontWeight: FontWeight.w900,
+                          letterSpacing: 1)),
                 ],
               ),
-            ],
-          ),
-          const Spacer(),
-          _buildBadge(),
-        ],
       ),
-    );
-  }
-
-  Widget _buildBadge() {
-    const teal = Color(0xFF4ECDC4);
-    return Container(
-      width: 60,
-      height: 60,
-      decoration: BoxDecoration(
-        color: teal.withValues(alpha: 0.1),
-        shape: BoxShape.circle,
-        border: Border.all(color: teal.withValues(alpha: 0.1)),
-      ),
-      child: const Icon(CupertinoIcons.flag_fill, color: teal, size: 24),
     );
   }
 }
 
-class _SectionCard extends StatelessWidget {
-  final String title;
-  final List<Widget> children;
-  const _SectionCard({required this.title, required this.children});
+class _HeroDistanceCard extends StatelessWidget {
+  final double distance;
+  final String unit;
+  const _HeroDistanceCard({required this.distance, required this.unit});
 
   @override
   Widget build(BuildContext context) {
+    const teal = Color(0xFF4ECDC4);
     return Container(
-      padding: const EdgeInsets.all(20),
+      width: double.infinity,
+      padding: const EdgeInsets.all(24),
       decoration: BoxDecoration(
-          color: const Color(0xFF151515),
-          borderRadius: BorderRadius.circular(20),
-          border: Border.all(color: Colors.white.withValues(alpha: 0.03))),
+        color: const Color(0xFF111111),
+        borderRadius: BorderRadius.circular(28),
+        border: Border.all(color: teal.withValues(alpha: 0.1)),
+      ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(title,
-              style: const TextStyle(
-                  color: Color(0xFF4ECDC4),
-                  fontSize: 10,
-                  fontWeight: FontWeight.w900,
-                  letterSpacing: 2)),
-          const SizedBox(height: 16),
-          ...children,
+          Text('TOTAL DISTANCE',
+              style: TextStyle(
+                  color: teal.withValues(alpha: 0.5),
+                  fontSize: 11,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: 1.5)),
+          const SizedBox(height: 4),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.baseline,
+            textBaseline: TextBaseline.alphabetic,
+            children: [
+              Text(distance.toStringAsFixed(2),
+                  style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 52,
+                      fontWeight: FontWeight.w300)),
+              const SizedBox(width: 8),
+              Text(unit,
+                  style: const TextStyle(
+                      color: teal, fontSize: 20, fontWeight: FontWeight.w900)),
+            ],
+          ),
         ],
       ),
     );
   }
-}
-
-class _StatRow2 extends StatelessWidget {
-  final Widget left, right;
-  const _StatRow2({required this.left, required this.right});
-  @override
-  Widget build(BuildContext context) => Row(children: [
-        Expanded(child: left),
-        const SizedBox(width: 12),
-        Expanded(child: right)
-      ]);
-}
-
-class _StatRow3 extends StatelessWidget {
-  final Widget s1, s2, s3;
-  const _StatRow3({required this.s1, required this.s2, required this.s3});
-  @override
-  Widget build(BuildContext context) => Row(children: [
-        Expanded(child: s1),
-        const SizedBox(width: 8),
-        Expanded(child: s2),
-        const SizedBox(width: 8),
-        Expanded(child: s3)
-      ]);
 }
 
 class _StatBox extends StatelessWidget {
@@ -370,126 +327,202 @@ class _StatBox extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final teal = const Color(0xFF4ECDC4);
-    final color = accent ? teal : const Color(0xFF555555);
+    final color = accent ? const Color(0xFF4ECDC4) : const Color(0xFF666666);
     return Container(
-      padding: const EdgeInsets.all(14),
+      padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: accent ? teal.withValues(alpha: 0.05) : const Color(0xFF111111),
-        borderRadius: BorderRadius.circular(14),
-        border: accent ? Border.all(color: teal.withValues(alpha: 0.15)) : null,
+        color: accent ? color.withValues(alpha: 0.05) : const Color(0xFF181818),
+        borderRadius: BorderRadius.circular(18),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(children: [
-            Icon(icon, color: color, size: 12),
+            Icon(icon, color: color, size: 13),
             const SizedBox(width: 6),
-            Flexible(
-                child: Text(label,
-                    style: TextStyle(
-                        color: color,
-                        fontSize: 9,
-                        fontWeight: FontWeight.w900,
-                        letterSpacing: 0.5))),
+            Text(label,
+                style: TextStyle(
+                    color: color, fontSize: 10, fontWeight: FontWeight.w800))
           ]),
-          const SizedBox(height: 8),
+          const SizedBox(height: 6),
           Text(value,
               style: const TextStyle(
                   color: Colors.white,
-                  fontSize: 16,
-                  fontWeight: FontWeight.w900)),
+                  fontSize: 18,
+                  fontWeight: FontWeight.w800)),
         ],
       ),
     );
   }
 }
 
-class _SpeedChart extends StatelessWidget {
+class _PerformantChart extends StatelessWidget {
   final List<TripPoint> points;
-  final SettingsService settings;
-  const _SpeedChart({required this.points, required this.settings});
+  final double Function(TripPoint) getValue;
+  final Color color;
+  const _PerformantChart(
+      {required this.points, required this.getValue, required this.color});
 
   @override
   Widget build(BuildContext context) {
-    final step = (points.length / 50).ceil().clamp(1, points.length);
+    // Sampling logic: show at most 60 points to keep UI performance high
     final List<FlSpot> spots = [];
-    for (var i = 0; i < points.length; i += step) {
-      spots.add(
-          FlSpot(i.toDouble(), settings.toDisplaySpeed(points[i].speedMph)));
+    final int samplingRate =
+        (points.length / 60).ceil().clamp(1, points.length);
+    for (int i = 0; i < points.length; i += samplingRate) {
+      spots.add(FlSpot(i.toDouble(), getValue(points[i])));
     }
-
-    final blue = const Color(0xFF4A9EFF);
-
-    return SizedBox(
-      height: 90,
-      child: LineChart(LineChartData(
-        gridData: const FlGridData(show: false),
-        titlesData: const FlTitlesData(show: false),
-        borderData: FlBorderData(show: false),
-        lineBarsData: [
-          LineChartBarData(
-            spots: spots,
-            isCurved: true,
-            preventCurveOverShooting: true,
-            color: blue,
-            barWidth: 3,
-            dotData: const FlDotData(show: false),
-            belowBarData: BarAreaData(
-              show: true,
-              gradient: LinearGradient(
-                begin: Alignment.topCenter,
-                end: Alignment.bottomCenter,
-                colors: [blue.withValues(alpha: 0.2), Colors.transparent],
-              ),
-            ),
-          ),
-        ],
-      )),
+    return RepaintBoundary(
+      child: SizedBox(
+        height: 100,
+        child: LineChart(LineChartData(
+          gridData: const FlGridData(show: false),
+          titlesData: const FlTitlesData(show: false),
+          borderData: FlBorderData(show: false),
+          lineBarsData: [
+            LineChartBarData(
+                spots: spots,
+                isCurved: true,
+                curveSmoothness: 0.35,
+                preventCurveOverShooting: true,
+                color: color,
+                barWidth: 3,
+                dotData: const FlDotData(show: false),
+                belowBarData: BarAreaData(
+                  show: true,
+                  gradient: LinearGradient(
+                    colors: [
+                      color.withValues(alpha: 0.2),
+                      color.withValues(alpha: 0.0)
+                    ],
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                  ),
+                ))
+          ],
+        )),
+      ),
     );
   }
 }
 
-class _AltitudeChart extends StatelessWidget {
-  final List<TripPoint> points;
-  final double factor;
-  const _AltitudeChart({required this.points, required this.factor});
+class _StatRow extends StatelessWidget {
+  final Widget left, right;
+  const _StatRow({required this.left, required this.right});
+  @override
+  Widget build(BuildContext context) => Row(children: [
+        Expanded(child: left),
+        const SizedBox(width: 12),
+        Expanded(child: right)
+      ]);
+}
 
+class _SectionCard extends StatelessWidget {
+  final String title;
+  final List<Widget> children;
+  const _SectionCard({required this.title, required this.children});
   @override
   Widget build(BuildContext context) {
-    final step = (points.length / 50).ceil().clamp(1, points.length);
-    final List<FlSpot> spots = [];
-    for (var i = 0; i < points.length; i += step) {
-      spots.add(FlSpot(i.toDouble(), points[i].altitudeFt * factor));
-    }
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+          color: const Color(0xFF111111),
+          borderRadius: BorderRadius.circular(24)),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text(title,
+            style: const TextStyle(
+                color: Color(0xFF4ECDC4),
+                fontSize: 10,
+                fontWeight: FontWeight.w900,
+                letterSpacing: 1.5)),
+        const SizedBox(height: 16),
+        ...children,
+      ]),
+    );
+  }
+}
 
-    final teal = const Color(0xFF4ECDC4);
+class _AiFab extends StatelessWidget {
+  final TripSummary summary;
+  const _AiFab({required this.summary});
+  @override
+  Widget build(BuildContext context) {
+    return FloatingActionButton.extended(
+      onPressed: () => showModalBottomSheet(
+          context: context,
+          isScrollControlled: true,
+          backgroundColor: Colors.transparent,
+          builder: (context) => AiChatSheet(summary: summary)),
+      backgroundColor: const Color(0xFFA855F7),
+      icon: const Icon(Icons.auto_awesome, color: Colors.white, size: 18),
+      label: const Text('ASK AI',
+          style: TextStyle(color: Colors.white, fontWeight: FontWeight.w900)),
+    );
+  }
+}
 
+class _RoundIconButton extends StatelessWidget {
+  final IconData icon;
+  final VoidCallback onTap;
+  const _RoundIconButton({required this.icon, required this.onTap});
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+        onTap: onTap,
+        child: Container(
+            width: 44,
+            height: 44,
+            decoration: BoxDecoration(
+                color: const Color(0xFF1A1A1A),
+                borderRadius: BorderRadius.circular(14)),
+            child: Icon(icon, color: Colors.white, size: 20)));
+  }
+}
+
+class _MapPreviewButton extends StatelessWidget {
+  final List<TripPoint> points;
+  const _MapPreviewButton({required this.points});
+  @override
+  Widget build(BuildContext context) {
+    const teal = Color(0xFF4ECDC4);
+    return CupertinoButton(
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      minSize: 40,
+      color: teal.withValues(alpha: 0.1),
+      borderRadius: BorderRadius.circular(12),
+      onPressed: () => Navigator.push(
+          context,
+          CupertinoPageRoute(
+              builder: (_) => MapScreen(points: points, isLive: false))),
+      child: const Row(children: [
+        Icon(CupertinoIcons.map_fill, color: teal, size: 14),
+        SizedBox(width: 8),
+        Text('VIEW MAP',
+            style: TextStyle(
+                color: teal, fontSize: 12, fontWeight: FontWeight.w800))
+      ]),
+    );
+  }
+}
+
+class _DismissButton extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
     return SizedBox(
-      height: 90,
-      child: LineChart(LineChartData(
-        gridData: const FlGridData(show: false),
-        titlesData: const FlTitlesData(show: false),
-        borderData: FlBorderData(show: false),
-        lineBarsData: [
-          LineChartBarData(
-            spots: spots,
-            isCurved: true,
-            preventCurveOverShooting: true,
-            color: teal,
-            barWidth: 3,
-            dotData: const FlDotData(show: false),
-            belowBarData: BarAreaData(
-              show: true,
-              gradient: LinearGradient(
-                begin: Alignment.topCenter,
-                end: Alignment.bottomCenter,
-                colors: [teal.withValues(alpha: 0.2), Colors.transparent],
-              ),
-            ),
-          ),
-        ],
-      )),
+      width: double.infinity,
+      child: CupertinoButton(
+        padding: const EdgeInsets.symmetric(vertical: 18),
+        color: const Color(0xFF1A1A1A),
+        borderRadius: BorderRadius.circular(20),
+        onPressed: () => Navigator.pop(context),
+        child: const Text('DISMISS',
+            style: TextStyle(
+                color: Colors.white,
+                fontSize: 14,
+                fontWeight: FontWeight.w800,
+                letterSpacing: 2)),
+      ),
     );
   }
 }

@@ -1,10 +1,14 @@
-import 'dart:math';
 import 'dart:ui';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
-// ─── Drop-in replacement for AppShell ────────────────────────────────────────
+// --- Design Tokens ---
+const _kGoldCore = Color(0xFFEDD068);
+const _kGoldMid = Color(0xFFD4A843);
+const _kBarHeight = 72.0;
+const _kBarRadius = 36.0;
+const _kItemCount = 3;
 
 class AppShell extends StatefulWidget {
   const AppShell({super.key});
@@ -16,33 +20,22 @@ class _AppShellState extends State<AppShell>
     with SingleTickerProviderStateMixin {
   int _current = 0;
   int _previous = 0;
-  late AnimationController _ctrl;
-  late Animation<double> _anim;
+
+  late final AnimationController _ctrl = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 450),
+  )..value = 1.0;
+
+  late final Animation<double> _anim = CurvedAnimation(
+    parent: _ctrl,
+    curve: Curves.easeOutBack,
+  );
 
   final List<Widget> _pages = const [
-    // TrackingScreen(),
-    // HistoryScreen(),
-    // SettingsScreen(),
     _PlaceholderPage(label: 'TRACK', icon: CupertinoIcons.speedometer),
     _PlaceholderPage(label: 'HISTORY', icon: CupertinoIcons.clock_fill),
     _PlaceholderPage(label: 'SETTINGS', icon: CupertinoIcons.settings_solid),
   ];
-
-  @override
-  void initState() {
-    super.initState();
-    // UX Improvement: 400ms is the sweet spot for UI transitions. 500ms feels slightly sluggish.
-    _ctrl = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 400),
-    );
-    // UX Improvement: easeOutBack gives the liquid snap without the jitter of elasticOut
-    _anim = CurvedAnimation(
-      parent: _ctrl,
-      curve: Curves.easeOutBack,
-    );
-    _ctrl.value = 1.0;
-  }
 
   @override
   void dispose() {
@@ -57,43 +50,58 @@ class _AppShellState extends State<AppShell>
       _previous = _current;
       _current = index;
     });
-    _ctrl
-      ..value = 0
-      ..forward();
+    _ctrl.forward(from: 0.0);
   }
 
   @override
   Widget build(BuildContext context) {
-    final bottom = MediaQuery.of(context).padding.bottom;
+    final mq = MediaQuery.of(context);
+    final bottomPad = mq.padding.bottom;
+    const barMargin = 16.0;
+
+    // Calculate precise padding so pages don't overlap the bar
+    final totalBarHeight = _kBarHeight + bottomPad + barMargin;
+
     return Scaffold(
       backgroundColor: Colors.black,
+      extendBody:
+          true, // Crucial for BackdropFilter to see pixels behind the bar
       body: Stack(
         children: [
-          // ── Screen content ──────────────────────────────────────────────
+          // 1. Optimized Page Stack with Cross-fade and Ticker management
           Positioned.fill(
             child: IndexedStack(
               index: _current,
-              children: _pages
-                  .map((p) => Padding(
-                        padding: const EdgeInsets.only(bottom: 110),
-                        child: p,
-                      ))
-                  .toList(),
+              children: _pages.asMap().entries.map((e) {
+                return _TabPageWrapper(
+                  active: e.key == _current,
+                  bottomPadding: totalBarHeight,
+                  child: e.value,
+                );
+              }).toList(),
             ),
           ),
 
-          // ── Enhanced Liquid Glass Bar ───────────────────────────────────
+          // 2. Liquid Glass Navigation Bar
           Positioned(
-            left: 20,
-            right: 20,
-            bottom: bottom + 14,
-            child: AnimatedBuilder(
-              animation: _anim,
-              builder: (context, _) => _LiquidGlassBar(
-                currentIndex: _current,
-                previousIndex: _previous,
-                animValue: _anim.value,
-                onTap: _onTap,
+            left: 16,
+            right: 16,
+            bottom: bottomPad + 12,
+            child: Center(
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 500),
+                child: RepaintBoundary(
+                  // Isolate bar repaints from page content
+                  child: AnimatedBuilder(
+                    animation: _anim,
+                    builder: (context, _) => _LiquidGlassBar(
+                      currentIndex: _current,
+                      previousIndex: _previous,
+                      animValue: _anim.value,
+                      onTap: _onTap,
+                    ),
+                  ),
+                ),
               ),
             ),
           ),
@@ -103,17 +111,40 @@ class _AppShellState extends State<AppShell>
   }
 }
 
-// ─── Constants ────────────────────────────────────────────────────────────────
-const _kGoldMid = Color(0xFFD4A843);
-const _kGoldBright = Color(0xFFEDD068);
-const _kBarHeight = 72.0;
-const _kItemCount = 3;
+// --- Page Wrapper for Performance ---
+class _TabPageWrapper extends StatelessWidget {
+  final bool active;
+  final double bottomPadding;
+  final Widget child;
 
-// ─── Liquid Glass Bar ─────────────────────────────────────────────────────────
+  const _TabPageWrapper({
+    required this.active,
+    required this.bottomPadding,
+    required this.child,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return TickerMode(
+      enabled: active, // Stops background animations/sensors on hidden tabs
+      child: AnimatedOpacity(
+        opacity: active ? 1.0 : 0.0,
+        duration: const Duration(milliseconds: 300),
+        curve: Curves.easeInOut,
+        child: Padding(
+          padding: EdgeInsets.only(bottom: bottomPadding),
+          child: child,
+        ),
+      ),
+    );
+  }
+}
+
+// --- Bar Component ---
 class _LiquidGlassBar extends StatelessWidget {
   final int currentIndex;
   final int previousIndex;
-  final double animValue; // 0 → 1, driven by elastic curve
+  final double animValue;
   final ValueChanged<int> onTap;
 
   const _LiquidGlassBar({
@@ -128,9 +159,8 @@ class _LiquidGlassBar extends StatelessWidget {
     return SizedBox(
       height: _kBarHeight,
       child: Stack(
-        alignment: Alignment.center,
         children: [
-          // 1 ── Metaball layer (Now bug-free without matrix filters)
+          // A. Ambient Metaball Glow
           Positioned.fill(
             child: CustomPaint(
               painter: _MetaballPainter(
@@ -141,35 +171,26 @@ class _LiquidGlassBar extends StatelessWidget {
             ),
           ),
 
-          // 2 ── Frosted glass shell
-          ClipRRect(
-            borderRadius: BorderRadius.circular(36),
-            child: BackdropFilter(
-              filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
-              child: Container(
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(36),
-                  // Added a faint white base tint so the frosted glass actually shows over black screens
-                  color: Colors.white.withOpacity(0.03),
-                  // Subtle specular highlight at top
-                  gradient: LinearGradient(
-                    begin: Alignment.topCenter,
-                    end: Alignment.bottomCenter,
-                    colors: [
-                      Colors.white.withOpacity(0.07),
-                      Colors.white.withOpacity(0.02),
-                    ],
-                  ),
-                  border: Border.all(
-                    color: Colors.white.withOpacity(0.10),
-                    width: 0.5,
+          // B. Frosted Glass Body
+          Positioned.fill(
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(_kBarRadius),
+              child: BackdropFilter(
+                filter: ImageFilter.blur(sigmaX: 25, sigmaY: 25),
+                child: Container(
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.04),
+                    borderRadius: BorderRadius.circular(_kBarRadius),
+                    border: Border.all(
+                        color: Colors.white.withValues(alpha: 0.12),
+                        width: 0.5),
                   ),
                 ),
               ),
             ),
           ),
 
-          // 3 ── Pill indicator (slides under icons)
+          // C. Sliding Pill Lens
           Positioned.fill(
             child: _SlidingPill(
               currentIndex: currentIndex,
@@ -178,29 +199,26 @@ class _LiquidGlassBar extends StatelessWidget {
             ),
           ),
 
-          // 4 ── Nav items
+          // D. Interaction layer
           Positioned.fill(
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceAround,
               children: [
                 _NavItem(
-                  icon: CupertinoIcons.speedometer,
-                  label: 'TRACK',
-                  isActive: currentIndex == 0,
-                  onTap: () => onTap(0),
-                ),
+                    icon: CupertinoIcons.speedometer,
+                    label: 'TRACK',
+                    active: currentIndex == 0,
+                    onTap: () => onTap(0)),
                 _NavItem(
-                  icon: CupertinoIcons.clock_fill,
-                  label: 'HISTORY',
-                  isActive: currentIndex == 1,
-                  onTap: () => onTap(1),
-                ),
+                    icon: CupertinoIcons.clock_fill,
+                    label: 'HISTORY',
+                    active: currentIndex == 1,
+                    onTap: () => onTap(1)),
                 _NavItem(
-                  icon: CupertinoIcons.settings_solid,
-                  label: 'SETTINGS',
-                  isActive: currentIndex == 2,
-                  onTap: () => onTap(2),
-                ),
+                    icon: CupertinoIcons.settings_solid,
+                    label: 'SETTINGS',
+                    active: currentIndex == 2,
+                    onTap: () => onTap(2)),
               ],
             ),
           ),
@@ -210,238 +228,121 @@ class _LiquidGlassBar extends StatelessWidget {
   }
 }
 
-// ─── Sliding Pill ─────────────────────────────────────────────────────────────
+// --- Sliding Pill logic ---
 class _SlidingPill extends StatelessWidget {
-  final int currentIndex;
-  final int previousIndex;
+  final int currentIndex, previousIndex;
   final double t;
-
-  const _SlidingPill({
-    required this.currentIndex,
-    required this.previousIndex,
-    required this.t,
-  });
+  const _SlidingPill(
+      {required this.currentIndex,
+      required this.previousIndex,
+      required this.t});
 
   @override
   Widget build(BuildContext context) {
-    return LayoutBuilder(builder: (context, constraints) {
-      final totalWidth = constraints.maxWidth;
-      final itemWidth = totalWidth / _kItemCount;
-      const pillW = 76.0;
-      const pillH = 46.0;
+    return LayoutBuilder(builder: (context, c) {
+      final itemW = c.maxWidth / _kItemCount;
+      const pW = 82.0, pH = 46.0;
+      double left(int i) => itemW * i + (itemW - pW) / 2;
 
-      double pillLeft(int idx) => itemWidth * idx + (itemWidth - pillW) / 2;
-
-      final from = pillLeft(previousIndex);
-      final to = pillLeft(currentIndex);
-      final x = lerpDouble(from, to, t)!;
-
-      return Positioned(
-        left: x,
-        top: (_kBarHeight - pillH) / 2,
-        child: Container(
-          width: pillW,
-          height: pillH,
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(23),
-            color: _kGoldMid.withOpacity(0.18),
-            border: Border.all(
-              color: _kGoldMid.withOpacity(0.35),
-              width: 0.5,
+      return Stack(children: [
+        Positioned(
+          left: lerpDouble(left(previousIndex), left(currentIndex), t)!,
+          top: (_kBarHeight - pH) / 2,
+          child: Container(
+            width: pW,
+            height: pH,
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(23),
+              color: _kGoldMid.withValues(alpha: 0.15),
+              border: Border.all(
+                  color: _kGoldMid.withValues(alpha: 0.3), width: 0.5),
             ),
-            boxShadow: [
-              BoxShadow(
-                color: _kGoldMid.withOpacity(0.20),
-                blurRadius: 14,
-                spreadRadius: 0,
-              ),
-            ],
           ),
-        ),
-      );
+        )
+      ]);
     });
   }
 }
 
-// ─── Nav Item ─────────────────────────────────────────────────────────────────
+// --- Nav Item logic ---
 class _NavItem extends StatelessWidget {
   final IconData icon;
   final String label;
-  final bool isActive;
+  final bool active;
   final VoidCallback onTap;
 
-  const _NavItem({
-    required this.icon,
-    required this.label,
-    required this.isActive,
-    required this.onTap,
-  });
+  const _NavItem(
+      {required this.icon,
+      required this.label,
+      required this.active,
+      required this.onTap});
 
   @override
   Widget build(BuildContext context) {
     return GestureDetector(
       onTap: onTap,
       behavior: HitTestBehavior.opaque,
-      child: AnimatedScale(
-        scale: isActive ? 1.05 : 1.0,
-        duration: const Duration(milliseconds: 300),
-        curve: Curves.easeOutBack,
-        child: SizedBox(
-          width: 80,
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              // Icon with optional glow
-              Stack(
-                alignment: Alignment.center,
-                children: [
-                  if (isActive)
-                    Container(
-                      width: 32,
-                      height: 32,
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        boxShadow: [
-                          BoxShadow(
-                            color: _kGoldMid.withOpacity(0.35),
-                            blurRadius: 14,
-                            spreadRadius: 2,
-                          ),
-                        ],
-                      ),
-                    ),
-                  AnimatedSwitcher(
-                    duration: const Duration(milliseconds: 250),
-                    child: Icon(
-                      icon,
-                      key: ValueKey(isActive),
-                      color: isActive
-                          ? _kGoldBright
-                          : Colors.white.withOpacity(0.38),
-                      size: 23,
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 5),
-              // Label
-              AnimatedDefaultTextStyle(
-                duration: const Duration(milliseconds: 250),
-                style: TextStyle(
-                  color:
-                      isActive ? Colors.white : Colors.white.withOpacity(0.35),
-                  fontSize: 9.5,
-                  fontWeight: isActive ? FontWeight.w800 : FontWeight.w500,
-                  letterSpacing: 0.7,
-                ),
-                child: Text(label),
-              ),
-              const SizedBox(height: 4),
-              // Active dot indicator
-              AnimatedContainer(
-                duration: const Duration(milliseconds: 300),
-                curve: Curves.easeOutCubic,
-                width: isActive ? 16 : 4,
-                height: 3,
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(2),
-                  color: isActive ? _kGoldMid : Colors.white.withOpacity(0.0),
-                  boxShadow: isActive
-                      ? [
-                          BoxShadow(
-                            color: _kGoldMid.withOpacity(0.5),
-                            blurRadius: 6,
-                          ),
-                        ]
-                      : null,
-                ),
-              ),
-            ],
-          ),
-        ),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(icon,
+              size: 22,
+              color: active ? _kGoldCore : Colors.white.withValues(alpha: 0.3)),
+          const SizedBox(height: 4),
+          Text(label,
+              style: TextStyle(
+                color:
+                    active ? Colors.white : Colors.white.withValues(alpha: 0.3),
+                fontSize: 9,
+                fontWeight: active ? FontWeight.w800 : FontWeight.w500,
+                letterSpacing: 0.8,
+              )),
+          const SizedBox(height: 4),
+          AnimatedContainer(
+            duration: const Duration(milliseconds: 300),
+            width: active ? 12 : 0,
+            height: 2.5,
+            decoration: BoxDecoration(
+                color: _kGoldMid, borderRadius: BorderRadius.circular(1)),
+          )
+        ],
       ),
     );
   }
 }
 
-// ─── Metaball Painter ─────────────────────────────────────────────────────────
-//
-// Performance fix: Entirely removed the expensive GPU `saveLayer` and
-// buggy `ColorFilter.matrix` which causes black backgrounds on Impeller.
-// This now uses purely overlapping alpha-blended blobs that naturally
-// create a stunning glowing liquid effect while remaining fully transparent!
-//
+// --- Metaball Painter logic ---
 class _MetaballPainter extends CustomPainter {
-  final int current;
-  final int previous;
-  final double t; // 0 → 1
+  final int current, previous;
+  final double t;
 
-  const _MetaballPainter({
-    required this.current,
-    required this.previous,
-    required this.t,
-  });
+  _MetaballPainter(
+      {required this.current, required this.previous, required this.t});
 
   @override
   void paint(Canvas canvas, Size size) {
-    const gold = _kGoldMid;
     final itemW = size.width / _kItemCount;
     final cy = size.height / 2;
+    final paint = Paint()..style = PaintingStyle.fill;
 
-    // Draw a dual-layer blob for every item (creates a glowing core)
     for (int i = 0; i < _kItemCount; i++) {
       final cx = itemW * i + itemW / 2;
-      final isActive = i == current;
-      final wasActive = i == previous;
+      double r = (i == current)
+          ? lerpDouble(12, 28, t)!
+          : (i == previous)
+              ? lerpDouble(28, 12, t)!
+              : 12;
 
-      // Blob radius: active = 30, idle = 14
-      double r;
-      if (isActive && previous != current) {
-        r = lerpDouble(14, 30, t)!;
-      } else if (wasActive && previous != current) {
-        r = lerpDouble(30, 14, t)!;
-      } else if (isActive) {
-        r = 30;
-      } else {
-        r = 14;
-      }
-
-      // Outer ambient glow
-      _drawBlob(canvas, Offset(cx, cy), r, gold, alpha: 0.40);
-      // Inner concentrated core
-      _drawBlob(canvas, Offset(cx, cy), r * 0.5, gold, alpha: 0.65);
+      paint.maskFilter = MaskFilter.blur(BlurStyle.normal, r * 0.7);
+      paint.color = _kGoldMid.withValues(alpha: 0.35);
+      canvas.drawCircle(Offset(cx, cy), r, paint);
     }
-
-    // Bridge blob — travels between previous and current during animation
-    if (previous != current && t > 0 && t < 1) {
-      final fromCX = itemW * previous + itemW / 2;
-      final toCX = itemW * current + itemW / 2;
-
-      // Bridge follows a sine arc in the middle of the animation
-      final bridgeCX = lerpDouble(fromCX, toCX, t)!;
-      final bridgeR =
-          14 + sin(pi * t) * 12; // Swells up slightly during transition
-
-      _drawBlob(canvas, Offset(bridgeCX, cy), bridgeR, gold, alpha: 0.35);
-      _drawBlob(canvas, Offset(bridgeCX, cy), bridgeR * 0.5, gold, alpha: 0.60);
-    }
-  }
-
-  void _drawBlob(Canvas canvas, Offset center, double r, Color color,
-      {required double alpha}) {
-    if (r <= 0) return;
-    final paint = Paint()
-      ..maskFilter = MaskFilter.blur(BlurStyle.normal, r * 0.65)
-      ..color = color.withOpacity(alpha);
-    canvas.drawCircle(center, r, paint);
   }
 
   @override
-  bool shouldRepaint(covariant _MetaballPainter old) =>
-      old.current != current || old.previous != previous || old.t != t;
+  bool shouldRepaint(covariant _MetaballPainter old) => old.t != t;
 }
 
-// ─── Placeholder page ─────────────────────────────────────────────────────────
 class _PlaceholderPage extends StatelessWidget {
   final String label;
   final IconData icon;
@@ -449,20 +350,19 @@ class _PlaceholderPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Center(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, size: 48, color: _kGoldMid.withOpacity(0.4)),
-          const SizedBox(height: 12),
-          Text(label,
-              style: TextStyle(
-                color: Colors.white.withOpacity(0.25),
-                fontSize: 12,
-                letterSpacing: 3,
-                fontWeight: FontWeight.w600,
-              )),
-        ],
+    return Container(
+      color: Colors.black,
+      child: Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 64, color: _kGoldMid.withValues(alpha: 0.2)),
+            const SizedBox(height: 16),
+            Text(label,
+                style:
+                    const TextStyle(color: Colors.white24, letterSpacing: 4)),
+          ],
+        ),
       ),
     );
   }

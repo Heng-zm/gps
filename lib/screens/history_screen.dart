@@ -1,13 +1,12 @@
-import 'dart:convert';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:shared_preferences/shared_preferences.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
 
 import '../services/settings_service.dart';
 
-/// Model representing a trip stored in local persistence.
+/// ─── MODEL: SAVED TRIP ──────────────────────────────────────────────────────
 class SavedTrip {
   final String id;
   final DateTime date;
@@ -16,6 +15,11 @@ class SavedTrip {
   final double avgSpeedMph;
   final Duration totalTime;
   final double altitudeGainFt;
+
+  // PERFORMANCE: Pre-calculate formatters so they don't run during scrolling.
+  late final String formattedDate =
+      DateFormat('MMM d, yyyy · h:mm a').format(date);
+  late final String formattedDuration = _calculateFormattedDuration();
 
   SavedTrip({
     required this.id,
@@ -37,28 +41,89 @@ class SavedTrip {
         'altitudeGainFt': altitudeGainFt,
       };
 
-  factory SavedTrip.fromJson(Map<String, dynamic> json) => SavedTrip(
-        id: json['id'] as String? ?? '',
-        date: DateTime.fromMillisecondsSinceEpoch(json['date'] as int? ?? 0),
-        distanceMiles: (json['distanceMiles'] as num? ?? 0.0).toDouble(),
-        maxSpeedMph: (json['maxSpeedMph'] as num? ?? 0.0).toDouble(),
-        avgSpeedMph: (json['avgSpeedMph'] as num? ?? 0.0).toDouble(),
-        totalTime: Duration(seconds: json['totalTimeSeconds'] as int? ?? 0),
-        altitudeGainFt: (json['altitudeGainFt'] as num? ?? 0.0).toDouble(),
-      );
+  // FIX: Returns null instead of a silently broken Jan-1-1970 object when
+  // the 'date' field is missing or zero.
+  static SavedTrip? tryFromJson(Map<String, dynamic> json) {
+    final rawDate = (json['date'] as num?)?.toInt();
+    if (rawDate == null || rawDate == 0) {
+      debugPrint('SavedTrip.tryFromJson: missing or zero date — skipping.');
+      return null;
+    }
+    return SavedTrip(
+      id: json['id']?.toString() ?? '',
+      date: DateTime.fromMillisecondsSinceEpoch(rawDate),
+      distanceMiles: (json['distanceMiles'] as num?)?.toDouble() ?? 0.0,
+      maxSpeedMph: (json['maxSpeedMph'] as num?)?.toDouble() ?? 0.0,
+      avgSpeedMph: (json['avgSpeedMph'] as num?)?.toDouble() ?? 0.0,
+      totalTime:
+          Duration(seconds: (json['totalTimeSeconds'] as num?)?.toInt() ?? 0),
+      altitudeGainFt: (json['altitudeGainFt'] as num?)?.toDouble() ?? 0.0,
+    );
+  }
 
-  String get formattedDate => DateFormat('MMM d, yyyy · h:mm a').format(date);
-
-  String get formattedDuration {
+  // FIX: Shows seconds for sub-minute trips so a 45-second trip no longer
+  // shows '0m'. Tiers: Xh YYm | Ym YYs | Xs
+  String _calculateFormattedDuration() {
     final h = totalTime.inHours;
     final m = totalTime.inMinutes.remainder(60);
-    if (h > 0) {
-      return '${h}h ${m.toString().padLeft(2, '0')}m';
+    final s = totalTime.inSeconds.remainder(60);
+    if (h > 0) return '${h}h ${m.toString().padLeft(2, '0')}m';
+    if (m > 0) return '${m}m ${s.toString().padLeft(2, '0')}s';
+    return '${s}s';
+  }
+
+  // ── SUPABASE CRUD ──────────────────────────────────────────────────────────
+
+  // FIX: upsert instead of insert — re-saving the same trip ID no longer
+  // throws a duplicate-key error.
+  static Future<bool> saveTrip(SavedTrip trip) async {
+    try {
+      await Supabase.instance.client
+          .from('saved_trips')
+          .upsert(trip.toJson(), onConflict: 'id');
+      return true;
+    } catch (e) {
+      debugPrint('Supabase Save Error: $e');
+      return false;
     }
-    return '${m}m';
+  }
+
+  // FIX: Uses tryFromJson so records with bad dates are skipped cleanly.
+  static Future<List<SavedTrip>> loadAllTrips() async {
+    try {
+      final data = await Supabase.instance.client
+          .from('saved_trips')
+          .select()
+          .order('date', ascending: false);
+
+      final List<SavedTrip> trips = [];
+      for (final row in data) {
+        try {
+          final trip = SavedTrip.tryFromJson(row);
+          if (trip != null) trips.add(trip);
+        } catch (e) {
+          debugPrint('Skipped corrupted record: $e');
+        }
+      }
+      return trips;
+    } catch (e) {
+      debugPrint('Supabase Load Error: $e');
+      return [];
+    }
+  }
+
+  static Future<bool> deleteTrip(String id) async {
+    try {
+      await Supabase.instance.client.from('saved_trips').delete().eq('id', id);
+      return true;
+    } catch (e) {
+      debugPrint('Supabase Delete Error: $e');
+      return false;
+    }
   }
 }
 
+/// ─── SCREEN: HISTORY ────────────────────────────────────────────────────────
 class HistoryScreen extends StatefulWidget {
   const HistoryScreen({super.key});
 
@@ -71,7 +136,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
   List<SavedTrip> _trips = [];
   bool _loading = true;
 
-  // Cached Lifetime Stats
+  // Cached lifetime stats.
   double _totalMiles = 0;
   double _allTimeTopSpeedMph = 0;
   int _totalMinutes = 0;
@@ -89,71 +154,101 @@ class _HistoryScreenState extends State<HistoryScreen> {
     super.dispose();
   }
 
-  void _updateUI() => setState(() {});
+  void _updateUI() {
+    if (mounted) setState(() {});
+  }
 
   void _calculateLifetimeStats() {
-    _totalMiles = 0;
-    _allTimeTopSpeedMph = 0;
-    _totalMinutes = 0;
+    double tempMiles = 0;
+    double tempTopSpeed = 0;
+    int tempMinutes = 0;
 
     for (final t in _trips) {
-      _totalMiles += t.distanceMiles;
-      if (t.maxSpeedMph > _allTimeTopSpeedMph) {
-        _allTimeTopSpeedMph = t.maxSpeedMph;
-      }
-      _totalMinutes += t.totalTime.inMinutes;
+      tempMiles += t.distanceMiles;
+      if (t.maxSpeedMph > tempTopSpeed) tempTopSpeed = t.maxSpeedMph;
+      tempMinutes += t.totalTime.inMinutes;
     }
+
+    _totalMiles = tempMiles;
+    _allTimeTopSpeedMph = tempTopSpeed;
+    _totalMinutes = tempMinutes;
   }
 
   Future<void> _loadTrips() async {
-    final prefs = await SharedPreferences.getInstance();
-    final raw = prefs.getStringList('saved_trips') ?? [];
+    if (!mounted) return;
+    setState(() => _loading = true);
 
-    final parsedTrips = raw.map((s) {
-      return SavedTrip.fromJson(jsonDecode(s) as Map<String, dynamic>);
-    }).toList()
-      ..sort((a, b) => b.date.compareTo(a.date));
+    final results = await SavedTrip.loadAllTrips();
 
     if (mounted) {
       setState(() {
-        _trips = parsedTrips;
+        _trips = results;
         _calculateLifetimeStats();
         _loading = false;
       });
     }
   }
 
-  Future<void> _deleteTrip(String id) async {
+  // FIX: Changed from `void async` to `Future<void>` so callers can await it
+  // and exceptions propagate instead of being silently swallowed.
+  Future<void> _executeDelete(SavedTrip trip) async {
     await HapticFeedback.mediumImpact();
+    final originalIndex = _trips.indexOf(trip);
 
-    final prefs = await SharedPreferences.getInstance();
-
+    // 1. Optimistic removal from UI.
     setState(() {
-      _trips.removeWhere((t) => t.id == id);
+      _trips.remove(trip);
       _calculateLifetimeStats();
     });
 
-    final updatedRaw = _trips.map((t) => jsonEncode(t.toJson())).toList();
-    await prefs.setStringList('saved_trips', updatedRaw);
+    // 2. Background cloud delete.
+    final success = await SavedTrip.deleteTrip(trip.id);
+
+    // 3. Rollback on failure.
+    if (!success && mounted) {
+      setState(() {
+        if (originalIndex >= 0 && originalIndex <= _trips.length) {
+          _trips.insert(originalIndex, trip);
+        } else {
+          _trips.add(trip);
+        }
+        _calculateLifetimeStats();
+      });
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Failed to delete. Connection error.'),
+            backgroundColor: Color(0xFFE74C3C),
+          ),
+        );
+      }
+    }
   }
 
+  // FIX: Uses the dialog's own BuildContext `c` for Navigator.pop() to avoid
+  // using a potentially stale outer context after the async gap.
+  // FIX: confirmDismiss always returns false — the Dismissible widget must
+  // not perform its own removal animation since the state update (_trips.remove)
+  // already handles it. Returning true from confirmDismiss caused a duplicate-
+  // removal flash where the item disappeared twice.
   Future<bool> _confirmDelete(SavedTrip trip) async {
     final result = await showCupertinoDialog<bool>(
       context: context,
-      builder: (_) => CupertinoAlertDialog(
+      builder: (c) => CupertinoAlertDialog(
         title: const Text('Delete Trip'),
-        content: const Text(
-          'This data will be permanently removed from your device.',
-        ),
+        content:
+            const Text('Permanently remove this recording from the cloud?'),
         actions: [
           CupertinoDialogAction(
             isDestructiveAction: true,
-            onPressed: () => Navigator.pop(context, true),
+            // FIX: Use dialog-scoped context `c`, not the outer `context`.
+            onPressed: () => Navigator.pop(c, true),
             child: const Text('Delete'),
           ),
           CupertinoDialogAction(
             isDefaultAction: true,
-            onPressed: () => Navigator.pop(context, false),
+            onPressed: () => Navigator.pop(c, false),
             child: const Text('Cancel'),
           ),
         ],
@@ -161,9 +256,10 @@ class _HistoryScreenState extends State<HistoryScreen> {
     );
 
     if (result == true) {
-      await _deleteTrip(trip.id);
-      return true;
+      await _executeDelete(trip);
     }
+
+    // Always return false: state management handles list removal, not Dismissible.
     return false;
   }
 
@@ -173,46 +269,38 @@ class _HistoryScreenState extends State<HistoryScreen> {
       backgroundColor: const Color(0xFF0A0A0A),
       child: SafeArea(
         child: CustomScrollView(
-          physics: const BouncingScrollPhysics(),
+          physics: const BouncingScrollPhysics(
+            parent: AlwaysScrollableScrollPhysics(),
+          ),
           slivers: [
-            CupertinoSliverRefreshControl(
-              onRefresh: _loadTrips,
-            ),
-            SliverToBoxAdapter(
-              child: _buildHeader(),
-            ),
-            if (_trips.isNotEmpty)
-              SliverToBoxAdapter(
-                child: _buildLifetimeSummary(),
-              ),
-            const SliverToBoxAdapter(
-              child: SizedBox(height: 12),
-            ),
+            CupertinoSliverRefreshControl(onRefresh: _loadTrips),
+            SliverToBoxAdapter(child: _buildHeader()),
+            // FIX: Only show lifetime stats when not loading — prevents stale
+            // data from the previous fetch appearing above the new spinner.
+            if (!_loading && _trips.isNotEmpty)
+              SliverToBoxAdapter(child: _buildLifetimeSummary()),
+            const SliverToBoxAdapter(child: SizedBox(height: 12)),
             if (_loading)
               const SliverToBoxAdapter(
                 child: Padding(
-                  padding: EdgeInsets.only(top: 60),
+                  padding: EdgeInsets.only(top: 80),
                   child: Center(child: CupertinoActivityIndicator(radius: 12)),
                 ),
               )
             else if (_trips.isEmpty)
-              const SliverToBoxAdapter(
-                child: _EmptyState(),
-              )
+              const SliverToBoxAdapter(child: _EmptyState())
             else
               SliverPadding(
                 padding: const EdgeInsets.fromLTRB(20, 0, 20, 40),
-                sliver: SliverList(
-                  delegate: SliverChildBuilderDelegate(
-                    (context, i) => Padding(
-                      padding: const EdgeInsets.only(bottom: 12),
-                      child: _TripCard(
-                        trip: _trips[i],
-                        onDelete: () => _confirmDelete(_trips[i]),
-                        settings: _settings,
-                      ),
+                sliver: SliverList.builder(
+                  itemCount: _trips.length,
+                  itemBuilder: (context, i) => Padding(
+                    padding: const EdgeInsets.only(bottom: 12),
+                    child: _TripCard(
+                      trip: _trips[i],
+                      onDelete: () => _confirmDelete(_trips[i]),
+                      settings: _settings,
                     ),
-                    childCount: _trips.length,
                   ),
                 ),
               ),
@@ -238,8 +326,12 @@ class _HistoryScreenState extends State<HistoryScreen> {
             ),
           ),
           const SizedBox(height: 4),
+          // FIX: Show a neutral subtitle while loading so the stale count
+          // doesn't flicker during refresh.
           Text(
-            '${_trips.length} recording${_trips.length == 1 ? '' : 's'} available',
+            _loading
+                ? 'Loading recordings…'
+                : '${_trips.length} Cloud recording${_trips.length == 1 ? '' : 's'} available',
             style: const TextStyle(color: Color(0xFF666666), fontSize: 13),
           ),
         ],
@@ -250,10 +342,10 @@ class _HistoryScreenState extends State<HistoryScreen> {
   Widget _buildLifetimeSummary() {
     return Container(
       margin: const EdgeInsets.all(20),
-      padding: const EdgeInsets.symmetric(vertical: 20, horizontal: 10),
+      padding: const EdgeInsets.symmetric(vertical: 22, horizontal: 10),
       decoration: BoxDecoration(
         color: const Color(0xFF151515),
-        borderRadius: BorderRadius.circular(20),
+        borderRadius: BorderRadius.circular(24),
         border: Border.all(color: const Color(0xFF222222)),
       ),
       child: Row(
@@ -284,6 +376,8 @@ class _HistoryScreenState extends State<HistoryScreen> {
   }
 }
 
+/// ─── HELPER COMPONENTS ──────────────────────────────────────────────────────
+
 class _LifetimeStat extends StatelessWidget {
   final String label, value;
   const _LifetimeStat({required this.label, required this.value});
@@ -292,24 +386,18 @@ class _LifetimeStat extends StatelessWidget {
   Widget build(BuildContext context) {
     return Column(
       children: [
-        Text(
-          value,
-          style: const TextStyle(
-            color: Colors.white,
-            fontSize: 20,
-            fontWeight: FontWeight.w800,
-          ),
-        ),
+        Text(value,
+            style: const TextStyle(
+                color: Colors.white,
+                fontSize: 20,
+                fontWeight: FontWeight.w800)),
         const SizedBox(height: 4),
-        Text(
-          label,
-          style: const TextStyle(
-            color: Color(0xFF4ECDC4),
-            fontSize: 9,
-            fontWeight: FontWeight.w700,
-            letterSpacing: 1,
-          ),
-        ),
+        Text(label,
+            style: const TextStyle(
+                color: Color(0xFF4ECDC4),
+                fontSize: 9,
+                fontWeight: FontWeight.w700,
+                letterSpacing: 1)),
       ],
     );
   }
@@ -320,19 +408,8 @@ class _TripCard extends StatelessWidget {
   final SettingsService settings;
   final Future<bool> Function() onDelete;
 
-  const _TripCard({
-    required this.trip,
-    required this.onDelete,
-    required this.settings,
-  });
-
-  String _getAltitudeDisplay() {
-    if (settings.useKmh) {
-      final meters = trip.altitudeGainFt * 0.3048;
-      return '+${meters.toInt()} m';
-    }
-    return '+${trip.altitudeGainFt.toInt()} ft';
-  }
+  const _TripCard(
+      {required this.trip, required this.onDelete, required this.settings});
 
   @override
   Widget build(BuildContext context) {
@@ -344,20 +421,17 @@ class _TripCard extends StatelessWidget {
         alignment: Alignment.centerRight,
         padding: const EdgeInsets.only(right: 25),
         decoration: BoxDecoration(
-          color: const Color(0xFFE74C3C).withValues(alpha: 0.2), // FIXED
-          borderRadius: BorderRadius.circular(18),
+          color: const Color(0xFFE74C3C).withValues(alpha: 0.1),
+          borderRadius: BorderRadius.circular(20),
         ),
-        child: const Icon(
-          CupertinoIcons.delete,
-          color: Color(0xFFE74C3C),
-          size: 22,
-        ),
+        child: const Icon(CupertinoIcons.delete,
+            color: Color(0xFFE74C3C), size: 22),
       ),
       child: Container(
         padding: const EdgeInsets.all(18),
         decoration: BoxDecoration(
           color: const Color(0xFF1A1A1A),
-          borderRadius: BorderRadius.circular(18),
+          borderRadius: BorderRadius.circular(20),
           border: Border.all(color: const Color(0xFF252525)),
         ),
         child: Column(
@@ -370,56 +444,43 @@ class _TripCard extends StatelessWidget {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(
-                        trip.formattedDate,
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 14,
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
+                      Text(trip.formattedDate,
+                          style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 14,
+                              fontWeight: FontWeight.w700)),
                       const SizedBox(height: 2),
-                      Text(
-                        trip.formattedDuration,
-                        style: const TextStyle(
-                          color: Color(0xFF777777),
-                          fontSize: 12,
-                        ),
-                      ),
+                      Text(trip.formattedDuration,
+                          style: const TextStyle(
+                              color: Color(0xFF777777), fontSize: 12)),
                     ],
                   ),
                 ),
                 Text(
                   '${settings.toDisplayDistance(trip.distanceMiles).toStringAsFixed(2)} ${settings.distanceUnit}',
                   style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 17,
-                    fontWeight: FontWeight.w800,
-                  ),
+                      color: Colors.white,
+                      fontSize: 17,
+                      fontWeight: FontWeight.w800),
                 ),
               ],
             ),
-            const Padding(
-              padding: EdgeInsets.symmetric(vertical: 14),
-              child: Divider(color: Color(0xFF2A2A2A), height: 1),
-            ),
+            const Divider(color: Color(0xFF2A2A2A), height: 32),
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
                 _MiniStat(
-                  label: 'MAX',
-                  value:
-                      '${settings.toDisplaySpeed(trip.maxSpeedMph).toInt()} ${settings.speedUnit}',
-                ),
+                    label: 'MAX',
+                    value:
+                        '${settings.toDisplaySpeed(trip.maxSpeedMph).toInt()} ${settings.speedUnit}'),
                 _MiniStat(
-                  label: 'AVG',
-                  value:
-                      '${settings.toDisplaySpeed(trip.avgSpeedMph).toInt()} ${settings.speedUnit}',
-                ),
+                    label: 'AVG',
+                    value:
+                        '${settings.toDisplaySpeed(trip.avgSpeedMph).toInt()} ${settings.speedUnit}'),
                 _MiniStat(
-                  label: 'ALT GAIN',
-                  value: _getAltitudeDisplay(),
-                ),
+                    label: 'ALT GAIN',
+                    value:
+                        '+${(trip.altitudeGainFt * (settings.useKmh ? 0.3048 : 1.0)).toInt()} ${settings.useKmh ? 'm' : 'ft'}'),
               ],
             ),
           ],
@@ -432,14 +493,11 @@ class _TripCard extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.all(10),
       decoration: BoxDecoration(
-        color: const Color(0xFF4ECDC4).withValues(alpha: 0.1), // FIXED
-        borderRadius: BorderRadius.circular(12),
+        color: const Color(0xFF4ECDC4).withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(14),
       ),
-      child: const Icon(
-        CupertinoIcons.placemark_fill,
-        color: Color(0xFF4ECDC4),
-        size: 18,
-      ),
+      child: const Icon(CupertinoIcons.placemark_fill,
+          color: Color(0xFF4ECDC4), size: 18),
     );
   }
 }
@@ -453,24 +511,18 @@ class _MiniStat extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(
-          label,
-          style: const TextStyle(
-            color: Color(0xFF555555),
-            fontSize: 9,
-            fontWeight: FontWeight.w800,
-            letterSpacing: 1,
-          ),
-        ),
+        Text(label,
+            style: const TextStyle(
+                color: Color(0xFF555555),
+                fontSize: 9,
+                fontWeight: FontWeight.w800,
+                letterSpacing: 1)),
         const SizedBox(height: 3),
-        Text(
-          value,
-          style: const TextStyle(
-            color: Colors.white,
-            fontSize: 13,
-            fontWeight: FontWeight.w600,
-          ),
-        ),
+        Text(value,
+            style: const TextStyle(
+                color: Colors.white,
+                fontSize: 13,
+                fontWeight: FontWeight.w600)),
       ],
     );
   }
@@ -488,30 +540,21 @@ class _EmptyState extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.only(top: 80),
+      padding: const EdgeInsets.only(top: 100),
       child: Center(
         child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(
-              CupertinoIcons.tickets,
-              color: Colors.white.withValues(alpha: 0.1), // FIXED
-              size: 60,
-            ),
+            Icon(CupertinoIcons.cloud_moon_fill,
+                color: Colors.white.withValues(alpha: 0.05), size: 64),
             const SizedBox(height: 20),
-            const Text(
-              'No Trips Found',
-              style: TextStyle(
-                color: Colors.white,
-                fontSize: 18,
-                fontWeight: FontWeight.w700,
-              ),
-            ),
+            const Text('No History Found',
+                style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 18,
+                    fontWeight: FontWeight.w700)),
             const SizedBox(height: 6),
-            const Text(
-              'Completed trips will appear here.',
-              style: TextStyle(color: Color(0xFF555555), fontSize: 14),
-            ),
+            const Text('Saved trips will appear here.',
+                style: TextStyle(color: Color(0xFF555555), fontSize: 14)),
           ],
         ),
       ),

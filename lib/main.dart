@@ -3,6 +3,8 @@ import 'dart:ui';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+
 import 'services/settings_service.dart';
 import 'screens/tracking_screen.dart';
 import 'screens/history_screen.dart';
@@ -11,7 +13,6 @@ import 'screens/settings_screen.dart';
 // ═══════════════════════════════════════════════════════════════════════════════
 // DESIGN TOKENS — Liquid Glass  (OLED Dark Mode)
 // ═══════════════════════════════════════════════════════════════════════════════
-//
 // Visual language:
 //  • Bar   — thick frosted-glass slab floating above content.
 //            extendBody:true → page pixels fill behind it → BackdropFilter
@@ -77,8 +78,15 @@ const double _kMinBlurSigma = 1.0;
 // ═══════════════════════════════════════════════════════════════════════════════
 // ENTRY POINT
 // ═══════════════════════════════════════════════════════════════════════════════
+
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // Initialize Supabase here, inside main() and after bindings are ensured.
+  await Supabase.initialize(
+    url: 'https://uozzhvzewdsxpxmxsntr.supabase.co',
+    anonKey: 'sb_publishable_nrR6DFCgBKlgRnyINe5z0w_XDGmIsN2',
+  );
 
   try {
     await SettingsService.instance.load();
@@ -895,7 +903,7 @@ class _ActiveIndicator extends StatelessWidget {
 class _MetaballPainter extends CustomPainter {
   final int current;
   final int previous;
-  final double t; // [0, ~1.1] easeOutBack
+  final double t; //[0, ~1.1] easeOutBack
 
   const _MetaballPainter({
     required this.current,

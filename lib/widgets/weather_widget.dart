@@ -3,6 +3,9 @@ import 'package:flutter/cupertino.dart';
 import '../models/weather_data.dart';
 import '../services/settings_service.dart';
 
+// Helper: convert °F (raw API value) to °C for display.
+double _toCelsius(double f) => (f - 32) * 5 / 9;
+
 class WeatherWidget extends StatelessWidget {
   final WeatherData? weather;
   final bool isLoading;
@@ -102,7 +105,6 @@ class _ErrorState extends StatelessWidget {
         Row(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            // FIX: Replaced cloud_offline with valid Icon
             const Icon(Icons.cloud_off_rounded,
                 color: Colors.white24, size: 24),
             const SizedBox(width: 12),
@@ -140,6 +142,13 @@ class _WeatherContent extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // FIX: Convert all °F values from the API to °C before display.
+    final int tempC = _toCelsius(weather.temperature).toInt();
+    final int feelsC = _toCelsius(weather.feelsLike).toInt();
+    final int laterC = _toCelsius(weather.forecastLater).toInt();
+    final int eveningC = _toCelsius(weather.forecastEvening).toInt();
+    final int nightC = _toCelsius(weather.forecastNight).toInt();
+
     return Column(
       children: [
         Row(
@@ -159,14 +168,14 @@ class _WeatherContent extends StatelessWidget {
                     crossAxisAlignment: CrossAxisAlignment.baseline,
                     textBaseline: TextBaseline.alphabetic,
                     children: [
-                      Text('${weather.temperature.toInt()}°',
+                      Text('$tempC°',
                           style: const TextStyle(
                               color: Colors.white,
                               fontSize: 72,
                               fontWeight: FontWeight.w200,
                               height: 1.1)),
                       const SizedBox(width: 10),
-                      Text('Feels ${weather.feelsLike.toInt()}°',
+                      Text('Feels $feelsC°',
                           style: const TextStyle(
                               color: Color(0xFF4A9EFF),
                               fontSize: 14,
@@ -202,7 +211,6 @@ class _WeatherContent extends StatelessWidget {
                 ],
               ),
             ),
-            // Weather Icon (Matches the large icon in your screenshot)
             const Icon(Icons.cloud_outlined, color: Colors.white, size: 80),
           ],
         ),
@@ -228,17 +236,15 @@ class _WeatherContent extends StatelessWidget {
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
             _ForecastCol(
-                label: 'Later',
-                icon: Icons.wb_cloudy_outlined,
-                temp: weather.forecastLater),
+                label: 'Later', icon: Icons.wb_cloudy_outlined, tempC: laterC),
             _ForecastCol(
                 label: 'Evening',
                 icon: Icons.location_city_outlined,
-                temp: weather.forecastEvening),
+                tempC: eveningC),
             _ForecastCol(
                 label: 'Night',
                 icon: Icons.nightlight_round_outlined,
-                temp: weather.forecastNight),
+                tempC: nightC),
           ],
         ),
       ],
@@ -284,9 +290,10 @@ class _DetailChip extends StatelessWidget {
 class _ForecastCol extends StatelessWidget {
   final String label;
   final IconData icon;
-  final double temp;
+  // FIX: renamed from `temp` (raw °F) to `tempC` (converted °C int).
+  final int tempC;
   const _ForecastCol(
-      {required this.label, required this.icon, required this.temp});
+      {required this.label, required this.icon, required this.tempC});
 
   @override
   Widget build(BuildContext context) {
@@ -301,7 +308,7 @@ class _ForecastCol extends StatelessWidget {
         const SizedBox(height: 12),
         Icon(icon, color: Colors.white70, size: 24),
         const SizedBox(height: 12),
-        Text('${temp.toInt()}°',
+        Text('$tempC°',
             style: const TextStyle(
                 color: Colors.white,
                 fontSize: 16,
