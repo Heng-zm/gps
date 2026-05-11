@@ -3,8 +3,38 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
+import 'package:flutter_map/flutter_map.dart' as fm;
+import 'package:latlong2/latlong.dart';
 
 import '../services/settings_service.dart';
+
+/// ─── MODEL: SAVED ROUTE POINT ───────────────────────────────────────────────
+/// Stores individual GPS points and speeds to recreate the map polyline.
+class SavedRoutePoint {
+  final double lat;
+  final double lng;
+  final double speedMph;
+
+  SavedRoutePoint({
+    required this.lat,
+    required this.lng,
+    required this.speedMph,
+  });
+
+  Map<String, dynamic> toJson() => {
+        'lat': lat,
+        'lng': lng,
+        'spd': speedMph,
+      };
+
+  factory SavedRoutePoint.fromJson(Map<String, dynamic> json) {
+    return SavedRoutePoint(
+      lat: (json['lat'] as num?)?.toDouble() ?? 0.0,
+      lng: (json['lng'] as num?)?.toDouble() ?? 0.0,
+      speedMph: (json['spd'] as num?)?.toDouble() ?? 0.0,
+    );
+  }
+}
 
 /// ─── MODEL: SAVED TRIP ──────────────────────────────────────────────────────
 class SavedTrip {
@@ -16,7 +46,9 @@ class SavedTrip {
   final Duration totalTime;
   final double altitudeGainFt;
 
-  // PERFORMANCE: Pre-calculate formatters so they don't run during scrolling.
+  // NEW: The recorded route coordinates
+  final List<SavedRoutePoint> route;
+
   late final String formattedDate =
       DateFormat('MMM d, yyyy · h:mm a').format(date);
   late final String formattedDuration = _calculateFormattedDuration();
@@ -29,6 +61,7 @@ class SavedTrip {
     required this.avgSpeedMph,
     required this.totalTime,
     required this.altitudeGainFt,
+    required this.route, // Added to constructor
   });
 
   Map<String, dynamic> toJson() => {
@@ -39,16 +72,23 @@ class SavedTrip {
         'avgSpeedMph': avgSpeedMph,
         'totalTimeSeconds': totalTime.inSeconds,
         'altitudeGainFt': altitudeGainFt,
+        // Save the route points as a JSON array
+        'route_points': route.map((p) => p.toJson()).toList(),
       };
 
-  // FIX: Returns null instead of a silently broken Jan-1-1970 object when
-  // the 'date' field is missing or zero.
   static SavedTrip? tryFromJson(Map<String, dynamic> json) {
     final rawDate = (json['date'] as num?)?.toInt();
     if (rawDate == null || rawDate == 0) {
       debugPrint('SavedTrip.tryFromJson: missing or zero date — skipping.');
       return null;
     }
+
+    // Parse the route points safely
+    final rawRoute = json['route_points'] as List<dynamic>? ?? [];
+    final parsedRoute = rawRoute
+        .map((e) => SavedRoutePoint.fromJson(Map<String, dynamic>.from(e)))
+        .toList();
+
     return SavedTrip(
       id: json['id']?.toString() ?? '',
       date: DateTime.fromMillisecondsSinceEpoch(rawDate),
@@ -58,11 +98,10 @@ class SavedTrip {
       totalTime:
           Duration(seconds: (json['totalTimeSeconds'] as num?)?.toInt() ?? 0),
       altitudeGainFt: (json['altitudeGainFt'] as num?)?.toDouble() ?? 0.0,
+      route: parsedRoute, // Assign mapped route
     );
   }
 
-  // FIX: Shows seconds for sub-minute trips so a 45-second trip no longer
-  // shows '0m'. Tiers: Xh YYm | Ym YYs | Xs
   String _calculateFormattedDuration() {
     final h = totalTime.inHours;
     final m = totalTime.inMinutes.remainder(60);
@@ -74,8 +113,6 @@ class SavedTrip {
 
   // ── SUPABASE CRUD ──────────────────────────────────────────────────────────
 
-  // FIX: upsert instead of insert — re-saving the same trip ID no longer
-  // throws a duplicate-key error.
   static Future<bool> saveTrip(SavedTrip trip) async {
     try {
       await Supabase.instance.client
@@ -88,7 +125,6 @@ class SavedTrip {
     }
   }
 
-  // FIX: Uses tryFromJson so records with bad dates are skipped cleanly.
   static Future<List<SavedTrip>> loadAllTrips() async {
     try {
       final data = await Supabase.instance.client
@@ -136,7 +172,6 @@ class _HistoryScreenState extends State<HistoryScreen> {
   List<SavedTrip> _trips = [];
   bool _loading = true;
 
-  // Cached lifetime stats.
   double _totalMiles = 0;
   double _allTimeTopSpeedMph = 0;
   int _totalMinutes = 0;
@@ -189,22 +224,17 @@ class _HistoryScreenState extends State<HistoryScreen> {
     }
   }
 
-  // FIX: Changed from `void async` to `Future<void>` so callers can await it
-  // and exceptions propagate instead of being silently swallowed.
   Future<void> _executeDelete(SavedTrip trip) async {
     await HapticFeedback.mediumImpact();
     final originalIndex = _trips.indexOf(trip);
 
-    // 1. Optimistic removal from UI.
     setState(() {
       _trips.remove(trip);
       _calculateLifetimeStats();
     });
 
-    // 2. Background cloud delete.
     final success = await SavedTrip.deleteTrip(trip.id);
 
-    // 3. Rollback on failure.
     if (!success && mounted) {
       setState(() {
         if (originalIndex >= 0 && originalIndex <= _trips.length) {
@@ -226,12 +256,6 @@ class _HistoryScreenState extends State<HistoryScreen> {
     }
   }
 
-  // FIX: Uses the dialog's own BuildContext `c` for Navigator.pop() to avoid
-  // using a potentially stale outer context after the async gap.
-  // FIX: confirmDismiss always returns false — the Dismissible widget must
-  // not perform its own removal animation since the state update (_trips.remove)
-  // already handles it. Returning true from confirmDismiss caused a duplicate-
-  // removal flash where the item disappeared twice.
   Future<bool> _confirmDelete(SavedTrip trip) async {
     final result = await showCupertinoDialog<bool>(
       context: context,
@@ -242,7 +266,6 @@ class _HistoryScreenState extends State<HistoryScreen> {
         actions: [
           CupertinoDialogAction(
             isDestructiveAction: true,
-            // FIX: Use dialog-scoped context `c`, not the outer `context`.
             onPressed: () => Navigator.pop(c, true),
             child: const Text('Delete'),
           ),
@@ -258,15 +281,22 @@ class _HistoryScreenState extends State<HistoryScreen> {
     if (result == true) {
       await _executeDelete(trip);
     }
-
-    // Always return false: state management handles list removal, not Dismissible.
     return false;
+  }
+
+  void _openTripDetails(SavedTrip trip) {
+    HapticFeedback.lightImpact();
+    Navigator.of(context).push(
+      CupertinoPageRoute(
+        builder: (_) => TripDetailScreen(trip: trip, settings: _settings),
+      ),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
     return CupertinoPageScaffold(
-      backgroundColor: const Color(0xFF0A0A0A),
+      backgroundColor: const Color(0xFF000000), // Flat Black Aesthetic
       child: SafeArea(
         child: CustomScrollView(
           physics: const BouncingScrollPhysics(
@@ -275,8 +305,6 @@ class _HistoryScreenState extends State<HistoryScreen> {
           slivers: [
             CupertinoSliverRefreshControl(onRefresh: _loadTrips),
             SliverToBoxAdapter(child: _buildHeader()),
-            // FIX: Only show lifetime stats when not loading — prevents stale
-            // data from the previous fetch appearing above the new spinner.
             if (!_loading && _trips.isNotEmpty)
               SliverToBoxAdapter(child: _buildLifetimeSummary()),
             const SliverToBoxAdapter(child: SizedBox(height: 12)),
@@ -296,10 +324,14 @@ class _HistoryScreenState extends State<HistoryScreen> {
                   itemCount: _trips.length,
                   itemBuilder: (context, i) => Padding(
                     padding: const EdgeInsets.only(bottom: 12),
-                    child: _TripCard(
-                      trip: _trips[i],
-                      onDelete: () => _confirmDelete(_trips[i]),
-                      settings: _settings,
+                    child: GestureDetector(
+                      // NEW: Tap to open detailed map
+                      onTap: () => _openTripDetails(_trips[i]),
+                      child: _TripCard(
+                        trip: _trips[i],
+                        onDelete: () => _confirmDelete(_trips[i]),
+                        settings: _settings,
+                      ),
                     ),
                   ),
                 ),
@@ -326,8 +358,6 @@ class _HistoryScreenState extends State<HistoryScreen> {
             ),
           ),
           const SizedBox(height: 4),
-          // FIX: Show a neutral subtitle while loading so the stale count
-          // doesn't flicker during refresh.
           Text(
             _loading
                 ? 'Loading recordings…'
@@ -344,9 +374,9 @@ class _HistoryScreenState extends State<HistoryScreen> {
       margin: const EdgeInsets.all(20),
       padding: const EdgeInsets.symmetric(vertical: 22, horizontal: 10),
       decoration: BoxDecoration(
-        color: const Color(0xFF151515),
-        borderRadius: BorderRadius.circular(24),
-        border: Border.all(color: const Color(0xFF222222)),
+        color: const Color(0xFF141416),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: const Color(0xFF222225)),
       ),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceAround,
@@ -394,7 +424,7 @@ class _LifetimeStat extends StatelessWidget {
         const SizedBox(height: 4),
         Text(label,
             style: const TextStyle(
-                color: Color(0xFF4ECDC4),
+                color: Color(0xFF32D74B), // Premium Green
                 fontSize: 9,
                 fontWeight: FontWeight.w700,
                 letterSpacing: 1)),
@@ -421,18 +451,18 @@ class _TripCard extends StatelessWidget {
         alignment: Alignment.centerRight,
         padding: const EdgeInsets.only(right: 25),
         decoration: BoxDecoration(
-          color: const Color(0xFFE74C3C).withValues(alpha: 0.1),
+          color: const Color(0xFFFF3B30).withValues(alpha: 0.1),
           borderRadius: BorderRadius.circular(20),
         ),
         child: const Icon(CupertinoIcons.delete,
-            color: Color(0xFFE74C3C), size: 22),
+            color: Color(0xFFFF3B30), size: 22),
       ),
       child: Container(
         padding: const EdgeInsets.all(18),
         decoration: BoxDecoration(
-          color: const Color(0xFF1A1A1A),
+          color: const Color(0xFF141416),
           borderRadius: BorderRadius.circular(20),
-          border: Border.all(color: const Color(0xFF252525)),
+          border: Border.all(color: const Color(0xFF222225)),
         ),
         child: Column(
           children: [
@@ -456,25 +486,43 @@ class _TripCard extends StatelessWidget {
                     ],
                   ),
                 ),
-                Text(
-                  '${settings.toDisplayDistance(trip.distanceMiles).toStringAsFixed(2)} ${settings.distanceUnit}',
-                  style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 17,
-                      fontWeight: FontWeight.w800),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    Text(
+                      '${settings.toDisplayDistance(trip.distanceMiles).toStringAsFixed(2)} ${settings.distanceUnit}',
+                      style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 17,
+                          fontWeight: FontWeight.w800),
+                    ),
+                    const SizedBox(height: 4),
+                    const Row(
+                      children: [
+                        Text('VIEW MAP',
+                            style: TextStyle(
+                                color: Color(0xFFD4A843),
+                                fontSize: 9,
+                                fontWeight: FontWeight.w900)),
+                        SizedBox(width: 4),
+                        Icon(CupertinoIcons.chevron_right,
+                            color: Color(0xFFD4A843), size: 10),
+                      ],
+                    ),
+                  ],
                 ),
               ],
             ),
-            const Divider(color: Color(0xFF2A2A2A), height: 32),
+            const Divider(color: Color(0xFF222225), height: 32),
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
                 _MiniStat(
-                    label: 'MAX',
+                    label: 'MAX SPEED',
                     value:
                         '${settings.toDisplaySpeed(trip.maxSpeedMph).toInt()} ${settings.speedUnit}'),
                 _MiniStat(
-                    label: 'AVG',
+                    label: 'AVG SPEED',
                     value:
                         '${settings.toDisplaySpeed(trip.avgSpeedMph).toInt()} ${settings.speedUnit}'),
                 _MiniStat(
@@ -493,11 +541,11 @@ class _TripCard extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.all(10),
       decoration: BoxDecoration(
-        color: const Color(0xFF4ECDC4).withValues(alpha: 0.1),
+        color: const Color(0xFF32D74B).withValues(alpha: 0.1),
         borderRadius: BorderRadius.circular(14),
       ),
-      child: const Icon(CupertinoIcons.placemark_fill,
-          color: Color(0xFF4ECDC4), size: 18),
+      child: const Icon(CupertinoIcons.map_pin_ellipse,
+          color: Color(0xFF32D74B), size: 18),
     );
   }
 }
@@ -513,7 +561,7 @@ class _MiniStat extends StatelessWidget {
       children: [
         Text(label,
             style: const TextStyle(
-                color: Color(0xFF555555),
+                color: Color(0xFF666666),
                 fontSize: 9,
                 fontWeight: FontWeight.w800,
                 letterSpacing: 1)),
@@ -532,7 +580,7 @@ class _VertDivider extends StatelessWidget {
   const _VertDivider();
   @override
   Widget build(BuildContext context) =>
-      Container(width: 1, height: 28, color: const Color(0xFF2A2A2A));
+      Container(width: 1, height: 28, color: const Color(0xFF222225));
 }
 
 class _EmptyState extends StatelessWidget {
@@ -558,6 +606,273 @@ class _EmptyState extends StatelessWidget {
           ],
         ),
       ),
+    );
+  }
+}
+
+/// ─── NEW SCREEN: TRIP MAP DETAIL ────────────────────────────────────────────
+/// Opens when a user taps a history card. Renders the saved path polyline.
+class TripDetailScreen extends StatelessWidget {
+  final SavedTrip trip;
+  final SettingsService settings;
+
+  const TripDetailScreen(
+      {super.key, required this.trip, required this.settings});
+
+  @override
+  Widget build(BuildContext context) {
+    // Convert SavedRoutePoints back to LatLng list for FlutterMap
+    final List<LatLng> latLngPoints =
+        trip.route.map((p) => LatLng(p.lat, p.lng)).toList();
+
+    // Bounds calculation to auto-frame the whole route
+    fm.LatLngBounds? bounds;
+    if (latLngPoints.isNotEmpty) {
+      bounds = fm.LatLngBounds.fromPoints(latLngPoints);
+    }
+
+    return AnnotatedRegion<SystemUiOverlayStyle>(
+      value: SystemUiOverlayStyle.light,
+      child: Scaffold(
+        backgroundColor: const Color(0xFF000000),
+        body: Stack(
+          children: [
+            // MAP LAYER
+            Positioned.fill(
+              child: latLngPoints.isEmpty
+                  ? const Center(
+                      child: Text("No route data saved.",
+                          style: TextStyle(color: Colors.white54)))
+                  : fm.FlutterMap(
+                      options: fm.MapOptions(
+                        initialCameraFit: bounds != null
+                            ? fm.CameraFit.bounds(
+                                bounds: bounds,
+                                padding: const EdgeInsets.all(50))
+                            : null,
+                        interactionOptions: const fm.InteractionOptions(
+                          flags: fm.InteractiveFlag.all &
+                              ~fm.InteractiveFlag.rotate,
+                        ),
+                      ),
+                      children: [
+                        // Same high-quality satellite style used in TrackingScreen
+                        fm.TileLayer(
+                          urlTemplate:
+                              'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+                          userAgentPackageName: 'com.example.app',
+                          tileBuilder: (context, tileWidget, tile) {
+                            return ColorFiltered(
+                              colorFilter: ColorFilter.mode(
+                                Colors.black.withValues(alpha: 0.15),
+                                BlendMode.darken,
+                              ),
+                              child: tileWidget,
+                            );
+                          },
+                        ),
+                        fm.PolylineLayer(
+                          polylines: [
+                            fm.Polyline(
+                              points: latLngPoints,
+                              color: const Color(0xFFD4A843), // Gold Polyline
+                              strokeWidth: 4.5,
+                              strokeCap: StrokeCap.round,
+                              strokeJoin: StrokeJoin.round,
+                            ),
+                          ],
+                        ),
+                        // Start and End Markers
+                        if (latLngPoints.isNotEmpty)
+                          fm.MarkerLayer(
+                            markers: [
+                              fm.Marker(
+                                point: latLngPoints.first,
+                                width: 20,
+                                height: 20,
+                                child: Container(
+                                  decoration: BoxDecoration(
+                                    color: Colors.white,
+                                    shape: BoxShape.circle,
+                                    border: Border.all(
+                                        color: Colors.black, width: 3),
+                                  ),
+                                ),
+                              ),
+                              fm.Marker(
+                                point: latLngPoints.last,
+                                width: 24,
+                                height: 24,
+                                child: Container(
+                                  decoration: BoxDecoration(
+                                    color: const Color(
+                                        0xFF32D74B), // Green for End Point
+                                    shape: BoxShape.circle,
+                                    border: Border.all(
+                                        color: Colors.black, width: 3),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          )
+                      ],
+                    ),
+            ),
+
+            // TOP NAVIGATION BAR (Glassmorphic)
+            Positioned(
+              top: 0,
+              left: 0,
+              right: 0,
+              child: Container(
+                padding: EdgeInsets.only(
+                    top: MediaQuery.of(context).padding.top + 10,
+                    left: 20,
+                    right: 20,
+                    bottom: 15),
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: [
+                      Colors.black.withValues(alpha: 0.8),
+                      Colors.transparent,
+                    ],
+                  ),
+                ),
+                child: Row(
+                  children: [
+                    GestureDetector(
+                      onTap: () => Navigator.pop(context),
+                      child: Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF141416).withValues(alpha: 0.9),
+                          shape: BoxShape.circle,
+                          border: Border.all(
+                              color: Colors.white.withValues(alpha: 0.1)),
+                        ),
+                        child: const Icon(CupertinoIcons.back,
+                            color: Colors.white, size: 20),
+                      ),
+                    ),
+                    const SizedBox(width: 15),
+                    Text(
+                      trip.formattedDate
+                          .split(' · ')
+                          .first, // Just the date portion
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 20,
+                        fontWeight: FontWeight.w800,
+                        shadows: [Shadow(color: Colors.black, blurRadius: 10)],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+
+            // BOTTOM STATS DOCK
+            Positioned(
+              bottom: 0,
+              left: 0,
+              right: 0,
+              child: Container(
+                padding: EdgeInsets.only(
+                    top: 25,
+                    left: 20,
+                    right: 20,
+                    bottom: MediaQuery.of(context).padding.bottom > 0
+                        ? MediaQuery.of(context).padding.bottom + 10
+                        : 30),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF141416),
+                  borderRadius:
+                      const BorderRadius.vertical(top: Radius.circular(32)),
+                  border: Border(
+                      top: BorderSide(
+                          color: Colors.white.withValues(alpha: 0.05),
+                          width: 1)),
+                  boxShadow: const [
+                    BoxShadow(
+                        color: Colors.black,
+                        blurRadius: 30,
+                        offset: Offset(0, -10))
+                  ],
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceAround,
+                      children: [
+                        _DetailStat(
+                          icon: CupertinoIcons.arrow_swap,
+                          label: 'DISTANCE',
+                          value:
+                              '${settings.toDisplayDistance(trip.distanceMiles).toStringAsFixed(2)} ${settings.distanceUnit}',
+                          color: const Color(0xFF32D74B),
+                        ),
+                        _DetailStat(
+                          icon: CupertinoIcons.stopwatch_fill,
+                          label: 'DURATION',
+                          value: trip.formattedDuration,
+                          color: const Color(0xFFD4A843),
+                        ),
+                        _DetailStat(
+                          icon: CupertinoIcons.speedometer,
+                          label: 'TOP SPEED',
+                          value:
+                              '${settings.toDisplaySpeed(trip.maxSpeedMph).toInt()} ${settings.speedUnit}',
+                          color: const Color(0xFFFF3B30),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _DetailStat extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final String value;
+  final Color color;
+
+  const _DetailStat(
+      {required this.icon,
+      required this.label,
+      required this.value,
+      required this.color});
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        Icon(icon, color: color, size: 24),
+        const SizedBox(height: 10),
+        Text(
+          value,
+          style: const TextStyle(
+              color: Colors.white, fontSize: 18, fontWeight: FontWeight.w800),
+        ),
+        const SizedBox(height: 2),
+        Text(
+          label,
+          style: const TextStyle(
+              color: Colors.white54,
+              fontSize: 10,
+              fontWeight: FontWeight.w700,
+              letterSpacing: 1.0),
+        ),
+      ],
     );
   }
 }

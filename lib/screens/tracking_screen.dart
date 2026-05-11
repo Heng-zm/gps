@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:flutter_map/flutter_map.dart' as fm;
+import 'package:flutter_compass/flutter_compass.dart';
 
 import '../services/services.dart';
 import '../models/trip_data.dart';
@@ -22,16 +23,14 @@ import 'summary_screen.dart';
 // DESIGN TOKENS
 // ─────────────────────────────────────────────────────────────────────────────
 const _kGold = Color(0xFFD4A843);
-const _kGoldBright = Color(0xFFEDD068);
-const _kPurple = Color(0xFFA855F7);
-const _kRed = Color(0xFFE74C3C);
-const _kTeal = Color(0xFF4ECDC4);
-const _kBg = Color(0xFF070707);
-const _kCard = Color(0xFF111111);
-const _kCardBorder = Color(0xFF1E1E1E);
+const _kRed = Color(0xFFFF3B30);
+const _kTeal = Color(0xFF32D74B);
+const _kBg = Color(0xFF000000);
+const _kCard = Color(0xFF141416);
+const _kCardBorder = Color(0xFF222225);
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SINGLETON PAINTERS (avoids re-instantiation on every build)
+// SINGLETON PAINTERS
 // ─────────────────────────────────────────────────────────────────────────────
 const _kCompassRingPainter = _CompassRingPainter();
 const _kNeedlePainter = _NeedlePainter();
@@ -45,34 +44,30 @@ class TrackingScreen extends StatefulWidget {
 
 class _TrackingScreenState extends State<TrackingScreen>
     with TickerProviderStateMixin {
-  // ── Services ───────────────────────────────────────────────────────────────
   final GpsService _gps = GpsService.instance;
   final WeatherService _weather = WeatherService.instance;
   final SettingsService _settings = SettingsService.instance;
 
-  // ── High-Performance Notifiers ─────────────────────────────────────────────
   final ValueNotifier<int> _tickNotifier = ValueNotifier(0);
   final ValueNotifier<double> _speedNotifier = ValueNotifier(0.0);
 
-  // COMPASS FIX: Store heading as an unwrapped (cumulative) angle to avoid
-  // the 0°/360° shortest-path wrap-around bug during animation.
-  final ValueNotifier<double> _headingNotifier = ValueNotifier(0.0);
+  final ValueNotifier<double> _travelHeadingNotifier = ValueNotifier(0.0);
+  final ValueNotifier<double> _deviceCompassNotifier = ValueNotifier(0.0);
 
   final ValueNotifier<int> _signalNotifier = ValueNotifier(0);
   final ValueNotifier<bool> _trackingNotifier = ValueNotifier(false);
   final ValueNotifier<WeatherData?> _weatherNotifier = ValueNotifier(null);
   final ValueNotifier<LatLng?> _positionNotifier = ValueNotifier(null);
   final ValueNotifier<bool> _weatherLoadingNotifier = ValueNotifier(false);
+  final ValueNotifier<int> _elapsedSecondsNotifier = ValueNotifier(0);
 
-  // FIX: Track polyline point count to avoid redundant polyline rebuilds.
   int _lastPolylinePointCount = 0;
-
-  // FIX: Guard map interactions until the map controller is fully initialised.
   bool _mapReady = false;
 
   final ScrollController _scrollController = ScrollController();
   final fm.MapController _mapController = fm.MapController();
   StreamSubscription<TripPoint>? _pointSub;
+  StreamSubscription<CompassEvent>? _compassSub;
   Timer? _tickTimer;
 
   @override
@@ -85,12 +80,32 @@ class _TrackingScreenState extends State<TrackingScreen>
     }
 
     _tickTimer = Timer.periodic(const Duration(seconds: 1), (_) {
-      if (mounted) _tickNotifier.value++;
+      if (mounted) {
+        _tickNotifier.value++;
+        if (_trackingNotifier.value) {
+          _elapsedSecondsNotifier.value++;
+        }
+      }
     });
+
+    _initHardwareCompass();
 
     _trackingNotifier.value = _gps.isTracking;
     if (_gps.isTracking) _attachGpsStream();
     _fetchWeather();
+  }
+
+  void _initHardwareCompass() {
+    _compassSub = FlutterCompass.events?.listen((event) {
+      if (event.heading != null && mounted) {
+        final current = _deviceCompassNotifier.value;
+        final target = event.heading!;
+        double delta = (target - (current % 360));
+        if (delta > 180) delta -= 360;
+        if (delta < -180) delta += 360;
+        _deviceCompassNotifier.value = current + delta;
+      }
+    });
   }
 
   void _onSettingsChanged() {
@@ -103,15 +118,17 @@ class _TrackingScreenState extends State<TrackingScreen>
     _scrollController.dispose();
     _tickTimer?.cancel();
     _pointSub?.cancel();
+    _compassSub?.cancel();
     _tickNotifier.dispose();
     _speedNotifier.dispose();
-    _headingNotifier.dispose();
+    _travelHeadingNotifier.dispose();
+    _deviceCompassNotifier.dispose();
     _signalNotifier.dispose();
     _trackingNotifier.dispose();
     _weatherNotifier.dispose();
     _positionNotifier.dispose();
-    // FIX: was missing from original dispose(), causing a memory leak.
     _weatherLoadingNotifier.dispose();
+    _elapsedSecondsNotifier.dispose();
     try {
       _mapController.dispose();
     } catch (_) {}
@@ -130,26 +147,23 @@ class _TrackingScreenState extends State<TrackingScreen>
         final rawBearing = const Distance()
             .bearing(pts[pts.length - 2].position, pts.last.position);
 
-        // COMPASS FIX: Compute the shortest angular delta from the previous
-        // heading so the notifier value never "jumps" across the 0/360 seam.
         final normalised = rawBearing % 360;
-        final prev = _headingNotifier.value % 360;
+        final prev = _travelHeadingNotifier.value % 360;
         double delta = normalised - prev;
         if (delta > 180) delta -= 360;
         if (delta < -180) delta += 360;
-        _headingNotifier.value = _headingNotifier.value + delta;
+        _travelHeadingNotifier.value = _travelHeadingNotifier.value + delta;
       }
 
       final accuracy = point.accuracyMeters.clamp(5.0, 40.0);
       _signalNotifier.value =
           ((40.0 - accuracy) / 35.0 * 4).round().clamp(0, 4);
 
-      // FIX: Only interact with _mapController after the map is ready.
       if (_mapReady) {
         try {
           _mapController.move(point.position, _mapController.camera.zoom);
           if (point.speedMph > 2.0) {
-            _mapController.rotate(-(_headingNotifier.value % 360));
+            _mapController.rotate(-(_travelHeadingNotifier.value % 360));
           }
         } catch (_) {}
       }
@@ -180,7 +194,7 @@ class _TrackingScreenState extends State<TrackingScreen>
       _pointSub = null;
       _trackingNotifier.value = false;
       _speedNotifier.value = 0;
-      _headingNotifier.value = 0;
+      _travelHeadingNotifier.value = 0;
       _lastPolylinePointCount = 0;
 
       if (_mapReady) {
@@ -198,6 +212,7 @@ class _TrackingScreenState extends State<TrackingScreen>
       }
     } else {
       HapticFeedback.mediumImpact();
+      _elapsedSecondsNotifier.value = 0;
       await _gps.startTracking();
 
       if (!mounted) return;
@@ -236,42 +251,30 @@ class _TrackingScreenState extends State<TrackingScreen>
     );
   }
 
-  // ── UI ──────────────────────────────────────────────────────────────────────
-
   @override
   Widget build(BuildContext context) {
     return AnnotatedRegion<SystemUiOverlayStyle>(
       value: SystemUiOverlayStyle.light,
       child: Scaffold(
         backgroundColor: _kBg,
-        body: Stack(
+        body: Column(
           children: [
-            Positioned.fill(
+            _buildMinimalHeader(),
+            Expanded(
               child: CustomScrollView(
                 controller: _scrollController,
-                physics: const BouncingScrollPhysics(
-                  parent: AlwaysScrollableScrollPhysics(),
-                ),
+                physics: const BouncingScrollPhysics(),
                 slivers: [
                   SliverToBoxAdapter(
-                    child: SafeArea(
-                      top: false,
-                      bottom: true,
+                    child: Padding(
+                      padding: const EdgeInsets.only(bottom: 30),
                       child: Column(
                         children: [
-                          SizedBox(
-                              height: MediaQuery.of(context).padding.top + 80),
+                          const SizedBox(height: 10),
                           _buildSpeedometerSection(),
                           _buildSignalRow(),
-                          const SizedBox(height: 12),
-                          _buildStatsGrid(),
-                          const SizedBox(height: 16),
-                          _buildMapPreview(),
-                          const SizedBox(height: 16),
-                          if (_settings.showWeather) _buildWeatherCard(),
-                          const SizedBox(height: 25),
-                          _buildControlPill(),
-                          const SizedBox(height: 30),
+                          const SizedBox(height: 24),
+                          _buildGridDashboard(),
                         ],
                       ),
                     ),
@@ -279,210 +282,86 @@ class _TrackingScreenState extends State<TrackingScreen>
                 ],
               ),
             ),
-            Positioned(
-              top: 0,
-              left: 0,
-              right: 0,
-              child: _buildHeader(),
-            ),
+            _buildAnchoredBottomDock(),
           ],
         ),
       ),
     );
   }
 
-  Widget _buildHeader() {
-    return ClipRect(
-      child: BackdropFilter(
-        filter: ui.ImageFilter.blur(sigmaX: 18, sigmaY: 18),
-        child: Container(
-          padding: EdgeInsets.only(
-            top: MediaQuery.of(context).padding.top + 10,
-            bottom: 15,
-            left: 20,
-            right: 20,
-          ),
-          decoration: BoxDecoration(
-            color: Colors.black.withValues(alpha: 0.72),
-            border: Border(
-              bottom: BorderSide(
-                color: Colors.white.withValues(alpha: 0.07),
-                width: 0.5,
-              ),
-            ),
-          ),
-          child: Row(
-            children: [
-              _CompassWidget(headingNotifier: _headingNotifier),
-              const SizedBox(width: 15),
-              _buildHeaderTemp(),
-              const Spacer(),
-              _buildDigitalClock(),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildHeaderTemp() {
-    return ValueListenableBuilder<WeatherData?>(
-      valueListenable: _weatherNotifier,
-      builder: (_, w, __) {
-        // WeatherService returns °F — convert to °C for display.
-        final double? tempC = w != null ? (w.temperature - 32) * 5 / 9 : null;
-        final tempStr = tempC != null ? '${tempC.toInt()}' : '--';
-        const unitLabel = '°C';
-        return Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              tempStr,
-              style: const TextStyle(
-                color: Colors.white,
-                fontSize: 26,
-                fontWeight: FontWeight.bold,
-                height: 1.0,
-              ),
-            ),
-            const SizedBox(width: 2),
-            Padding(
-              padding: const EdgeInsets.only(top: 4),
-              child: Text(
-                unitLabel,
-                style: const TextStyle(
-                  color: _kRed,
-                  fontSize: 13,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-            ),
-          ],
-        );
-      },
-    );
-  }
-
-  Widget _buildDigitalClock() {
-    return ValueListenableBuilder<int>(
-      valueListenable: _tickNotifier,
-      builder: (_, __, ___) {
-        final now = DateTime.now();
-        final h = now.hour.toString().padLeft(2, '0');
-        final m = now.minute.toString().padLeft(2, '0');
-        return Text(
-          '$h:$m',
-          style: const TextStyle(
-            color: Colors.white,
-            fontSize: 24,
-            fontWeight: FontWeight.w900,
-            letterSpacing: -1,
-            fontFeatures: [ui.FontFeature.tabularFigures()],
-          ),
-        );
-      },
-    );
-  }
-
-  Widget _buildSpeedometerSection() {
-    return ValueListenableBuilder<double>(
-      valueListenable: _speedNotifier,
-      builder: (context, speed, _) {
-        final isOver =
-            _trackingNotifier.value && speed > _settings.speedAlertMph;
-        return Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 20),
-          child: SpeedometerWidget(speedMph: speed, isOverLimit: isOver),
-        );
-      },
-    );
-  }
-
-  Widget _buildSignalRow() {
+  // ─────────────────────────────────────────────────────────────────────────
+  // THE GRID DASHBOARD (2x2 Layout)
+  // ─────────────────────────────────────────────────────────────────────────
+  Widget _buildGridDashboard() {
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 50, vertical: 8),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      padding: const EdgeInsets.symmetric(horizontal: 20),
+      child: Column(
         children: [
-          Column(
-            children: [
-              ValueListenableBuilder<int>(
-                valueListenable: _signalNotifier,
-                builder: (_, strength, __) => _SignalBars(strength: strength),
-              ),
-              const SizedBox(height: 5),
-              Text(
-                'GPS SIGNAL',
-                style: TextStyle(
-                  color: Colors.white.withValues(alpha: 0.4),
-                  fontSize: 10,
-                  fontWeight: FontWeight.w900,
-                  letterSpacing: 0.5,
-                ),
-              ),
-            ],
+          ValueListenableBuilder<int>(
+            valueListenable: _tickNotifier,
+            builder: (context, _, __) {
+              final dist =
+                  _settings.toDisplayDistance(_gps.currentDistanceMiles);
+              final avg = _settings.toDisplaySpeed(_gps.currentAvgSpeedMph);
+              return Row(
+                children: [
+                  Expanded(
+                    child: _WhiteStatCard(
+                      label: 'DISTANCE',
+                      value: dist,
+                      unit: _settings.distanceUnit,
+                      isDecimal: true,
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: _WhiteStatCard(
+                      label: 'AVG SPEED',
+                      value: avg,
+                      unit: _settings.speedUnit,
+                      isDecimal: false,
+                    ),
+                  ),
+                ],
+              );
+            },
           ),
-          const _BatteryIndicator(),
+          const SizedBox(height: 12),
+          SizedBox(
+            height: 170,
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Expanded(child: _buildSquareMap()),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: _settings.showWeather
+                      ? _buildSquareWeather()
+                      : Container(
+                          decoration: BoxDecoration(
+                            color: _kCard,
+                            borderRadius: BorderRadius.circular(24),
+                          ),
+                        ),
+                ),
+              ],
+            ),
+          ),
         ],
       ),
     );
   }
 
-  Widget _buildStatsGrid() {
-    return ValueListenableBuilder<int>(
-      valueListenable: _tickNotifier,
-      builder: (context, _, __) {
-        final dist = _settings.toDisplayDistance(_gps.currentDistanceMiles);
-        final avg = _settings.toDisplaySpeed(_gps.currentAvgSpeedMph);
-        final distUnit = _settings.distanceUnit;
-        final speedUnit = _settings.speedUnit;
-
-        return Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 20),
-          child: Row(
-            children: [
-              _StatBox(
-                label: 'DISTANCE',
-                value: dist,
-                isDecimal: true,
-                unit: distUnit,
-                color: _kTeal,
-              ),
-              const SizedBox(width: 15),
-              _StatBox(
-                label: 'AVG SPEED',
-                value: avg,
-                isDecimal: false,
-                unit: speedUnit,
-                color: _kGold,
-              ),
-            ],
-          ),
-        );
-      },
-    );
-  }
-
-  Widget _buildMapPreview() {
+  Widget _buildSquareMap() {
     return GestureDetector(
       onTap: _openMap,
       child: Container(
-        height: 200,
-        margin: const EdgeInsets.symmetric(horizontal: 20),
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(24),
-          border: Border.all(
-              color: Colors.white.withValues(alpha: 0.08), width: 0.8),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: 0.6),
-              blurRadius: 24,
-              offset: const Offset(0, 12),
-            ),
-          ],
+          border: Border.all(color: _kCardBorder, width: 1.5),
         ),
         child: ClipRRect(
-          borderRadius: BorderRadius.circular(24),
+          borderRadius: BorderRadius.circular(22),
           child: Stack(
             children: [
               AbsorbPointer(
@@ -493,20 +372,24 @@ class _TrackingScreenState extends State<TrackingScreen>
                         const LatLng(11.5564, 104.9282),
                     initialZoom: 16,
                     interactionOptions: const fm.InteractionOptions(
-                      flags: fm.InteractiveFlag.none,
-                    ),
-                    // FIX: Mark map as ready before allowing controller calls.
+                        flags: fm.InteractiveFlag.none),
                     onMapReady: () => _mapReady = true,
                   ),
                   children: [
                     fm.TileLayer(
                       urlTemplate:
-                          'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
-                      subdomains: const ['a', 'b', 'c', 'd'],
+                          'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
                       userAgentPackageName: 'com.example.app',
+                      tileBuilder: (context, tileWidget, tile) {
+                        return ColorFiltered(
+                          colorFilter: ColorFilter.mode(
+                            Colors.black.withValues(alpha: 0.15),
+                            BlendMode.darken,
+                          ),
+                          child: tileWidget,
+                        );
+                      },
                     ),
-                    // FIX: Only rebuild polyline when point count changes, not
-                    // on every position update.
                     ValueListenableBuilder<LatLng?>(
                       valueListenable: _positionNotifier,
                       builder: (context, pos, _) {
@@ -514,11 +397,8 @@ class _TrackingScreenState extends State<TrackingScreen>
                             _gps.currentPoints.map((p) => p.position).toList();
                         if (raw.length < 2) return const SizedBox.shrink();
 
-                        // Skip expensive simplify/smooth when no new points.
                         if (raw.length == _lastPolylinePointCount &&
                             _lastPolylinePointCount > 0) {
-                          // Still need to return something valid; use cached
-                          // via the existing polyline layer (no-op rebuild).
                           return const SizedBox.shrink();
                         }
                         _lastPolylinePointCount = raw.length;
@@ -531,15 +411,8 @@ class _TrackingScreenState extends State<TrackingScreen>
                           polylines: [
                             fm.Polyline(
                               points: smooth,
-                              color: _kGold.withValues(alpha: 0.22),
-                              strokeWidth: 8,
-                              strokeCap: StrokeCap.round,
-                              strokeJoin: StrokeJoin.round,
-                            ),
-                            fm.Polyline(
-                              points: smooth,
                               color: _kGold,
-                              strokeWidth: 3.5,
+                              strokeWidth: 4.5,
                               strokeCap: StrokeCap.round,
                               strokeJoin: StrokeJoin.round,
                             ),
@@ -558,7 +431,7 @@ class _TrackingScreenState extends State<TrackingScreen>
                               width: 80,
                               height: 80,
                               alignment: Alignment.center,
-                              child: const _PulsingLiveMarker(),
+                              child: const _FlatLiveMarker(),
                             ),
                           ],
                         );
@@ -568,34 +441,16 @@ class _TrackingScreenState extends State<TrackingScreen>
                 ),
               ),
               Positioned(
-                bottom: 10,
+                top: 12,
                 right: 12,
                 child: Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                  padding: const EdgeInsets.all(8),
                   decoration: BoxDecoration(
-                    color: Colors.black.withValues(alpha: 0.6),
-                    borderRadius: BorderRadius.circular(20),
-                    border:
-                        Border.all(color: Colors.white.withValues(alpha: 0.1)),
+                    color: Colors.black54,
+                    borderRadius: BorderRadius.circular(12),
                   ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(CupertinoIcons.fullscreen,
-                          size: 11, color: Colors.white.withValues(alpha: 0.6)),
-                      const SizedBox(width: 4),
-                      Text(
-                        'EXPAND',
-                        style: TextStyle(
-                          color: Colors.white.withValues(alpha: 0.6),
-                          fontSize: 9,
-                          fontWeight: FontWeight.w900,
-                          letterSpacing: 0.8,
-                        ),
-                      ),
-                    ],
-                  ),
+                  child: const Icon(CupertinoIcons.fullscreen,
+                      size: 16, color: Colors.white),
                 ),
               ),
             ],
@@ -605,53 +460,126 @@ class _TrackingScreenState extends State<TrackingScreen>
     );
   }
 
-  Widget _buildWeatherCard() {
-    return ValueListenableBuilder<WeatherData?>(
-      valueListenable: _weatherNotifier,
-      builder: (_, w, __) => ValueListenableBuilder<bool>(
-        valueListenable: _weatherLoadingNotifier,
-        builder: (_, loading, __) => Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 20),
-          child: WeatherWidget(
-            weather: w,
-            isLoading: loading && w == null,
-            onRetry: _fetchWeather,
+  Widget _buildSquareWeather() {
+    return GestureDetector(
+      onTap: _openFullWeather,
+      child: Container(
+        decoration: BoxDecoration(
+          color: _kCard,
+          borderRadius: BorderRadius.circular(24),
+          border: Border.all(color: _kCardBorder, width: 1.5),
+        ),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(22),
+          child: Stack(
+            children: [
+              Positioned.fill(
+                child: ValueListenableBuilder<WeatherData?>(
+                  valueListenable: _weatherNotifier,
+                  builder: (_, w, __) => ValueListenableBuilder<bool>(
+                    valueListenable: _weatherLoadingNotifier,
+                    builder: (_, loading, __) {
+                      return FittedBox(
+                        fit: BoxFit.scaleDown,
+                        alignment: Alignment.center,
+                        child: SizedBox(
+                          width: 350,
+                          child: WeatherWidget(
+                            weather: w,
+                            isLoading: loading && w == null,
+                            onRetry: _fetchWeather,
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+              ),
+              Positioned(
+                top: 12,
+                right: 12,
+                child: Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: Colors.black54,
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: const Icon(CupertinoIcons.fullscreen,
+                      size: 16, color: Colors.white),
+                ),
+              ),
+            ],
           ),
         ),
       ),
     );
   }
 
-  Widget _buildControlPill() {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 20),
-      child: Row(
-        children: [
-          _SquareActionBtn(
-            icon: CupertinoIcons.map_fill,
-            label: 'MAP',
-            color: _kTeal,
-            onTap: _openMap,
+  // ─────────────────────────────────────────────────────────────────────────
+  // MODALS & NAVIGATION
+  // ─────────────────────────────────────────────────────────────────────────
+
+  void _openFullWeather() {
+    HapticFeedback.lightImpact();
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (context) {
+        return Container(
+          margin: const EdgeInsets.only(top: 80),
+          decoration: const BoxDecoration(
+            color: _kCard,
+            borderRadius: BorderRadius.vertical(top: Radius.circular(32)),
           ),
-          const SizedBox(width: 12),
-          _SquareActionBtn(
-            icon: Icons.auto_awesome_rounded,
-            label: 'AI',
-            color: _kPurple,
-            onTap: _openAiAssistant,
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: ValueListenableBuilder<bool>(
-              valueListenable: _trackingNotifier,
-              builder: (_, tracking, __) => _BreathingButton(
-                isTracking: tracking,
-                onTap: _handleAction,
-              ),
+          child: SafeArea(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  margin: const EdgeInsets.symmetric(vertical: 14),
+                  height: 5,
+                  width: 45,
+                  decoration: BoxDecoration(
+                    color: Colors.white24,
+                    borderRadius: BorderRadius.circular(3),
+                  ),
+                ),
+                const Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 24, vertical: 8),
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      'LIVE WEATHER',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 18,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: 1.0,
+                      ),
+                    ),
+                  ),
+                ),
+                const Divider(color: _kCardBorder, thickness: 1.5),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 10, 20, 40),
+                  child: ValueListenableBuilder<WeatherData?>(
+                    valueListenable: _weatherNotifier,
+                    builder: (_, w, __) => ValueListenableBuilder<bool>(
+                      valueListenable: _weatherLoadingNotifier,
+                      builder: (_, loading, __) => WeatherWidget(
+                        weather: w,
+                        isLoading: loading && w == null,
+                        onRetry: _fetchWeather,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
             ),
           ),
-        ],
-      ),
+        );
+      },
     );
   }
 
@@ -690,338 +618,207 @@ class _TrackingScreenState extends State<TrackingScreen>
       builder: (_) => AiChatSheet(summary: snap),
     );
   }
-}
 
-// ─────────────────────────────────────────────────────────────────────────────
-// COMPASS WIDGET
-// ─────────────────────────────────────────────────────────────────────────────
+  // ─────────────────────────────────────────────────────────────────────────
 
-/// A self-contained compass that:
-/// - Reads an *unwrapped* heading from [headingNotifier] (may exceed 360 or
-///   go negative) so animation never takes the long way round the dial.
-/// - Uses [TweenAnimationBuilder] with a properly tracked `begin` for smooth
-///   interpolation between heading updates.
-/// - Derives the cardinal label (N / NE / E … NW) from the normalised angle.
-/// - Rotates the *ring* of tick-marks; the gold North needle stays fixed.
-class _CompassWidget extends StatefulWidget {
-  final ValueNotifier<double> headingNotifier;
-
-  const _CompassWidget({required this.headingNotifier});
-
-  @override
-  State<_CompassWidget> createState() => _CompassWidgetState();
-}
-
-class _CompassWidgetState extends State<_CompassWidget> {
-  // FIX: Track the previous animated value so TweenAnimationBuilder always
-  // animates FROM the last rendered angle rather than from an arbitrary start.
-  double _previousRad = 0.0;
-
-  static const List<_CardinalMark> _cardinals = [
-    _CardinalMark(label: 'N', angle: 0),
-    _CardinalMark(label: 'NE', angle: 45),
-    _CardinalMark(label: 'E', angle: 90),
-    _CardinalMark(label: 'SE', angle: 135),
-    _CardinalMark(label: 'S', angle: 180),
-    _CardinalMark(label: 'SW', angle: 225),
-    _CardinalMark(label: 'W', angle: 270),
-    _CardinalMark(label: 'NW', angle: 315),
-  ];
-
-  static String _cardinalLabel(double deg) {
-    final int index = ((deg + 22.5) / 45).floor() % 8;
-    return _cardinals[index].label;
+  Widget _buildMinimalHeader() {
+    return SafeArea(
+      bottom: false,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(24, 10, 24, 10),
+        child: Row(
+          children: [
+            _CompassWidget(headingNotifier: _deviceCompassNotifier),
+            const SizedBox(width: 20),
+            _buildHeaderTemp(),
+            const Spacer(),
+            ValueListenableBuilder<bool>(
+              valueListenable: _trackingNotifier,
+              builder: (context, isTracking, child) {
+                return AnimatedOpacity(
+                  opacity: isTracking ? 1.0 : 0.0,
+                  duration: const Duration(milliseconds: 300),
+                  child: isTracking
+                      ? const _LiveRecordingDot()
+                      : const SizedBox.shrink(),
+                );
+              },
+            ),
+            const SizedBox(width: 12),
+            _buildDigitalClock(),
+          ],
+        ),
+      ),
+    );
   }
 
-  @override
-  Widget build(BuildContext context) {
-    return ValueListenableBuilder<double>(
-      valueListenable: widget.headingNotifier,
-      builder: (_, unwrappedHeading, __) {
-        final double displayDeg = unwrappedHeading % 360;
-        final double normalised =
-            displayDeg < 0 ? displayDeg + 360 : displayDeg;
-        final String label = _cardinalLabel(normalised);
-
-        final double targetRad = unwrappedHeading * (math.pi / 180);
-        // FIX: Capture begin BEFORE updating _previousRad so the tween
-        // animates from the last known position.
-        final double beginRad = _previousRad;
-
-        return TweenAnimationBuilder<double>(
-          tween: Tween<double>(begin: beginRad, end: targetRad),
-          duration: const Duration(milliseconds: 120),
-          curve: Curves.easeOut,
-          onEnd: () => _previousRad = targetRad,
-          builder: (_, animRad, __) {
-            return SizedBox(
-              width: 50,
-              height: 56,
-              child: Column(
-                children: [
-                  SizedBox(
-                    width: 44,
-                    height: 44,
-                    child: Stack(
-                      alignment: Alignment.center,
-                      children: [
-                        // Outer bezel
-                        Container(
-                          width: 44,
-                          height: 44,
-                          decoration: BoxDecoration(
-                            shape: BoxShape.circle,
-                            gradient: const RadialGradient(
-                              colors: [Color(0xFF252525), Color(0xFF111111)],
-                            ),
-                            border: Border.all(
-                              color: _kGold.withValues(alpha: 0.35),
-                              width: 1.2,
-                            ),
-                            boxShadow: [
-                              BoxShadow(
-                                color: _kGold.withValues(alpha: 0.18),
-                                blurRadius: 10,
-                                spreadRadius: 1,
-                              ),
-                            ],
-                          ),
-                        ),
-
-                        // Rotating tick ring — uses singleton painter.
-                        Transform.rotate(
-                          angle: -animRad,
-                          child: CustomPaint(
-                            size: const Size(44, 44),
-                            painter: _kCompassRingPainter,
-                          ),
-                        ),
-
-                        // Static gold North needle — uses singleton painter.
-                        CustomPaint(
-                          size: const Size(44, 44),
-                          painter: _kNeedlePainter,
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 3),
-                  Text(
-                    label,
-                    style: TextStyle(
-                      color: _kGoldBright,
-                      fontSize: 9,
-                      fontWeight: FontWeight.w900,
-                      letterSpacing: 0.5,
-                      height: 1.0,
-                      shadows: [
-                        Shadow(
-                          color: _kGold.withValues(alpha: 0.6),
-                          blurRadius: 4,
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
+  Widget _buildAnchoredBottomDock() {
+    final bottomPadding = MediaQuery.of(context).padding.bottom;
+    return Container(
+      decoration: BoxDecoration(
+        color: _kCard,
+        border: Border(
+            top: BorderSide(
+                color: Colors.white.withValues(alpha: 0.05), width: 1)),
+      ),
+      padding: EdgeInsets.fromLTRB(
+          20, 20, 20, bottomPadding > 0 ? bottomPadding + 10 : 24),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: _SecondaryBtn(
+                  icon: CupertinoIcons.map_fill,
+                  label: 'VIEW MAP',
+                  onTap: _openMap,
+                ),
               ),
-            );
-          },
+              const SizedBox(width: 12),
+              Expanded(
+                child: _SecondaryBtn(
+                  icon: Icons.auto_awesome_rounded,
+                  label: 'AI ASSIST',
+                  onTap: _openAiAssistant,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          ValueListenableBuilder<bool>(
+            valueListenable: _trackingNotifier,
+            builder: (_, tracking, __) => _PrimaryActionButton(
+              isTracking: tracking,
+              onTap: _handleAction,
+              timerNotifier: _elapsedSecondsNotifier,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildHeaderTemp() {
+    return ValueListenableBuilder<WeatherData?>(
+      valueListenable: _weatherNotifier,
+      builder: (_, w, __) {
+        final double? tempC = w != null ? (w.temperature - 32) * 5 / 9 : null;
+        final tempStr = tempC != null ? '${tempC.toInt()}' : '--';
+        return Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              tempStr,
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 24,
+                fontWeight: FontWeight.w600,
+                height: 1.0,
+              ),
+            ),
+            const Padding(
+              padding: EdgeInsets.only(top: 2, left: 2),
+              child: Text(
+                '°C',
+                style: TextStyle(
+                  color: Colors.white54,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+          ],
         );
       },
     );
   }
-}
 
-/// Paints the rotating compass ring: 8 major tick-marks and 16 minor ticks.
-class _CompassRingPainter extends CustomPainter {
-  const _CompassRingPainter();
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final center = Offset(size.width / 2, size.height / 2);
-    final radius = size.width / 2 - 3;
-
-    final majorPaint = Paint()
-      ..strokeWidth = 1.2
-      ..strokeCap = StrokeCap.round;
-
-    final minorPaint = Paint()
-      ..color = Colors.white.withValues(alpha: 0.2)
-      ..strokeWidth = 0.7
-      ..strokeCap = StrokeCap.round;
-
-    for (int i = 0; i < 24; i++) {
-      final double angleDeg = i * 15.0;
-      final double rad = angleDeg * (math.pi / 180) - math.pi / 2;
-      final bool isMajor = i % 3 == 0;
-      final bool isNorth = i == 0;
-
-      if (isMajor) {
-        final double tickLen = isNorth ? 7.0 : 5.0;
-        majorPaint.color =
-            isNorth ? _kGoldBright : Colors.white.withValues(alpha: 0.55);
-        final Offset outer =
-            center + Offset(math.cos(rad) * radius, math.sin(rad) * radius);
-        final Offset inner = center +
-            Offset(math.cos(rad) * (radius - tickLen),
-                math.sin(rad) * (radius - tickLen));
-        canvas.drawLine(inner, outer, majorPaint);
-      } else {
-        final Offset outer =
-            center + Offset(math.cos(rad) * radius, math.sin(rad) * radius);
-        final Offset inner = center +
-            Offset(math.cos(rad) * (radius - 3), math.sin(rad) * (radius - 3));
-        canvas.drawLine(inner, outer, minorPaint);
-      }
-    }
-  }
-
-  @override
-  bool shouldRepaint(_CompassRingPainter old) => false;
-}
-
-class _NeedlePainter extends CustomPainter {
-  const _NeedlePainter();
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final center = Offset(size.width / 2, size.height / 2);
-
-    final northPaint = Paint()
-      ..color = _kGoldBright
-      ..style = PaintingStyle.fill;
-    final northShadow = Paint()
-      ..color = _kGold.withValues(alpha: 0.55)
-      ..maskFilter = const ui.MaskFilter.blur(ui.BlurStyle.normal, 3);
-
-    final northPath = ui.Path()
-      ..moveTo(center.dx, center.dy - 13)
-      ..lineTo(center.dx - 3, center.dy)
-      ..lineTo(center.dx + 3, center.dy)
-      ..close();
-
-    final southPaint = Paint()
-      ..color = Colors.white.withValues(alpha: 0.25)
-      ..style = PaintingStyle.fill;
-
-    final southPath = ui.Path()
-      ..moveTo(center.dx, center.dy + 13)
-      ..lineTo(center.dx - 3, center.dy)
-      ..lineTo(center.dx + 3, center.dy)
-      ..close();
-
-    final pivotPaint = Paint()
-      ..color = Colors.white
-      ..style = PaintingStyle.fill;
-
-    canvas.drawPath(northPath, northShadow);
-    canvas.drawPath(southPath, southPaint);
-    canvas.drawPath(northPath, northPaint);
-    canvas.drawCircle(center, 2.5, pivotPaint);
-  }
-
-  @override
-  bool shouldRepaint(_NeedlePainter old) => false;
-}
-
-class _CardinalMark {
-  final String label;
-  final double angle;
-  const _CardinalMark({required this.label, required this.angle});
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// SUPPORTING WIDGETS
-// ─────────────────────────────────────────────────────────────────────────────
-
-class _SignalBars extends StatelessWidget {
-  final int strength;
-  const _SignalBars({required this.strength});
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: CrossAxisAlignment.end,
-      children: List.generate(4, (index) {
-        final isActive = index < strength;
-        final Color activeColor = index >= 3
-            ? _kTeal
-            : index == 2
-                ? _kGold
-                : _kGold.withValues(alpha: 0.7);
-
-        return AnimatedContainer(
-          duration: const Duration(milliseconds: 300),
-          curve: Curves.easeOut,
-          margin: const EdgeInsets.symmetric(horizontal: 1.5),
-          width: 4,
-          height: 8.0 + (index * 3.5),
-          decoration: BoxDecoration(
-            color:
-                isActive ? activeColor : Colors.white.withValues(alpha: 0.12),
-            borderRadius: BorderRadius.circular(2),
-            boxShadow: isActive
-                ? [
-                    BoxShadow(
-                      color: activeColor.withValues(alpha: 0.45),
-                      blurRadius: 4,
-                    ),
-                  ]
-                : null,
+  Widget _buildDigitalClock() {
+    return ValueListenableBuilder<int>(
+      valueListenable: _tickNotifier,
+      builder: (_, __, ___) {
+        final now = DateTime.now();
+        final h = now.hour.toString().padLeft(2, '0');
+        final m = now.minute.toString().padLeft(2, '0');
+        return Text(
+          '$h:$m',
+          style: const TextStyle(
+            color: Colors.white,
+            fontSize: 22,
+            fontWeight: FontWeight.w700,
+            letterSpacing: -0.5,
+            fontFeatures: [ui.FontFeature.tabularFigures()],
           ),
         );
-      }),
+      },
     );
   }
-}
 
-class _BatteryIndicator extends StatelessWidget {
-  const _BatteryIndicator();
+  Widget _buildSpeedometerSection() {
+    return ValueListenableBuilder<double>(
+      valueListenable: _speedNotifier,
+      builder: (context, speed, _) {
+        final isOver =
+            _trackingNotifier.value && speed > _settings.speedAlertMph;
+        return Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 20),
+          child: SpeedometerWidget(speedMph: speed, isOverLimit: isOver),
+        );
+      },
+    );
+  }
 
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      children: [
-        const Icon(CupertinoIcons.battery_100, size: 20, color: _kTeal),
-        const SizedBox(height: 5),
-        Text(
-          'POWER',
-          style: TextStyle(
-            color: Colors.white.withValues(alpha: 0.4),
-            fontSize: 10,
-            fontWeight: FontWeight.w900,
-            letterSpacing: 0.5,
+  Widget _buildSignalRow() {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 50, vertical: 8),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Column(
+            children: [
+              ValueListenableBuilder<int>(
+                valueListenable: _signalNotifier,
+                builder: (_, strength, __) => _SignalBars(strength: strength),
+              ),
+              const SizedBox(height: 6),
+              const Text(
+                'GPS SIGNAL',
+                style: TextStyle(
+                  color: Colors.white54,
+                  fontSize: 10,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: 0.5,
+                ),
+              ),
+            ],
           ),
-        ),
-      ],
+          const _BatteryIndicator(),
+        ],
+      ),
     );
   }
 }
 
-/// FIX: _StatBox is now a StatefulWidget so it can track the previously
-/// displayed value and pass it as `begin` to the tween, avoiding the
-/// "always animates from 0" bug that occurred when the widget rebuilt.
-class _StatBox extends StatefulWidget {
+// ─────────────────────────────────────────────────────────────────────────────
+// WHITE STAT CARD WIDGET
+// ─────────────────────────────────────────────────────────────────────────────
+class _WhiteStatCard extends StatefulWidget {
   final String label, unit;
   final double value;
-  final Color color;
   final bool isDecimal;
 
-  const _StatBox({
-    required this.label,
-    required this.value,
-    required this.unit,
-    required this.color,
-    required this.isDecimal,
-  });
+  const _WhiteStatCard(
+      {required this.label,
+      required this.value,
+      required this.unit,
+      required this.isDecimal});
 
   @override
-  State<_StatBox> createState() => _StatBoxState();
+  State<_WhiteStatCard> createState() => _WhiteStatCardState();
 }
 
-class _StatBoxState extends State<_StatBox> {
-  // Tracks the value from the previous build so tween begins there.
+class _WhiteStatCardState extends State<_WhiteStatCard> {
   late double _previousValue;
 
   @override
@@ -1034,338 +831,459 @@ class _StatBoxState extends State<_StatBox> {
   Widget build(BuildContext context) {
     final double beginValue = _previousValue;
 
-    return Expanded(
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
-        decoration: BoxDecoration(
-          color: _kCard,
-          borderRadius: BorderRadius.circular(22),
-          border: Border.all(color: _kCardBorder, width: 0.8),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: 0.25),
-              blurRadius: 12,
-              offset: const Offset(0, 5),
-            ),
-          ],
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              widget.label,
-              style: const TextStyle(
-                color: Colors.white30,
-                fontSize: 9,
-                fontWeight: FontWeight.w900,
-                letterSpacing: 1.2,
-              ),
-            ),
-            const SizedBox(height: 10),
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.baseline,
-              textBaseline: TextBaseline.alphabetic,
-              children: [
-                TweenAnimationBuilder<double>(
-                  // FIX: begin is now the previous value, not always 0.
-                  tween: Tween<double>(begin: beginValue, end: widget.value),
-                  duration: const Duration(milliseconds: 500),
-                  curve: Curves.easeOutCubic,
-                  onEnd: () => _previousValue = widget.value,
-                  builder: (context, val, _) {
-                    final displayTxt = widget.isDecimal
-                        ? val.toStringAsFixed(1)
-                        : val.toInt().toString();
-                    return Text(
-                      displayTxt,
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 30,
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 20),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(24),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Text(
+            widget.label,
+            style: const TextStyle(
+                color: Colors.black54,
+                fontSize: 10,
+                fontWeight: FontWeight.w800,
+                letterSpacing: 1.0),
+          ),
+          const SizedBox(height: 8),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.baseline,
+            textBaseline: TextBaseline.alphabetic,
+            children: [
+              TweenAnimationBuilder<double>(
+                tween: Tween<double>(begin: beginValue, end: widget.value),
+                duration: const Duration(milliseconds: 300),
+                curve: Curves.easeOutCubic,
+                onEnd: () => _previousValue = widget.value,
+                builder: (context, val, _) {
+                  final displayTxt = widget.isDecimal
+                      ? val.toStringAsFixed(1)
+                      : val.toInt().toString();
+                  return Text(
+                    displayTxt,
+                    style: const TextStyle(
+                        color: Colors.black,
+                        fontSize: 32,
                         fontWeight: FontWeight.w900,
                         height: 1.0,
-                        fontFeatures: [ui.FontFeature.tabularFigures()],
-                      ),
-                    );
-                  },
-                ),
-                const SizedBox(width: 5),
-                Text(
-                  widget.unit,
-                  style: TextStyle(
-                    color: widget.color,
-                    fontSize: 11,
-                    fontWeight: FontWeight.w900,
-                    letterSpacing: 0.5,
-                  ),
-                ),
-              ],
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _SquareActionBtn extends StatefulWidget {
-  final IconData icon;
-  final String label;
-  final Color color;
-  final VoidCallback onTap;
-
-  const _SquareActionBtn({
-    required this.icon,
-    required this.label,
-    required this.color,
-    required this.onTap,
-  });
-
-  @override
-  State<_SquareActionBtn> createState() => _SquareActionBtnState();
-}
-
-class _SquareActionBtnState extends State<_SquareActionBtn> {
-  bool _pressed = false;
-
-  @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onTapDown: (_) => setState(() => _pressed = true),
-      onTapUp: (_) {
-        setState(() => _pressed = false);
-        widget.onTap();
-      },
-      onTapCancel: () => setState(() => _pressed = false),
-      child: AnimatedScale(
-        scale: _pressed ? 0.93 : 1.0,
-        duration: const Duration(milliseconds: 120),
-        curve: Curves.easeOut,
-        child: Container(
-          width: 68,
-          height: 64,
-          decoration: BoxDecoration(
-            color: _kCard,
-            borderRadius: BorderRadius.circular(20),
-            border: Border.all(color: _kCardBorder, width: 0.8),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withValues(alpha: _pressed ? 0.05 : 0.2),
-                blurRadius: _pressed ? 4 : 10,
-                offset: Offset(0, _pressed ? 2 : 5),
+                        fontFeatures: [ui.FontFeature.tabularFigures()]),
+                  );
+                },
               ),
-            ],
-          ),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Icon(widget.icon, color: widget.color, size: 22),
-              const SizedBox(height: 4),
+              const SizedBox(width: 4),
               Text(
-                widget.label,
-                style: TextStyle(
-                  color: widget.color,
-                  fontSize: 10,
-                  fontWeight: FontWeight.w900,
-                  letterSpacing: 0.5,
-                ),
+                widget.unit,
+                style: const TextStyle(
+                    color: Colors.black54,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w800),
               ),
             ],
           ),
-        ),
+        ],
       ),
     );
   }
 }
 
-class _BreathingButton extends StatefulWidget {
-  final bool isTracking;
-  final VoidCallback onTap;
+// ─────────────────────────────────────────────────────────────────────────────
+// WIDGETS
+// ─────────────────────────────────────────────────────────────────────────────
 
-  const _BreathingButton({required this.isTracking, required this.onTap});
-
+class _LiveRecordingDot extends StatefulWidget {
+  const _LiveRecordingDot();
   @override
-  State<_BreathingButton> createState() => _BreathingButtonState();
+  State<_LiveRecordingDot> createState() => _LiveRecordingDotState();
 }
 
-class _BreathingButtonState extends State<_BreathingButton>
+class _LiveRecordingDotState extends State<_LiveRecordingDot>
     with SingleTickerProviderStateMixin {
-  late AnimationController _controller;
-  late Animation<double> _glowAnimation;
-  bool _pressed = false;
+  late AnimationController _anim;
 
   @override
   void initState() {
     super.initState();
-    _controller = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 1500),
-    )..repeat(reverse: true);
-    _glowAnimation = Tween<double>(begin: 0.2, end: 0.65).animate(
-      CurvedAnimation(parent: _controller, curve: Curves.easeInOut),
-    );
+    _anim =
+        AnimationController(vsync: this, duration: const Duration(seconds: 1))
+          ..repeat(reverse: true);
   }
 
   @override
   void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onTapDown: (_) => setState(() => _pressed = true),
-      onTapUp: (_) {
-        setState(() => _pressed = false);
-        widget.onTap();
-      },
-      onTapCancel: () => setState(() => _pressed = false),
-      child: AnimatedScale(
-        scale: _pressed ? 0.96 : 1.0,
-        duration: const Duration(milliseconds: 120),
-        curve: Curves.easeOut,
-        child: AnimatedBuilder(
-          animation: _glowAnimation,
-          builder: (context, child) {
-            final isT = widget.isTracking;
-            final baseColor = isT ? _kRed : _kGold;
-            // FIX: Both tracking AND idle states now use _glowAnimation so
-            // the START button breathes just like the STOP button.
-            final shadowColor =
-                baseColor.withValues(alpha: _glowAnimation.value);
-
-            return AnimatedContainer(
-              duration: const Duration(milliseconds: 350),
-              curve: Curves.easeInOut,
-              height: 64,
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(22),
-                gradient: LinearGradient(
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                  colors: isT
-                      ? [const Color(0xFFE74C3C), const Color(0xFFC0392B)]
-                      : [const Color(0xFFD4A843), const Color(0xFF8B6914)],
-                ),
-                boxShadow: [
-                  BoxShadow(
-                    color: shadowColor,
-                    blurRadius: isT ? 22 : 14,
-                    spreadRadius: isT ? 2 : 0,
-                    offset: const Offset(0, 6),
-                  ),
-                ],
-              ),
-              child: Center(
-                child: AnimatedSwitcher(
-                  duration: const Duration(milliseconds: 200),
-                  child: Text(
-                    isT ? 'STOP' : 'START',
-                    key: ValueKey(isT),
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontWeight: FontWeight.w900,
-                      letterSpacing: 2.5,
-                      fontSize: 18,
-                    ),
-                  ),
-                ),
-              ),
-            );
-          },
-        ),
-      ),
-    );
-  }
-}
-
-class _PulsingLiveMarker extends StatefulWidget {
-  const _PulsingLiveMarker();
-
-  @override
-  State<_PulsingLiveMarker> createState() => _PulsingLiveMarkerState();
-}
-
-class _PulsingLiveMarkerState extends State<_PulsingLiveMarker>
-    with SingleTickerProviderStateMixin {
-  late AnimationController _controller;
-  late Animation<double> _scaleAnimation;
-  late Animation<double> _opacityAnimation;
-
-  @override
-  void initState() {
-    super.initState();
-    _controller = AnimationController(
-      vsync: this,
-      duration: const Duration(seconds: 2),
-    )..repeat();
-
-    _scaleAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(
-      CurvedAnimation(parent: _controller, curve: Curves.easeOutQuad),
-    );
-    _opacityAnimation = Tween<double>(begin: 0.8, end: 0.0).animate(
-      CurvedAnimation(parent: _controller, curve: Curves.easeOutQuad),
-    );
-  }
-
-  @override
-  void dispose() {
-    _controller.dispose();
+    _anim.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     return AnimatedBuilder(
-      animation: _controller,
+      animation: _anim,
       builder: (context, _) {
-        return Stack(
-          alignment: Alignment.center,
-          children: [
-            // Pulsing ring
-            Container(
-              width: 60 * _scaleAnimation.value,
-              height: 60 * _scaleAnimation.value,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: _kRed.withValues(alpha: _opacityAnimation.value * 0.5),
-                border: Border.all(
-                  color: _kRed.withValues(alpha: _opacityAnimation.value * 0.8),
-                  width: 1.2,
-                ),
-              ),
-            ),
-            // White dot with red border
-            Container(
-              width: 20,
-              height: 20,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: Colors.white,
-                boxShadow: [
-                  BoxShadow(
-                    color: _kRed.withValues(alpha: 0.8),
-                    blurRadius: 12,
-                    spreadRadius: 2,
-                  ),
-                ],
-                border: Border.all(color: _kRed, width: 3.5),
-              ),
-            ),
-            // FIX: Direction chevron was at `top: 22` which placed it BELOW
-            // the dot centre in an 80×80 marker. Use Align so it sits flush
-            // above the dot at the visual top of the marker.
-            const Positioned(
-              top: 16,
-              child: Icon(
-                CupertinoIcons.chevron_up,
-                color: Colors.white,
-                size: 14,
-              ),
-            ),
-          ],
+        return Container(
+          width: 8,
+          height: 8,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            color: _kRed.withValues(alpha: 0.5 + (_anim.value * 0.5)),
+          ),
         );
       },
+    );
+  }
+}
+
+class _CompassWidget extends StatefulWidget {
+  final ValueNotifier<double> headingNotifier;
+  const _CompassWidget({required this.headingNotifier});
+
+  @override
+  State<_CompassWidget> createState() => _CompassWidgetState();
+}
+
+class _CompassWidgetState extends State<_CompassWidget> {
+  double _previousRad = 0.0;
+
+  static const List<String> _cardinals = [
+    'N',
+    'NE',
+    'E',
+    'SE',
+    'S',
+    'SW',
+    'W',
+    'NW'
+  ];
+
+  static String _cardinalLabel(double deg) {
+    final int index = ((deg + 22.5) / 45).floor() % 8;
+    return _cardinals[index];
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return ValueListenableBuilder<double>(
+      valueListenable: widget.headingNotifier,
+      builder: (_, unwrappedHeading, __) {
+        final double displayDeg = unwrappedHeading % 360;
+        final double normalised =
+            displayDeg < 0 ? displayDeg + 360 : displayDeg;
+        final String label = _cardinalLabel(normalised);
+        final double targetRad = unwrappedHeading * (math.pi / 180);
+        final double beginRad = _previousRad;
+
+        return TweenAnimationBuilder<double>(
+          tween: Tween<double>(begin: beginRad, end: targetRad),
+          duration: const Duration(milliseconds: 120),
+          curve: Curves.easeOut,
+          onEnd: () => _previousRad = targetRad,
+          builder: (_, animRad, __) {
+            return Row(
+              children: [
+                SizedBox(
+                  width: 36,
+                  height: 36,
+                  child: Stack(
+                    alignment: Alignment.center,
+                    children: [
+                      Container(
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: _kCard,
+                          border: Border.all(color: _kCardBorder),
+                        ),
+                      ),
+                      Transform.rotate(
+                        angle: -animRad,
+                        child: CustomPaint(
+                          size: const Size(36, 36),
+                          painter: _kCompassRingPainter,
+                        ),
+                      ),
+                      CustomPaint(
+                        size: const Size(36, 36),
+                        painter: _kNeedlePainter,
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  label,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 16,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+}
+
+class _CompassRingPainter extends CustomPainter {
+  const _CompassRingPainter();
+  @override
+  void paint(Canvas canvas, Size size) {
+    final center = Offset(size.width / 2, size.height / 2);
+    final radius = size.width / 2 - 4;
+    final minorPaint = Paint()
+      ..color = Colors.white24
+      ..strokeWidth = 1;
+
+    for (int i = 0; i < 12; i++) {
+      final double angleDeg = i * 30.0;
+      final double rad = angleDeg * (math.pi / 180) - math.pi / 2;
+      final Offset outer =
+          center + Offset(math.cos(rad) * radius, math.sin(rad) * radius);
+      final Offset inner = center +
+          Offset(math.cos(rad) * (radius - 3), math.sin(rad) * (radius - 3));
+      canvas.drawLine(inner, outer, minorPaint);
+    }
+  }
+
+  @override
+  bool shouldRepaint(_CompassRingPainter old) => false;
+}
+
+class _NeedlePainter extends CustomPainter {
+  const _NeedlePainter();
+  @override
+  void paint(Canvas canvas, Size size) {
+    final center = Offset(size.width / 2, size.height / 2);
+    final northPaint = Paint()
+      ..color = _kRed
+      ..style = PaintingStyle.fill;
+    final northPath = ui.Path()
+      ..moveTo(center.dx, center.dy - 10)
+      ..lineTo(center.dx - 2.5, center.dy)
+      ..lineTo(center.dx + 2.5, center.dy)
+      ..close();
+
+    final pivotPaint = Paint()
+      ..color = Colors.white
+      ..style = PaintingStyle.fill;
+
+    canvas.drawPath(northPath, northPaint);
+    canvas.drawCircle(center, 2, pivotPaint);
+  }
+
+  @override
+  bool shouldRepaint(_NeedlePainter old) => false;
+}
+
+class _SignalBars extends StatelessWidget {
+  final int strength;
+  const _SignalBars({required this.strength});
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.end,
+      children: List.generate(4, (index) {
+        final isActive = index < strength;
+        return Container(
+          margin: const EdgeInsets.symmetric(horizontal: 2.0),
+          width: 4,
+          height: 10.0 + (index * 4.0),
+          decoration: BoxDecoration(
+            color: isActive ? Colors.white : Colors.white12,
+            borderRadius: BorderRadius.circular(2),
+          ),
+        );
+      }),
+    );
+  }
+}
+
+class _BatteryIndicator extends StatelessWidget {
+  const _BatteryIndicator();
+  @override
+  Widget build(BuildContext context) {
+    return const Column(
+      children: [
+        Icon(CupertinoIcons.battery_100, size: 24, color: Colors.white),
+        SizedBox(height: 6),
+        Text('POWER',
+            style: TextStyle(
+                color: Colors.white54,
+                fontSize: 10,
+                fontWeight: FontWeight.w800,
+                letterSpacing: 0.5)),
+      ],
+    );
+  }
+}
+
+class _SecondaryBtn extends StatefulWidget {
+  final IconData icon;
+  final String label;
+  final VoidCallback onTap;
+
+  const _SecondaryBtn(
+      {required this.icon, required this.label, required this.onTap});
+
+  @override
+  State<_SecondaryBtn> createState() => _SecondaryBtnState();
+}
+
+class _SecondaryBtnState extends State<_SecondaryBtn> {
+  bool _pressed = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTapDown: (_) => setState(() => _pressed = true),
+      onTapUp: (_) {
+        setState(() => _pressed = false);
+        widget.onTap();
+      },
+      onTapCancel: () => setState(() => _pressed = false),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 100),
+        height: 54,
+        decoration: BoxDecoration(
+          color: _pressed ? Colors.white10 : _kBg,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: _kCardBorder),
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(widget.icon, color: Colors.white, size: 18),
+            const SizedBox(width: 8),
+            Text(
+              widget.label,
+              style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 0.5),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _PrimaryActionButton extends StatefulWidget {
+  final bool isTracking;
+  final VoidCallback onTap;
+  final ValueNotifier<int> timerNotifier;
+
+  const _PrimaryActionButton(
+      {required this.isTracking,
+      required this.onTap,
+      required this.timerNotifier});
+
+  @override
+  State<_PrimaryActionButton> createState() => _PrimaryActionButtonState();
+}
+
+class _PrimaryActionButtonState extends State<_PrimaryActionButton> {
+  bool _pressed = false;
+
+  String _formatDuration(int totalSeconds) {
+    final hours = totalSeconds ~/ 3600;
+    final minutes = (totalSeconds % 3600) ~/ 60;
+    final seconds = totalSeconds % 60;
+    if (hours > 0) {
+      return '${hours.toString().padLeft(2, '0')}:${minutes.toString().padLeft(2, '0')}:${seconds.toString().padLeft(2, '0')}';
+    }
+    return '${minutes.toString().padLeft(2, '0')}:${seconds.toString().padLeft(2, '0')}';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isT = widget.isTracking;
+    final bgColor = isT ? _kRed : _kTeal;
+
+    return GestureDetector(
+      onTapDown: (_) => setState(() => _pressed = true),
+      onTapUp: (_) {
+        setState(() => _pressed = false);
+        widget.onTap();
+      },
+      onTapCancel: () => setState(() => _pressed = false),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 150),
+        curve: Curves.easeOut,
+        height: 64,
+        width: double.infinity,
+        decoration: BoxDecoration(
+          color: _pressed ? bgColor.withValues(alpha: 0.8) : bgColor,
+          borderRadius: BorderRadius.circular(20),
+        ),
+        child: Center(
+          child: AnimatedSwitcher(
+            duration: const Duration(milliseconds: 200),
+            child: isT
+                ? ValueListenableBuilder<int>(
+                    valueListenable: widget.timerNotifier,
+                    builder: (context, seconds, _) {
+                      return Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        key: const ValueKey('tracking'),
+                        children: [
+                          const Icon(CupertinoIcons.stop_fill,
+                              color: Colors.white, size: 20),
+                          const SizedBox(width: 8),
+                          Text(
+                            _formatDuration(seconds),
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.w800,
+                              fontSize: 20,
+                              letterSpacing: 1.5,
+                              fontFeatures: [ui.FontFeature.tabularFigures()],
+                            ),
+                          ),
+                        ],
+                      );
+                    },
+                  )
+                : const Text(
+                    'START TRACKING',
+                    key: ValueKey('stopped'),
+                    style: TextStyle(
+                      color: Colors.black,
+                      fontWeight: FontWeight.w900,
+                      letterSpacing: 1.0,
+                      fontSize: 16,
+                    ),
+                  ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _FlatLiveMarker extends StatelessWidget {
+  const _FlatLiveMarker();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 20,
+      height: 20,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        color: _kTeal,
+        border: Border.all(color: Colors.black, width: 3),
+        boxShadow: const [
+          BoxShadow(color: Colors.black54, blurRadius: 6, offset: Offset(0, 3))
+        ],
+      ),
     );
   }
 }

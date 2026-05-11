@@ -7,7 +7,7 @@ import '../services/settings_service.dart';
 import '../widgets/ai_analysis_card.dart';
 import '../widgets/ai_chat_sheet.dart';
 import 'map_screen.dart';
-// Important: SavedTrip model and logic are imported from history_screen
+// Important: SavedTrip and SavedRoutePoint models are imported from history_screen
 import 'history_screen.dart';
 
 class SummaryScreen extends StatefulWidget {
@@ -29,6 +29,15 @@ class _SummaryScreenState extends State<SummaryScreen> {
     setState(() => _isSaving = true);
     await HapticFeedback.mediumImpact();
 
+    // NEW: Map the live TripPoints to the SavedRoutePoint format
+    final routePoints = widget.summary.points.map((p) {
+      return SavedRoutePoint(
+        lat: p.position.latitude,
+        lng: p.position.longitude,
+        speedMph: p.speedMph,
+      );
+    }).toList();
+
     // Convert TripSummary (live data) to SavedTrip (DB format)
     final tripToSave = SavedTrip(
       id: widget.summary.id,
@@ -38,6 +47,7 @@ class _SummaryScreenState extends State<SummaryScreen> {
       avgSpeedMph: widget.summary.avgSpeedMph,
       totalTime: widget.summary.totalTime,
       altitudeGainFt: widget.summary.altitudeGainFt,
+      route: routePoints, // FIX: Pass the newly mapped route here
     );
 
     final success = await SavedTrip.saveTrip(tripToSave);
