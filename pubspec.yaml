@@ -33,8 +33,4 @@ dev_dependencies:
   flutter_lints: ^5.0.0
 
 flutter:
-<<<<<<< HEAD
   uses-material-design: true
-=======
-  uses-material-design: true
->>>>>>> e1dc61d3dd4c258279461252426ade12831b8b76
