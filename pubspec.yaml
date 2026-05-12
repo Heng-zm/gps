@@ -24,6 +24,7 @@ dependencies:
   wakelock_plus: ^1.2.11
   supabase_flutter: ^2.0.0
   flutter_compass: ^0.8.1
+  battery_plus: ^7.0.0
 
 dev_dependencies:
   flutter_test:
@@ -33,8 +34,4 @@ dev_dependencies:
   flutter_lints: ^5.0.0
 
 flutter:
-<<<<<<< HEAD
   uses-material-design: true
-=======
-  uses-material-design: true
->>>>>>> e1dc61d3dd4c258279461252426ade12831b8b76

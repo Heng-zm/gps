@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
+
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
 import '../models/trip_data.dart';
@@ -9,125 +10,281 @@ import 'settings_service.dart';
 
 class AiService {
   AiService._internal();
+
   static final AiService instance = AiService._internal();
 
   static const String _endpointUrl =
       'https://bot-voice-sqnz.onrender.com/ai-assistant';
 
-  // PERFORMANCE IMPROVEMENT:
-  // Using a persistent client enables HTTP Keep-Alive.
-  // This avoids the overhead of establishing a new TCP/TLS connection for every request.
-  final http.Client _client = http.Client();
+  static final Uri _endpointUri = Uri.parse(_endpointUrl);
 
-  /// Analyzes trip data with environmental context
-  Future<String> analyzeTrip(TripSummary s, {WeatherData? weather}) async {
-    final settings = SettingsService.instance;
+  static const Duration _requestTimeout = Duration(seconds: 30);
+  static const int _maxHistoryItems = 20;
+  static const int _maxPromptChars = 12000;
+  static const int _maxUserQueryChars = 1500;
 
-    // Pre-calculate to keep the prompt template clean
-    final distance =
-        settings.toDisplayDistance(s.distanceMiles).toStringAsFixed(2);
-    final avgSpeed = settings.toDisplaySpeed(s.avgSpeedMph).toInt();
-    final maxSpeed = settings.toDisplaySpeed(s.maxSpeedMph).toInt();
+  http.Client? _client;
 
-    final prompt = '''
+  http.Client get _httpClient {
+    _client ??= http.Client();
+    return _client!;
+  }
+
+  /// Analyzes trip data with optional weather context.
+  Future<String> analyzeTrip(
+    TripSummary summary, {
+    WeatherData? weather,
+  }) async {
+    final SettingsService settings = SettingsService.instance;
+
+    final String distance =
+        settings.toDisplayDistance(summary.distanceMiles).toStringAsFixed(2);
+
+    final int avgSpeed = settings.toDisplaySpeed(summary.avgSpeedMph).round();
+    final int maxSpeed = settings.toDisplaySpeed(summary.maxSpeedMph).round();
+
+    final String weatherLine = weather == null
+        ? ''
+        : '- Weather: ${weather.condition}, '
+            '${weather.temperature.round()}${settings.useKmh ? "°C" : "°F"}, '
+            'wind ${_formatWind(weather.windSpeed, settings)}\n';
+
+    final String prompt = _limitText('''
 You are "TrackPro AI," a professional driving coach.
 
 TRIP DATA:
 - Distance: $distance ${settings.distanceUnit}
 - Avg Speed: $avgSpeed ${settings.speedUnit}
 - Max Speed: $maxSpeed ${settings.speedUnit}
-- Duration: ${s.formattedTotalTime} (Stopped: ${s.formattedStoppedTime})
-${weather != null ? "- Weather: ${weather.condition}, ${weather.temperature}°" : ""}
-
+- Duration: ${summary.formattedTotalTime}
+- Stopped Time: ${summary.formattedStoppedTime}
+- Moving Time: ${summary.formattedMovingTime}
+$weatherLine
 TASK:
-1. Provide a "Safety Score" and "Efficiency Score".
-2. Give 2 highly specific insights.
+1. Provide a Safety Score out of 100.
+2. Provide an Efficiency Score out of 100.
+3. Give 2 highly specific insights.
+4. Give 1 practical improvement tip.
 
 FORMATTING RULES:
-- Use **Bold** for all numbers and scores.
-- Use bullet points for the insights.
+- Use **bold** for all scores and important numbers.
+- Use bullet points for insights.
 - Be concise.
-''';
+''');
 
-    try {
-      // Increased timeout to 30s. LLM servers on platforms like Render
-      // often need extra time to wake up or generate tokens.
-      final response = await _client
-          .post(
-            Uri.parse(_endpointUrl),
-            headers: {'Content-Type': 'application/json'},
-            body: jsonEncode({'message': prompt, 'stream': false}),
-          )
-          .timeout(const Duration(seconds: 30));
-
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body) as Map<String, dynamic>;
-        if (data['ok'] == true) {
-          return data['reply']?.toString() ??
-              'Received empty response from AI.';
-        }
-        return 'Analysis error: ${data['error'] ?? 'Unknown error'}';
-      }
-      return 'Server error: ${response.statusCode}';
-    } on TimeoutException {
-      return 'AI Link timeout. The server took too long to respond.';
-    } on SocketException {
-      return 'Network error. Please check your internet connection.';
-    } catch (e) {
-      return 'AI Link offline. Please check your data connection.';
-    }
+    return _sendAiRequest(
+      message: prompt,
+      history: const <Map<String, String>>[],
+      timeoutMessage: 'AI Link timeout. The server took too long to respond.',
+      networkMessage: 'Network error. Please check your internet connection.',
+      fallbackMessage: 'AI Link offline. Please check your data connection.',
+    );
   }
 
-  /// Specialized chat with history
+  /// Chat with history.
   Future<String> chatWithAi(
-    TripSummary s,
+    TripSummary summary,
     String query,
     List<Map<String, String>> history,
   ) async {
-    final settings = SettingsService.instance;
+    final SettingsService settings = SettingsService.instance;
 
-    // BUG FIX: Now respects user settings (Metric vs Imperial)
-    // instead of hardcoding distanceMiles.
-    final distance =
-        settings.toDisplayDistance(s.distanceMiles).toStringAsFixed(2);
-    final unit = settings.distanceUnit;
+    final String safeQuery = _limitText(
+      query.trim(),
+      maxChars: _maxUserQueryChars,
+    );
 
-    final prompt = 'The user is asking about a trip of $distance $unit. '
-        'Answer helpfully.\n\nQuestion: $query';
+    if (safeQuery.isEmpty) {
+      return 'Please type a question first.';
+    }
 
+    final String distance =
+        settings.toDisplayDistance(summary.distanceMiles).toStringAsFixed(2);
+
+    final int avgSpeed = settings.toDisplaySpeed(summary.avgSpeedMph).round();
+    final int maxSpeed = settings.toDisplaySpeed(summary.maxSpeedMph).round();
+
+    final String prompt = _limitText('''
+You are TrackPro AI, a helpful driving and trip coach.
+
+CURRENT TRIP CONTEXT:
+- Distance: $distance ${settings.distanceUnit}
+- Avg Speed: $avgSpeed ${settings.speedUnit}
+- Max Speed: $maxSpeed ${settings.speedUnit}
+- Duration: ${summary.formattedTotalTime}
+- Stopped Time: ${summary.formattedStoppedTime}
+- Moving Time: ${summary.formattedMovingTime}
+
+USER QUESTION:
+$safeQuery
+
+ANSWER RULES:
+- Answer clearly and practically.
+- Use the trip data when relevant.
+- If the question asks for safety, mention safe driving advice.
+- Be concise unless the user asks for detail.
+''');
+
+    return _sendAiRequest(
+      message: prompt,
+      history: _sanitizeHistory(history),
+      timeoutMessage: 'Request timed out. The AI took too long to respond.',
+      networkMessage: 'Network error. Please check your internet connection.',
+      fallbackMessage: 'Chat error. Please check your connection.',
+    );
+  }
+
+  Future<String> _sendAiRequest({
+    required String message,
+    required List<Map<String, String>> history,
+    required String timeoutMessage,
+    required String networkMessage,
+    required String fallbackMessage,
+  }) async {
     try {
-      final response = await _client
+      final http.Response response = await _httpClient
           .post(
-            Uri.parse(_endpointUrl),
-            headers: {'Content-Type': 'application/json'},
-            body: jsonEncode({
-              'message': prompt,
+            _endpointUri,
+            headers: const <String, String>{
+              'Content-Type': 'application/json',
+              'Accept': 'application/json',
+            },
+            body: jsonEncode(<String, dynamic>{
+              'message': message,
               'history': history,
               'stream': false,
             }),
           )
-          .timeout(const Duration(seconds: 30));
+          .timeout(_requestTimeout);
 
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body) as Map<String, dynamic>;
-        if (data['ok'] == true) {
-          return data['reply']?.toString() ??
-              'Received empty response from AI.';
-        }
-        return "I'm sorry, I couldn't process that: ${data['error'] ?? 'Unknown error'}";
-      }
-      return 'Server error: ${response.statusCode}';
+      return _parseAiResponse(response);
     } on TimeoutException {
-      return 'Request timed out. The AI took too long to respond.';
-    } on SocketException {
-      return 'Network error. Please check your internet connection.';
-    } catch (e) {
-      return 'Chat error. Please check your connection.';
+      return timeoutMessage;
+    } on http.ClientException catch (e, st) {
+      debugPrint('AiService network error: $e\n$st');
+      return networkMessage;
+    } on FormatException catch (e, st) {
+      debugPrint('AiService JSON format error: $e\n$st');
+      return 'AI returned an invalid response. Please try again.';
+    } catch (e, st) {
+      debugPrint('AiService request failed: $e\n$st');
+      return fallbackMessage;
     }
   }
 
-  /// Closes the persistent client when no longer needed
+  String _parseAiResponse(http.Response response) {
+    final int statusCode = response.statusCode;
+    final String body = response.body.trim();
+
+    if (statusCode < 200 || statusCode >= 300) {
+      return 'Server error: $statusCode';
+    }
+
+    if (body.isEmpty) {
+      return 'Received empty response from AI.';
+    }
+
+    final dynamic decoded = jsonDecode(body);
+
+    if (decoded is! Map) {
+      return 'AI returned an unexpected response format.';
+    }
+
+    final Map<String, dynamic> data = decoded.map(
+      (dynamic key, dynamic value) => MapEntry<String, dynamic>(
+        key.toString(),
+        value,
+      ),
+    );
+
+    final bool ok = data['ok'] == true;
+
+    if (!ok) {
+      final String error = data['error']?.toString().trim() ?? '';
+      return error.isEmpty
+          ? 'Analysis error: Unknown error'
+          : 'Analysis error: $error';
+    }
+
+    final String reply = _extractReply(data);
+
+    if (reply.trim().isEmpty) {
+      return 'Received empty response from AI.';
+    }
+
+    return reply.trim();
+  }
+
+  String _extractReply(Map<String, dynamic> data) {
+    final dynamic reply = data['reply'] ??
+        data['message'] ??
+        data['text'] ??
+        data['content'] ??
+        data['response'];
+
+    if (reply == null) return '';
+
+    if (reply is String) return reply;
+
+    if (reply is Map) {
+      final dynamic nested =
+          reply['content'] ?? reply['text'] ?? reply['reply'];
+      return nested?.toString() ?? '';
+    }
+
+    return reply.toString();
+  }
+
+  List<Map<String, String>> _sanitizeHistory(
+      List<Map<String, String>> history) {
+    if (history.isEmpty) return const <Map<String, String>>[];
+
+    final List<Map<String, String>> cleaned = <Map<String, String>>[];
+
+    for (final Map<String, String> item in history) {
+      final String role = item['role']?.trim() ?? '';
+      final String content = item['content']?.trim() ?? '';
+
+      if (content.isEmpty) continue;
+
+      final bool validRole = role == 'user' || role == 'assistant';
+      if (!validRole) continue;
+
+      cleaned.add(<String, String>{
+        'role': role,
+        'content': _limitText(content, maxChars: 2000),
+      });
+    }
+
+    if (cleaned.length <= _maxHistoryItems) {
+      return List<Map<String, String>>.unmodifiable(cleaned);
+    }
+
+    return List<Map<String, String>>.unmodifiable(
+      cleaned.sublist(cleaned.length - _maxHistoryItems),
+    );
+  }
+
+  String _formatWind(double windSpeed, SettingsService settings) {
+    if (settings.useKmh) {
+      return '${(windSpeed * 3.6).round()} km/h';
+    }
+
+    return '${windSpeed.round()} mph';
+  }
+
+  String _limitText(String value, {int maxChars = _maxPromptChars}) {
+    if (value.length <= maxChars) return value;
+
+    return '${value.substring(0, maxChars)}\n\n[Text shortened for request size.]';
+  }
+
+  /// Closes the persistent HTTP client.
+  ///
+  /// Safe to call when the app is shutting down. The next request will recreate
+  /// the client automatically.
   void dispose() {
-    _client.close();
+    _client?.close();
+    _client = null;
   }
 }
