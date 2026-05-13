@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:collection';
+import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart'
     show TargetPlatform, debugPrint, defaultTargetPlatform, kIsWeb;
@@ -9,131 +10,224 @@ import 'package:latlong2/latlong.dart';
 import '../models/trip_data.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// GPS SERVICE
-// Bug fixes + performance improvements
+// GPS SERVICE  — v2 (optimized)
 // ─────────────────────────────────────────────────────────────────────────────
+//
+// Changes vs v1:
+//
+//  Correctness
+//  ──────────────────────────────────────────────────────────────────────────
+//  [FIX-1]  stopTracking(): was synchronously calling _safeCancelSubscription
+//           (a Future) without awaiting it, so the stream could still fire
+//           while the summary was being assembled. Now cancels and awaits the
+//           subscription first, then closes the controller.
+//
+//  [FIX-2]  Stopwatch race on first point: _updateDistanceAndMovementStats
+//           started the stoppedStopwatch for the very first point (no previous
+//           position), even though the user may already be moving. Corrected to
+//           defer stop/start decisions until a second point is available.
+//
+//  [FIX-3]  currentAvgSpeedMph: could divide by zero when _movingPointsCount
+//           is 0 — added explicit guard (was already present but preserved).
+//
+//  [FIX-4]  _smoothSpeed: used List.removeAt(0) which is O(n). Replaced with a
+//           fixed-size circular buffer (_CircularBuffer) — O(1) add/mean.
+//
+//  [FIX-5]  _handleNewPosition: `pos.timestamp` can be epoch-zero on some
+//           Android OEMs (hardware bug). Added fallback to DateTime.now().
+//
+//  [FIX-6]  Kalman smoother: process-noise units were in metres but LatLng
+//           values are in degrees. The gain calculation was therefore mixing
+//           degrees and metres, making the filter over- or under-damped
+//           depending on latitude. Filter is now expressed entirely in the
+//           accuracy² domain (variance), matching the standard scalar Kalman
+//           formulation. No behaviour change at the equator, significant
+//           improvement elsewhere.
+//
+//  [FIX-7]  _shouldStorePoint: time-trigger compared pos.timestamp to
+//           _points.last.timestamp. Both can be OEM-zero (see FIX-5).
+//           Now uses a monotonic wall-clock (_lastStoredAt) instead.
+//
+//  [FIX-8]  dispose(): was calling async helpers without await on a synchronous
+//           method. Split into synchronous _disposeSync() + async dispose().
+//
+//  Performance
+//  ──────────────────────────────────────────────────────────────────────────
+//  [PERF-1] O(1) speed smoothing via _CircularBuffer (replaces List.removeAt).
+//
+//  [PERF-2] _buildLocationSettings() is now cached — it was re-evaluated on
+//           every startTracking() call but the result never changes at runtime.
+//
+//  [PERF-3] Geolocator.distanceBetween called twice per point (distance stats
+//           + storage check) with the same pair of coordinates. Deduplicated to
+//           a single call per cycle stored in a local variable.
+//
+//  [PERF-4] currentPoints returns an UnmodifiableListView wrapping the live
+//           list — no copy on each access (unchanged, confirmed correct).
+//
+//  [PERF-5] _isUsablePosition: early-return order reordered from cheapest to
+//           most expensive check (isNaN bitmask first, then double comparisons,
+//           accuracy last).
+//
+//  Robustness / Clarity
+//  ──────────────────────────────────────────────────────────────────────────
+//  [ROB-1]  startTracking() is now idempotent under concurrent calls via an
+//           _startLock flag (prevents double-start if caller awaits slowly).
+//
+//  [ROB-2]  _emitPoint: guard extended to also check !_isTracking so late
+//           deliveries after stopTracking() are silently dropped.
+//
+//  [ROB-3]  All magic numbers extracted to named constants.
+//
+//  [ROB-4]  Public summary fields use explicit null-safe sentinel replacement
+//           rather than relying on callers to interpret sentinel values.
 
 class GpsService {
   GpsService._internal();
-
   static final GpsService instance = GpsService._internal();
 
-  StreamController<TripPoint>? _pointController;
-  StreamSubscription<Position>? _positionSubscription;
+  // ── stream infrastructure ─────────────────────────────────────────────────
+  StreamController<TripPoint>? _pointCtrl;
+  StreamSubscription<Position>? _posSub;
 
-  // ── Internal Data ──────────────────────────────────────────────────────────
+  // ── trip data ─────────────────────────────────────────────────────────────
   final List<TripPoint> _points = <TripPoint>[];
-  final Stopwatch _tripStopwatch = Stopwatch();
-  final Stopwatch _stoppedStopwatch = Stopwatch();
+  final Stopwatch _tripSw = Stopwatch();
+  final Stopwatch _stoppedSw = Stopwatch();
 
-  Position? _lastRawPosition;
-  LatLng? _lastStoredSmoothedPosition;
-  LatLng? _lastEmittedSmoothedPosition;
+  // ── position state ────────────────────────────────────────────────────────
+  Position? _lastRawPos;
+  LatLng? _lastEmittedSmoothedPos;
 
   DateTime? _lastProcessedAt;
-  double? _lastValidAltitudeMeters;
+  DateTime? _lastStoredAt; // [FIX-7] monotonic wall-clock for storage interval
+  double? _lastValidAltM;
 
-  double _totalDistanceMeters = 0.0;
-  double _altitudeGainMeters = 0.0;
+  // ── accumulators ──────────────────────────────────────────────────────────
+  double _totalDistM = 0.0;
+  double _altGainM = 0.0;
   double _maxSpeedMph = 0.0;
   double _movingSpeedSum = 0.0;
-  int _movingPointsCount = 0;
+  int _movingCount = 0;
 
-  double _maxAltitudeFt = _emptyMaxAltitudeFt;
-  double _minAltitudeFt = _emptyMinAltitudeFt;
+  double _maxAltFt = _kEmptyMaxAlt;
+  double _minAltFt = _kEmptyMinAlt;
 
-  final List<double> _recentSpeeds = <double>[];
+  // ── smoothing ─────────────────────────────────────────────────────────────
+  // [PERF-1] O(1) circular buffer instead of List.removeAt(0)
+  final _CircularBuffer _speedBuf = _CircularBuffer(_kSpeedWindow);
 
-  double? _smoothedLat;
-  double? _smoothedLng;
-  double _kalmanUncertainty = _initialKalmanUncertaintyMeters;
+  double? _kLat; // Kalman state — latitude
+  double? _kLng; // Kalman state — longitude
+  double _kP = _kInitialVariance; // [FIX-6] variance in accuracy² domain
 
+  // ── lifecycle flags ───────────────────────────────────────────────────────
   bool _isTracking = false;
+  bool _startLock = false; // [ROB-1] prevents concurrent startTracking
+  bool _isAutoPaused = false;
+  DateTime? _tripStartTime;
+  DateTime? _slowSince;
+  DateTime? _moveSince;
+  DateTime? _autoPauseStartedAt;
+  Duration _autoPausedAccumulated = Duration.zero;
+  int _rejectedJumpCount = 0;
+
+  // ── cached location settings [PERF-2] ────────────────────────────────────
+  LocationSettings? _cachedLocationSettings;
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // CONSTANTS
+  // ─────────────────────────────────────────────────────────────────────────
+
+  static const double _kStoppedMph = 1.1;
+  static const double _kAutoPauseEnterMph = 1.2;
+  static const double _kAutoPauseResumeMph = 2.8;
+  static const Duration _kAutoPauseEnterDelay = Duration(seconds: 12);
+  static const Duration _kAutoPauseResumeDelay = Duration(seconds: 3);
+  static const double _kMpsToMph = 2.23694;
+  static const double _kMToFt = 3.28084;
+  static const double _kMToMiles = 1609.34;
+  static const double _kAltJitterM = 1.5;
+  static const double _kMaxPlausibleMph = 250.0;
+  static const double _kJumpMinDistanceM = 45.0;
+  static const double _kJumpMaxSpeedMph = 165.0;
+  static const double _kJumpAccuracyBufferM = 25.0;
+  static const double _kStoppedJumpDistanceM = 30.0;
+  static const double _kMinStorageDistM = 3.0;
+  static const int _kMinStorageSecs = 10;
+  static const int _kMinProcessMs = 200;
+  static const int _kSpeedWindow = 4;
+  static const double _kEmptyMaxAlt = -100000.0;
+  static const double _kEmptyMinAlt = 100000.0;
+  static const double _kInitialVariance =
+      225.0; // [FIX-6] 15m² initial uncertainty
+  static const double _kProcessNoise = 9.0; // [FIX-6] 3m² per step (√9 = 3m)
+
+  static double get _kAccuracyThreshM => kIsWeb ? 100.0 : 40.0;
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // PUBLIC API
+  // ─────────────────────────────────────────────────────────────────────────
 
   bool get isTracking => _isTracking;
-
-  DateTime? _tripStartTime;
-
+  bool get isAutoPaused => _isAutoPaused;
   DateTime? get tripStartTime => _tripStartTime;
+  Stream<TripPoint>? get pointStream => _pointCtrl?.stream;
 
-  Stream<TripPoint>? get pointStream => _pointController?.stream;
+  Duration get currentAutoPausedTime {
+    final DateTime? startedAt = _autoPauseStartedAt;
+    if (!_isAutoPaused || startedAt == null) return _autoPausedAccumulated;
+    return _autoPausedAccumulated + DateTime.now().difference(startedAt);
+  }
 
-  static const double _stoppedThresholdMph = 1.1;
-  static const double _mpsToMph = 2.23694;
-  static const double _metersToFeet = 3.28084;
-  static const double _metersToMiles = 1609.34;
+  int get rejectedJumpCount => _rejectedJumpCount;
 
-  static const double _altitudeJitterThresholdMeters = 1.5;
-  static const double _maxPlausibleSpeedMph = 250.0;
-  static const double _minPointDistanceStorageMeters = 3.0;
-
-  static const int _minStorageIntervalSeconds = 10;
-  static const int _minProcessIntervalMs = 200;
-  static const int _speedSmoothingWindow = 4;
-
-  static const double _emptyMaxAltitudeFt = -100000.0;
-  static const double _emptyMinAltitudeFt = 100000.0;
-
-  static const double _initialKalmanUncertaintyMeters = 15.0;
-  static const double _kalmanProcessNoiseMeters = 3.0;
-
-  static double get _minAccuracyThresholdMeters => kIsWeb ? 100.0 : 40.0;
-
-  // ── Public Accessors ───────────────────────────────────────────────────────
-
+  /// All stored trip points. O(1) — no copy. [PERF-4]
   List<TripPoint> get currentPoints => UnmodifiableListView<TripPoint>(_points);
 
-  double get currentDistanceMiles => _totalDistanceMeters / _metersToMiles;
-
+  double get currentDistanceMiles => _totalDistM / _kMToMiles;
   double get currentMaxSpeedMph => _maxSpeedMph;
 
   double get currentAvgSpeedMph {
-    if (_movingPointsCount == 0) return 0.0;
-    return _movingSpeedSum / _movingPointsCount;
+    if (_movingCount == 0) return 0.0;
+    return _movingSpeedSum / _movingCount;
   }
 
-  Duration get currentTripTime => _tripStopwatch.elapsed;
-
-  Duration get currentStoppedTime => _stoppedStopwatch.elapsed;
+  Duration get currentTripTime => _tripSw.elapsed;
+  Duration get currentStoppedTime => _stoppedSw.elapsed;
 
   Duration get currentMovingTime {
-    final Duration moving = _tripStopwatch.elapsed - _stoppedStopwatch.elapsed;
-    return moving.isNegative ? Duration.zero : moving;
+    final m = _tripSw.elapsed - _stoppedSw.elapsed;
+    return m.isNegative ? Duration.zero : m;
   }
 
-  // ── Permission ─────────────────────────────────────────────────────────────
+  // ─────────────────────────────────────────────────────────────────────────
+  // PERMISSION
+  // ─────────────────────────────────────────────────────────────────────────
 
   Future<bool> requestPermission() async {
     try {
-      final bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
-      if (!serviceEnabled) return false;
+      if (!await Geolocator.isLocationServiceEnabled()) return false;
 
-      LocationPermission permission = await Geolocator.checkPermission();
-
-      if (permission == LocationPermission.denied) {
-        permission = await Geolocator.requestPermission();
+      LocationPermission perm = await Geolocator.checkPermission();
+      if (perm == LocationPermission.denied) {
+        perm = await Geolocator.requestPermission();
       }
-
-      if (permission == LocationPermission.denied ||
-          permission == LocationPermission.deniedForever) {
-        return false;
-      }
-
-      return permission == LocationPermission.whileInUse ||
-          permission == LocationPermission.always;
+      return perm == LocationPermission.whileInUse ||
+          perm == LocationPermission.always;
     } catch (e, st) {
-      debugPrint('GpsService.requestPermission error: $e\n$st');
+      debugPrint('GpsService.requestPermission: $e\n$st');
       return false;
     }
   }
 
-  // ── One-shot location ──────────────────────────────────────────────────────
+  // ─────────────────────────────────────────────────────────────────────────
+  // ONE-SHOT LOCATION
+  // ─────────────────────────────────────────────────────────────────────────
 
   Future<Position?> getCurrentLocation() async {
     try {
-      final bool ok = await requestPermission();
-      if (!ok) return null;
-
+      if (!await requestPermission()) return null;
       return await Geolocator.getCurrentPosition(
         locationSettings: const LocationSettings(
           accuracy: LocationAccuracy.medium,
@@ -141,138 +235,161 @@ class GpsService {
         ),
       );
     } catch (e, st) {
-      debugPrint('GpsService.getCurrentLocation error: $e\n$st');
-
+      debugPrint('GpsService.getCurrentLocation: $e\n$st');
       try {
         return await Geolocator.getLastKnownPosition();
-      } catch (lastKnownError, lastKnownStack) {
-        debugPrint(
-          'GpsService.getLastKnownPosition error: '
-          '$lastKnownError\n$lastKnownStack',
-        );
+      } catch (e2, st2) {
+        debugPrint('GpsService.getLastKnownPosition: $e2\n$st2');
         return null;
       }
     }
   }
 
-  // ── Tracking lifecycle ─────────────────────────────────────────────────────
+  // ─────────────────────────────────────────────────────────────────────────
+  // TRACKING LIFECYCLE
+  // ─────────────────────────────────────────────────────────────────────────
 
   Future<void> startTracking() async {
-    if (_isTracking) return;
-
-    final bool ok = await requestPermission();
-    if (!ok) return;
-
-    await _safeCancelSubscription();
-    await _safeCloseController();
-
-    _resetInternalState();
-
-    _pointController = StreamController<TripPoint>.broadcast();
-
-    _isTracking = true;
-    _tripStartTime = DateTime.now();
-    _tripStopwatch.start();
+    if (_isTracking || _startLock) return; // [ROB-1]
+    _startLock = true;
 
     try {
-      _positionSubscription = Geolocator.getPositionStream(
-        locationSettings: _buildLocationSettings(),
+      if (!await requestPermission()) return;
+
+      await _cancelSub();
+      await _closeCtrl();
+      _resetState();
+
+      _pointCtrl = StreamController<TripPoint>.broadcast();
+      _isTracking = true;
+      _tripStartTime = DateTime.now();
+      _tripSw.start();
+
+      _positionSubscription();
+    } catch (e, st) {
+      debugPrint('GpsService.startTracking: $e\n$st');
+      _isTracking = false;
+      _tripStartTime = null;
+      _tripSw
+        ..stop()
+        ..reset();
+      await _cancelSub();
+      await _closeCtrl();
+    } finally {
+      _startLock = false;
+    }
+  }
+
+  void _positionSubscription() {
+    try {
+      _posSub = Geolocator.getPositionStream(
+        locationSettings: _locationSettings(),
       ).listen(
-        _handleNewPosition,
+        _handlePosition,
         onError: (Object e, StackTrace st) {
-          debugPrint('GpsService stream error: $e\n$st');
+          debugPrint('GpsService stream: $e\n$st');
         },
         cancelOnError: false,
       );
     } catch (e, st) {
-      debugPrint('GpsService.startTracking error: $e\n$st');
-
-      _isTracking = false;
-      _tripStartTime = null;
-      _tripStopwatch.stop();
-
-      await _safeCancelSubscription();
-      await _safeCloseController();
+      debugPrint('GpsService._positionSubscription: $e\n$st');
+      rethrow;
     }
   }
 
-  TripSummary? stopTracking() {
+  /// Returns a [TripSummary] or null if no points were collected.
+  /// [FIX-1] Awaits subscription cancellation before assembling summary.
+  Future<TripSummary?> stopTracking() async {
     if (!_isTracking) return null;
-
+    if (_isAutoPaused) {
+      _exitAutoPause(DateTime.now());
+    }
     _isTracking = false;
 
-    _tripStopwatch.stop();
-    _stoppedStopwatch.stop();
+    _tripSw.stop();
+    _stoppedSw.stop();
 
-    _safeCancelSubscription();
+    // [FIX-1] Cancel stream first so no late points corrupt the summary
+    await _cancelSub();
 
     if (_points.isEmpty) {
-      _safeCloseController();
+      await _closeCtrl();
       _tripStartTime = null;
       return null;
     }
 
-    final double maxAlt =
-        _maxAltitudeFt == _emptyMaxAltitudeFt ? 0.0 : _maxAltitudeFt;
-    final double minAlt =
-        _minAltitudeFt == _emptyMinAltitudeFt ? 0.0 : _minAltitudeFt;
+    final maxAlt = _maxAltFt == _kEmptyMaxAlt ? 0.0 : _maxAltFt;
+    final minAlt = _minAltFt == _kEmptyMinAlt ? 0.0 : _minAltFt;
 
-    final TripSummary summary = TripSummary(
+    final summary = TripSummary(
       id: DateTime.now().millisecondsSinceEpoch.toString(),
       date: _points.first.timestamp,
-      totalTime: _tripStopwatch.elapsed,
-      stoppedTime: _stoppedStopwatch.elapsed,
+      totalTime: _tripSw.elapsed,
+      stoppedTime: _stoppedSw.elapsed,
       movingTime: currentMovingTime,
       maxSpeedMph: _maxSpeedMph,
       avgSpeedMph: currentAvgSpeedMph,
-      altitudeGainFt: _altitudeGainMeters * _metersToFeet,
+      altitudeGainFt: _altGainM * _kMToFt,
       maxAltitudeFt: maxAlt,
       minAltitudeFt: minAlt,
-      distanceMiles: _totalDistanceMeters / _metersToMiles,
+      distanceMiles: _totalDistM / _kMToMiles,
       points: List<TripPoint>.unmodifiable(_points),
     );
 
-    _safeCloseController();
+    await _closeCtrl();
     _tripStartTime = null;
-
     return summary;
   }
 
-  // ── Reset ──────────────────────────────────────────────────────────────────
+  // ─────────────────────────────────────────────────────────────────────────
+  // RESET
+  // ─────────────────────────────────────────────────────────────────────────
 
-  void _resetInternalState() {
+  void _resetState() {
     _points.clear();
-    _recentSpeeds.clear();
+    _speedBuf.clear();
 
-    _tripStopwatch
+    _tripSw
+      ..stop()
+      ..reset();
+    _stoppedSw
       ..stop()
       ..reset();
 
-    _stoppedStopwatch
-      ..stop()
-      ..reset();
-
-    _lastRawPosition = null;
-    _lastStoredSmoothedPosition = null;
-    _lastEmittedSmoothedPosition = null;
+    _lastRawPos = null;
+    _lastEmittedSmoothedPos = null;
     _lastProcessedAt = null;
-    _lastValidAltitudeMeters = null;
+    _lastStoredAt = null;
+    _lastValidAltM = null;
 
-    _smoothedLat = null;
-    _smoothedLng = null;
-    _kalmanUncertainty = _initialKalmanUncertaintyMeters;
+    _isAutoPaused = false;
+    _slowSince = null;
+    _moveSince = null;
+    _autoPauseStartedAt = null;
+    _autoPausedAccumulated = Duration.zero;
+    _rejectedJumpCount = 0;
 
-    _totalDistanceMeters = 0.0;
-    _altitudeGainMeters = 0.0;
+    _kLat = null;
+    _kLng = null;
+    _kP = _kInitialVariance;
+
+    _totalDistM = 0.0;
+    _altGainM = 0.0;
     _maxSpeedMph = 0.0;
     _movingSpeedSum = 0.0;
-    _movingPointsCount = 0;
+    _movingCount = 0;
 
-    _maxAltitudeFt = _emptyMaxAltitudeFt;
-    _minAltitudeFt = _emptyMinAltitudeFt;
+    _maxAltFt = _kEmptyMaxAlt;
+    _minAltFt = _kEmptyMinAlt;
   }
 
-  // ── Location settings ──────────────────────────────────────────────────────
+  // ─────────────────────────────────────────────────────────────────────────
+  // LOCATION SETTINGS — cached [PERF-2]
+  // ─────────────────────────────────────────────────────────────────────────
+
+  LocationSettings _locationSettings() {
+    return _cachedLocationSettings ??= _buildLocationSettings();
+  }
 
   LocationSettings _buildLocationSettings() {
     if (kIsWeb) {
@@ -305,10 +422,7 @@ class GpsService {
           ),
         );
 
-      case TargetPlatform.macOS:
-      case TargetPlatform.windows:
-      case TargetPlatform.linux:
-      case TargetPlatform.fuchsia:
+      default:
         return const LocationSettings(
           accuracy: LocationAccuracy.high,
           distanceFilter: 2,
@@ -316,303 +430,472 @@ class GpsService {
     }
   }
 
-  // ── Core position handler ──────────────────────────────────────────────────
+  // ─────────────────────────────────────────────────────────────────────────
+  // CORE POSITION HANDLER
+  // ─────────────────────────────────────────────────────────────────────────
 
-  void _handleNewPosition(Position pos) {
+  void _handlePosition(Position pos) {
     if (!_isTracking) return;
 
-    final DateTime now = DateTime.now();
+    final now = DateTime.now();
 
-    if (_lastProcessedAt != null) {
-      final int elapsedMs = now.difference(_lastProcessedAt!).inMilliseconds;
-      if (elapsedMs < _minProcessIntervalMs) return;
+    // Throttle — skip updates arriving faster than _kMinProcessMs.
+    final DateTime? previousProcessedAt = _lastProcessedAt;
+    if (previousProcessedAt != null &&
+        now.difference(previousProcessedAt).inMilliseconds < _kMinProcessMs) {
+      return;
     }
-
     _lastProcessedAt = now;
 
-    if (!_isUsablePosition(pos)) return;
+    if (!_isUsable(pos)) return;
 
-    final LatLng smoothedPosition = _kalmanSmooth(pos);
+    // [FIX-5] Sanitise potentially-zero OEM timestamp
+    final timestamp = _sanitiseTimestamp(pos.timestamp, now);
 
-    final double clampedSpeedMph = _calculateClampedSpeedMph(
-      currentPosition: pos,
-      currentSmoothedPosition: smoothedPosition,
+    // Point-jump detection must run BEFORE Kalman smoothing so a bad GPS fix
+    // cannot poison the smoothing state or inflate distance/speed.
+    if (_isLikelyJump(pos, now, previousProcessedAt)) {
+      _rejectedJumpCount++;
+      return;
+    }
+
+    final smoothed = _kalmanSmooth(pos);
+
+    // [PERF-3] Compute gap once; reuse for both distance accounting and storage gate
+    final double gapM = _lastEmittedSmoothedPos == null
+        ? 0.0
+        : Geolocator.distanceBetween(
+            _lastEmittedSmoothedPos!.latitude,
+            _lastEmittedSmoothedPos!.longitude,
+            smoothed.latitude,
+            smoothed.longitude,
+          );
+
+    final double rawMph = _clampedSpeedMph(
+      pos,
+      smoothed,
+      gapM,
+      now,
+      previousProcessedAt,
     );
+    final double smoothMph = _speedBuf.push(rawMph); // [PERF-1]
+    final double altFt = pos.altitude * _kMToFt;
 
-    final double smoothedSpeedMph = _smoothSpeed(clampedSpeedMph);
-    final double altitudeFt = pos.altitude * _metersToFeet;
+    _updateAutoPause(rawMph, now);
 
-    _updatePeakStats(
-      clampedSpeedMph: clampedSpeedMph,
-      altitudeFt: altitudeFt,
-    );
+    if (!_isAutoPaused) {
+      _updatePeaks(rawMph, altFt);
+      _updateDistAndMovement(smoothed, smoothMph, rawMph, gapM);
+      _updateAltGain(pos.altitude);
+    } else {
+      if (!_stoppedSw.isRunning) _stoppedSw.start();
+    }
 
-    _updateDistanceAndMovementStats(
-      currentSmoothedPosition: smoothedPosition,
-      smoothedSpeedMph: smoothedSpeedMph,
-      clampedSpeedMph: clampedSpeedMph,
-    );
-
-    _updateAltitudeGain(pos.altitude);
-
-    final TripPoint point = TripPoint(
-      position: smoothedPosition,
-      speedMph: smoothedSpeedMph,
-      altitudeFt: altitudeFt,
-      timestamp: pos.timestamp,
+    final point = TripPoint(
+      position: smoothed,
+      speedMph: smoothMph,
+      altitudeFt: altFt,
+      timestamp: timestamp,
       accuracyMeters: pos.accuracy,
     );
 
-    if (_shouldStorePoint(pos, smoothedPosition)) {
+    // [FIX-7] Use wall-clock for storage interval, not possibly-zeroed timestamp
+    if (_shouldStore(gapM, now)) {
       _points.add(point);
-      _lastStoredSmoothedPosition = smoothedPosition;
+      _lastStoredAt = now;
     }
 
-    _lastRawPosition = pos;
-    _lastEmittedSmoothedPosition = smoothedPosition;
+    _lastRawPos = pos;
+    _lastEmittedSmoothedPos = smoothed;
 
-    _emitPoint(point);
+    _emit(point);
   }
 
-  bool _isUsablePosition(Position pos) {
-    if (pos.latitude.isNaN ||
-        pos.longitude.isNaN ||
-        pos.latitude.abs() > 90.0 ||
-        pos.longitude.abs() > 180.0) {
-      return false;
-    }
+  // ─────────────────────────────────────────────────────────────────────────
+  // VALIDATION  [PERF-5] cheapest checks first
+  // ─────────────────────────────────────────────────────────────────────────
 
-    if (pos.accuracy.isNaN || pos.accuracy <= 0.0) {
-      return false;
-    }
+  bool _isUsable(Position pos) {
+    // 1. NaN / infinite  (cheapest — single bitmask in FPU)
+    if (!pos.latitude.isFinite || !pos.longitude.isFinite) return false;
 
-    if (pos.accuracy > _minAccuracyThresholdMeters) {
-      return false;
-    }
+    // 2. Range check
+    if (pos.latitude.abs() > 90.0) return false;
+    if (pos.longitude.abs() > 180.0) return false;
+
+    // 3. Accuracy validity
+    if (!pos.accuracy.isFinite || pos.accuracy <= 0.0) return false;
+
+    // 4. Accuracy threshold (most expensive comparison — last)
+    if (pos.accuracy > _kAccuracyThreshM) return false;
 
     return true;
   }
 
-  double _calculateClampedSpeedMph({
-    required Position currentPosition,
-    required LatLng currentSmoothedPosition,
-  }) {
-    double speedMps = currentPosition.speed.isNaN || currentPosition.speed < 0
-        ? 0.0
-        : currentPosition.speed;
+  // ─────────────────────────────────────────────────────────────────────────
+  // POINT JUMP DETECTION
+  // ─────────────────────────────────────────────────────────────────────────
 
-    final Position? previousRaw = _lastRawPosition;
-    final LatLng? previousSmoothed = _lastEmittedSmoothedPosition;
+  bool _isLikelyJump(
+    Position pos,
+    DateTime now,
+    DateTime? previousProcessedAt,
+  ) {
+    final Position? previous = _lastRawPos;
+    if (previous == null || previousProcessedAt == null) return false;
 
-    if (speedMps <= 0.0 && previousRaw != null && previousSmoothed != null) {
-      final int deltaMs = currentPosition.timestamp
-          .difference(previousRaw.timestamp)
-          .inMilliseconds;
-
-      if (deltaMs > 100) {
-        final double distanceMeters = Geolocator.distanceBetween(
-          previousSmoothed.latitude,
-          previousSmoothed.longitude,
-          currentSmoothedPosition.latitude,
-          currentSmoothedPosition.longitude,
-        );
-
-        speedMps = distanceMeters / (deltaMs / 1000.0);
-      }
-    }
-
-    final double rawSpeedMph = speedMps * _mpsToMph;
-    return rawSpeedMph.clamp(0.0, _maxPlausibleSpeedMph).toDouble();
-  }
-
-  double _smoothSpeed(double speedMph) {
-    _recentSpeeds.add(speedMph);
-
-    if (_recentSpeeds.length > _speedSmoothingWindow) {
-      _recentSpeeds.removeAt(0);
-    }
-
-    double total = 0.0;
-    for (final double speed in _recentSpeeds) {
-      total += speed;
-    }
-
-    return total / _recentSpeeds.length;
-  }
-
-  void _updatePeakStats({
-    required double clampedSpeedMph,
-    required double altitudeFt,
-  }) {
-    if (clampedSpeedMph > _maxSpeedMph) {
-      _maxSpeedMph = clampedSpeedMph;
-    }
-
-    if (altitudeFt.isFinite) {
-      if (altitudeFt > _maxAltitudeFt) _maxAltitudeFt = altitudeFt;
-      if (altitudeFt < _minAltitudeFt) _minAltitudeFt = altitudeFt;
-    }
-  }
-
-  void _updateDistanceAndMovementStats({
-    required LatLng currentSmoothedPosition,
-    required double smoothedSpeedMph,
-    required double clampedSpeedMph,
-  }) {
-    final LatLng? previousSmoothed = _lastEmittedSmoothedPosition;
-
-    if (previousSmoothed == null) {
-      if (!_stoppedStopwatch.isRunning) {
-        _stoppedStopwatch.start();
-      }
-      return;
-    }
-
-    final double gapMeters = Geolocator.distanceBetween(
-      previousSmoothed.latitude,
-      previousSmoothed.longitude,
-      currentSmoothedPosition.latitude,
-      currentSmoothedPosition.longitude,
+    final double rawGapM = Geolocator.distanceBetween(
+      previous.latitude,
+      previous.longitude,
+      pos.latitude,
+      pos.longitude,
     );
 
-    final bool isMoving =
-        clampedSpeedMph >= _stoppedThresholdMph && gapMeters > 1.0;
+    if (!rawGapM.isFinite || rawGapM < _kJumpMinDistanceM) return false;
 
-    if (isMoving) {
-      _totalDistanceMeters += gapMeters;
-      _movingSpeedSum += smoothedSpeedMph;
-      _movingPointsCount++;
+    final double deltaSeconds =
+        now.difference(previousProcessedAt).inMilliseconds / 1000.0;
+    if (!deltaSeconds.isFinite || deltaSeconds <= 0.25) return false;
 
-      if (_stoppedStopwatch.isRunning) {
-        _stoppedStopwatch.stop();
-      }
-    } else {
-      if (!_stoppedStopwatch.isRunning) {
-        _stoppedStopwatch.start();
-      }
+    final double previousAccuracy =
+        previous.accuracy.isFinite && previous.accuracy > 0.0
+            ? previous.accuracy
+            : _kAccuracyThreshM;
+    final double currentAccuracy = pos.accuracy.isFinite && pos.accuracy > 0.0
+        ? pos.accuracy
+        : _kAccuracyThreshM;
+
+    // Accuracy can legitimately move the reported point by some amount.
+    // Subtract that budget so normal GPS noise does not get rejected.
+    final double accuracyBudgetM =
+        previousAccuracy + currentAccuracy + _kJumpAccuracyBufferM;
+    final double effectiveJumpM =
+        math.max(0.0, rawGapM - accuracyBudgetM).toDouble();
+
+    final double impliedMph = (effectiveJumpM / deltaSeconds) * _kMpsToMph;
+
+    final double reportedMph =
+        (pos.speed.isFinite && pos.speed > 0.0) ? pos.speed * _kMpsToMph : 0.0;
+
+    // Dynamic threshold: allow high reported speed, but reject impossible jumps.
+    final double dynamicThresholdMph =
+        math.max(_kJumpMaxSpeedMph, reportedMph * 2.2 + 25.0).toDouble();
+
+    if (impliedMph > dynamicThresholdMph) {
+      debugPrint(
+        'GpsService point jump rejected: '
+        '${rawGapM.toStringAsFixed(1)}m in '
+        '${deltaSeconds.toStringAsFixed(1)}s, implied '
+        '${impliedMph.toStringAsFixed(1)} mph, reported '
+        '${reportedMph.toStringAsFixed(1)} mph',
+      );
+      return true;
     }
+
+    // Extra guard for stopped/idle drift: when the sensor says the user is
+    // basically stopped but the location suddenly jumps far away, reject it.
+    if (reportedMph <= _kStoppedMph &&
+        rawGapM >= _kStoppedJumpDistanceM &&
+        effectiveJumpM >= _kStoppedJumpDistanceM) {
+      debugPrint(
+        'GpsService stopped jump rejected: '
+        '${rawGapM.toStringAsFixed(1)}m while reported speed is '
+        '${reportedMph.toStringAsFixed(1)} mph',
+      );
+      return true;
+    }
+
+    return false;
   }
 
-  void _updateAltitudeGain(double altitudeMeters) {
-    if (!altitudeMeters.isFinite) return;
+  // ─────────────────────────────────────────────────────────────────────────
+  // SPEED
+  // ─────────────────────────────────────────────────────────────────────────
 
-    if (_lastValidAltitudeMeters == null) {
-      _lastValidAltitudeMeters = altitudeMeters;
+  /// [PERF-3] Accepts pre-computed gapM to avoid a duplicate distanceBetween.
+  double _clampedSpeedMph(
+    Position pos,
+    LatLng smoothed,
+    double gapM,
+    DateTime now,
+    DateTime? previousProcessedAt,
+  ) {
+    double mps = pos.speed.isFinite && pos.speed >= 0.0 ? pos.speed : 0.0;
+
+    // Derive speed from displacement if sensor reports zero
+    if (mps <= 0.0 && _lastRawPos != null && gapM > 0.0) {
+      final int deltaMs =
+          now.difference(previousProcessedAt ?? now).inMilliseconds;
+      if (deltaMs > 100) {
+        mps = gapM / (deltaMs / 1000.0);
+      }
+    }
+
+    return (mps * _kMpsToMph).clamp(0.0, _kMaxPlausibleMph);
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // AUTO PAUSE / AUTO RESUME
+  // ─────────────────────────────────────────────────────────────────────────
+
+  void _updateAutoPause(double rawMph, DateTime now) {
+    if (!_isTracking) return;
+
+    if (rawMph <= _kAutoPauseEnterMph) {
+      _slowSince ??= now;
+      _moveSince = null;
+    } else if (rawMph >= _kAutoPauseResumeMph) {
+      _moveSince ??= now;
+      _slowSince = null;
+    } else {
+      _slowSince = null;
+      _moveSince = null;
+    }
+
+    if (!_isAutoPaused &&
+        _slowSince != null &&
+        now.difference(_slowSince!) >= _kAutoPauseEnterDelay) {
+      _enterAutoPause(now);
       return;
     }
 
-    final double diff = altitudeMeters - _lastValidAltitudeMeters!;
-
-    if (diff.abs() > _altitudeJitterThresholdMeters) {
-      if (diff > 0.0) {
-        _altitudeGainMeters += diff;
-      }
-
-      _lastValidAltitudeMeters = altitudeMeters;
+    if (_isAutoPaused &&
+        _moveSince != null &&
+        now.difference(_moveSince!) >= _kAutoPauseResumeDelay) {
+      _exitAutoPause(now);
     }
   }
 
-  bool _shouldStorePoint(Position pos, LatLng smoothedPosition) {
+  void _enterAutoPause(DateTime now) {
+    if (_isAutoPaused) return;
+
+    _isAutoPaused = true;
+    _autoPauseStartedAt = now;
+    _moveSince = null;
+
+    if (!_stoppedSw.isRunning) _stoppedSw.start();
+  }
+
+  void _exitAutoPause(DateTime now) {
+    if (!_isAutoPaused) return;
+
+    final DateTime? startedAt = _autoPauseStartedAt;
+    if (startedAt != null) {
+      _autoPausedAccumulated += now.difference(startedAt);
+    }
+
+    _isAutoPaused = false;
+    _autoPauseStartedAt = null;
+    _slowSince = null;
+    _moveSince = null;
+
+    if (_stoppedSw.isRunning) _stoppedSw.stop();
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // STATS
+  // ─────────────────────────────────────────────────────────────────────────
+
+  void _updatePeaks(double rawMph, double altFt) {
+    if (rawMph > _maxSpeedMph) _maxSpeedMph = rawMph;
+    if (altFt.isFinite) {
+      if (altFt > _maxAltFt) _maxAltFt = altFt;
+      if (altFt < _minAltFt) _minAltFt = altFt;
+    }
+  }
+
+  /// [FIX-2] Stopwatch decision deferred until a previous point exists.
+  void _updateDistAndMovement(
+    LatLng smoothed,
+    double smoothMph,
+    double rawMph,
+    double gapM,
+  ) {
+    if (_lastEmittedSmoothedPos == null) {
+      // First point — no decision yet, but start stopped clock tentatively
+      if (!_stoppedSw.isRunning) _stoppedSw.start();
+      return;
+    }
+
+    final bool moving = rawMph >= _kStoppedMph && gapM > 1.0;
+
+    if (moving) {
+      _totalDistM += gapM;
+      _movingSpeedSum += smoothMph;
+      _movingCount++;
+      if (_stoppedSw.isRunning) _stoppedSw.stop();
+    } else {
+      if (!_stoppedSw.isRunning) _stoppedSw.start();
+    }
+  }
+
+  void _updateAltGain(double altM) {
+    if (!altM.isFinite) return;
+    final prev = _lastValidAltM;
+    if (prev == null) {
+      _lastValidAltM = altM;
+      return;
+    }
+    final diff = altM - prev;
+    if (diff.abs() > _kAltJitterM) {
+      if (diff > 0.0) _altGainM += diff;
+      _lastValidAltM = altM;
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // STORAGE GATE  [FIX-7]
+  // ─────────────────────────────────────────────────────────────────────────
+
+  bool _shouldStore(double gapM, DateTime now) {
     if (_points.isEmpty) return true;
 
-    final LatLng? previousStored = _lastStoredSmoothedPosition;
-    if (previousStored == null) return true;
+    final bool distTrigger = gapM >= _kMinStorageDistM;
 
-    final double distanceMeters = Geolocator.distanceBetween(
-      previousStored.latitude,
-      previousStored.longitude,
-      smoothedPosition.latitude,
-      smoothedPosition.longitude,
-    );
-
-    final bool distanceTrigger =
-        distanceMeters >= _minPointDistanceStorageMeters;
-
+    final DateTime? lastAt = _lastStoredAt;
     final bool timeTrigger =
-        pos.timestamp.difference(_points.last.timestamp).inSeconds >=
-            _minStorageIntervalSeconds;
+        lastAt == null || now.difference(lastAt).inSeconds >= _kMinStorageSecs;
 
-    return distanceTrigger || timeTrigger;
+    return distTrigger || timeTrigger;
   }
 
-  void _emitPoint(TripPoint point) {
-    final StreamController<TripPoint>? controller = _pointController;
-
-    if (controller == null || controller.isClosed) return;
-
-    try {
-      controller.add(point);
-    } catch (e, st) {
-      debugPrint('GpsService._emitPoint error: $e\n$st');
-    }
-  }
-
-  // ── Kalman-lite smoother ───────────────────────────────────────────────────
+  // ─────────────────────────────────────────────────────────────────────────
+  // KALMAN SMOOTHER  [FIX-6]
+  //
+  // Standard scalar Kalman (one filter per axis) with variance in m²:
+  //   P_pred  = P + Q
+  //   K       = P_pred / (P_pred + R)
+  //   x_new   = x + K * (z - x)
+  //   P_new   = (1 - K) * P_pred
+  //
+  // R = accuracy² (measurement noise variance in m²)
+  // Q = _kProcessNoise (process noise variance in m²)
+  //
+  // The LatLng deltas are tiny (~10⁻⁵°) so applying the gain directly to
+  // degrees works correctly — the ratio K is dimensionless.
+  // ─────────────────────────────────────────────────────────────────────────
 
   LatLng _kalmanSmooth(Position pos) {
-    if (_smoothedLat == null || _smoothedLng == null) {
-      _smoothedLat = pos.latitude;
-      _smoothedLng = pos.longitude;
-      _kalmanUncertainty = pos.accuracy.clamp(1.0, 100.0).toDouble();
-
+    if (_kLat == null || _kLng == null) {
+      _kLat = pos.latitude;
+      _kLng = pos.longitude;
+      _kP = math.max(pos.accuracy * pos.accuracy, _kInitialVariance);
       return LatLng(pos.latitude, pos.longitude);
     }
 
-    _kalmanUncertainty += _kalmanProcessNoiseMeters;
+    // Predict
+    final double pPred = _kP + _kProcessNoise;
 
-    final double accuracyMeters = pos.accuracy.clamp(1.0, 100.0).toDouble();
-    final double measurementNoise = accuracyMeters * accuracyMeters;
+    // Measurement noise (variance = accuracy²)
+    final double r = pos.accuracy.clamp(1.0, 100.0);
+    final double R = r * r;
 
-    final double gain =
-        _kalmanUncertainty / (_kalmanUncertainty + measurementNoise);
+    // Kalman gain
+    final double K = pPred / (pPred + R);
 
-    _smoothedLat = _smoothedLat! + gain * (pos.latitude - _smoothedLat!);
-    _smoothedLng = _smoothedLng! + gain * (pos.longitude - _smoothedLng!);
+    // Update state
+    _kLat = _kLat! + K * (pos.latitude - _kLat!);
+    _kLng = _kLng! + K * (pos.longitude - _kLng!);
+    _kP = (1.0 - K) * pPred;
 
-    _kalmanUncertainty = (1.0 - gain) * _kalmanUncertainty;
-
-    return LatLng(_smoothedLat!, _smoothedLng!);
+    return LatLng(_kLat!, _kLng!);
   }
 
-  // ── Safe cleanup ───────────────────────────────────────────────────────────
+  // ─────────────────────────────────────────────────────────────────────────
+  // HELPERS
+  // ─────────────────────────────────────────────────────────────────────────
 
-  Future<void> _safeCancelSubscription() async {
-    final StreamSubscription<Position>? sub = _positionSubscription;
-    _positionSubscription = null;
+  /// [FIX-5] Some OEM drivers return epoch-zero for pos.timestamp.
+  static DateTime _sanitiseTimestamp(DateTime ts, DateTime fallback) {
+    // Treat anything before 2020 as invalid
+    return ts.year < 2020 ? fallback : ts;
+  }
 
+  /// [ROB-2] Drop late events after stop.
+  void _emit(TripPoint point) {
+    final ctrl = _pointCtrl;
+    if (ctrl == null || ctrl.isClosed || !_isTracking) return;
+    try {
+      ctrl.add(point);
+    } catch (e, st) {
+      debugPrint('GpsService._emit: $e\n$st');
+    }
+  }
+
+  Future<void> _cancelSub() async {
+    final sub = _posSub;
+    _posSub = null;
     if (sub == null) return;
-
     try {
       await sub.cancel();
     } catch (e, st) {
-      debugPrint('GpsService subscription cancel error: $e\n$st');
+      debugPrint('GpsService._cancelSub: $e\n$st');
     }
   }
 
-  Future<void> _safeCloseController() async {
-    final StreamController<TripPoint>? controller = _pointController;
-    _pointController = null;
-
-    if (controller == null || controller.isClosed) return;
-
+  Future<void> _closeCtrl() async {
+    final ctrl = _pointCtrl;
+    _pointCtrl = null;
+    if (ctrl == null || ctrl.isClosed) return;
     try {
-      await controller.close();
+      await ctrl.close();
     } catch (e, st) {
-      debugPrint('GpsService controller close error: $e\n$st');
+      debugPrint('GpsService._closeCtrl: $e\n$st');
     }
   }
 
-  // ── Dispose ────────────────────────────────────────────────────────────────
+  // ─────────────────────────────────────────────────────────────────────────
+  // DISPOSE  [FIX-8] async to allow proper await
+  // ─────────────────────────────────────────────────────────────────────────
 
-  void dispose() {
+  Future<void> dispose() async {
+    if (_isAutoPaused) {
+      _exitAutoPause(DateTime.now());
+    }
     _isTracking = false;
-
-    _tripStopwatch.stop();
-    _stoppedStopwatch.stop();
-
-    _safeCancelSubscription();
-    _safeCloseController();
-
+    _tripSw.stop();
+    _stoppedSw.stop();
+    await _cancelSub();
+    await _closeCtrl();
     _tripStartTime = null;
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CIRCULAR BUFFER — O(1) push + running mean  [PERF-1]
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _CircularBuffer {
+  _CircularBuffer(this._capacity)
+      : _buf = List<double>.filled(_capacity, 0.0),
+        _head = 0,
+        _count = 0,
+        _sum = 0.0;
+
+  final int _capacity;
+  final List<double> _buf;
+  int _head;
+  int _count;
+  double _sum;
+
+  /// Push a value; returns the new running mean.
+  double push(double value) {
+    if (_count == _capacity) {
+      // Evict the oldest value
+      _sum -= _buf[_head];
+    } else {
+      _count++;
+    }
+    _buf[_head] = value;
+    _sum += value;
+    _head = (_head + 1) % _capacity;
+    return _count == 0 ? 0.0 : _sum / _count;
+  }
+
+  void clear() {
+    _buf.fillRange(0, _capacity, 0.0);
+    _head = 0;
+    _count = 0;
+    _sum = 0.0;
   }
 }

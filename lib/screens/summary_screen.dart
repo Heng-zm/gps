@@ -7,6 +7,7 @@ import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../models/trip_data.dart';
 import '../services/settings_service.dart';
@@ -14,9 +15,9 @@ import '../widgets/ai_analysis_card.dart';
 import '../widgets/ai_chat_sheet.dart';
 import 'map_screen.dart';
 
-// ─────────────────────────────────────────────────────────────────────────────
-// DESIGN TOKENS
-// ─────────────────────────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════════
+// SUMMARY SCREEN — Fixed + Optimized Premium UI
+// ═══════════════════════════════════════════════════════════════════════════════
 
 const Color _kBg = Color(0xFF070707);
 const Color _kCard = Color(0xFF111111);
@@ -30,10 +31,102 @@ const Color _kRed = Color(0xFFE74C3C);
 const Color _kGreen = Color(0xFF27AE60);
 
 const int _kMaxChartSamples = 70;
+const int _kMaxLocalHistoryItems = 100;
 
-// ─────────────────────────────────────────────────────────────────────────────
-// SUMMARY SCREEN
-// ─────────────────────────────────────────────────────────────────────────────
+class _RouteQualitySnapshot {
+  const _RouteQualitySnapshot({
+    required this.score,
+    required this.label,
+    required this.accuracyLabel,
+    required this.color,
+  });
+
+  final int score;
+  final String label;
+  final String accuracyLabel;
+  final Color color;
+
+  static _RouteQualitySnapshot fromPoints(List<TripPoint> points) {
+    if (points.length < 3) {
+      return const _RouteQualitySnapshot(
+        score: 45,
+        label: 'Limited',
+        accuracyLabel: '--',
+        color: _kGold,
+      );
+    }
+
+    double accuracySum = 0.0;
+    int accuracyCount = 0;
+    int weakAccuracy = 0;
+    int duplicateLike = 0;
+    double? lastLat;
+    double? lastLng;
+
+    for (final TripPoint point in points) {
+      final double accuracy = point.accuracyMeters;
+      if (accuracy.isFinite && accuracy > 0.0) {
+        accuracySum += accuracy;
+        accuracyCount++;
+        if (accuracy > 35.0) weakAccuracy++;
+      }
+
+      final double lat = point.position.latitude;
+      final double lng = point.position.longitude;
+
+      if (lastLat != null &&
+          lastLng != null &&
+          lastLat == lat &&
+          lastLng == lng) {
+        duplicateLike++;
+      }
+
+      lastLat = lat;
+      lastLng = lng;
+    }
+
+    final double avgAccuracy =
+        accuracyCount == 0 ? 25.0 : accuracySum / accuracyCount;
+
+    int score = 100;
+    if (points.length < 10) score -= 18;
+    if (points.length < 5) score -= 20;
+    score -= (weakAccuracy * 4).clamp(0, 28);
+    score -= (duplicateLike * 3).clamp(0, 18);
+
+    if (avgAccuracy > 10) score -= 6;
+    if (avgAccuracy > 20) score -= 10;
+    if (avgAccuracy > 35) score -= 14;
+
+    score = score.clamp(0, 100);
+
+    final String label;
+    final Color color;
+    if (score >= 88) {
+      label = 'Excellent';
+      color = _kGreen;
+    } else if (score >= 72) {
+      label = 'Good';
+      color = _kTeal;
+    } else if (score >= 50) {
+      label = 'Fair';
+      color = _kGold;
+    } else {
+      label = 'Weak';
+      color = _kRed;
+    }
+
+    final String accuracyLabel =
+        accuracyCount == 0 ? '--' : '±${avgAccuracy.clamp(0.0, 99.0).round()}m';
+
+    return _RouteQualitySnapshot(
+      score: score,
+      label: label,
+      accuracyLabel: accuracyLabel,
+      color: color,
+    );
+  }
+}
 
 class SummaryScreen extends StatefulWidget {
   const SummaryScreen({
@@ -54,10 +147,16 @@ class _SummaryScreenState extends State<SummaryScreen> {
   bool _isSaved = false;
   bool _showCharts = true;
 
+  late final List<TripPoint> _validPoints;
+  late final _RouteQualitySnapshot _routeQuality;
+
   @override
   void initState() {
     super.initState();
     _settings.addListener(_onSettingsChanged);
+    _validPoints = _validatedPoints(widget.summary.points);
+    _routeQuality = _RouteQualitySnapshot.fromPoints(_validPoints);
+    _checkSavedState();
   }
 
   @override
@@ -67,29 +166,65 @@ class _SummaryScreenState extends State<SummaryScreen> {
   }
 
   void _onSettingsChanged() {
-    if (!mounted) {
-      return;
-    }
-
+    if (!mounted) return;
     setState(() {});
   }
 
-  Future<void> _handleSaveTrip() async {
-    if (_isSaved || _isSaving) {
-      return;
+  Future<void> _checkSavedState() async {
+    try {
+      final Map<String, dynamic>? row = await Supabase.instance.client
+          .from('saved_trips')
+          .select('id')
+          .eq('id', widget.summary.id)
+          .maybeSingle();
+
+      if (!mounted) return;
+
+      if (row != null) {
+        setState(() => _isSaved = true);
+        return;
+      }
+    } catch (error, stackTrace) {
+      debugPrint(
+        'SummaryScreen Supabase saved-state check failed: $error\n$stackTrace',
+      );
     }
 
-    setState(() {
-      _isSaving = true;
-    });
+    try {
+      final SharedPreferences prefs = await SharedPreferences.getInstance();
+      final List<String> existing = prefs.getStringList('trip_history') ??
+          prefs.getStringList('saved_trips') ??
+          prefs.getStringList('trips') ??
+          <String>[];
+
+      final bool alreadySaved = existing.any((String item) {
+        try {
+          final Object? decoded = jsonDecode(item);
+          if (decoded is! Map) return false;
+          return decoded['id']?.toString() == widget.summary.id;
+        } catch (_) {
+          return false;
+        }
+      });
+
+      if (!mounted) return;
+      setState(() => _isSaved = alreadySaved);
+    } catch (error, stackTrace) {
+      debugPrint(
+          'SummaryScreen local saved-state check failed: $error\n$stackTrace');
+    }
+  }
+
+  Future<void> _handleSaveTrip() async {
+    if (_isSaved || _isSaving) return;
+
+    setState(() => _isSaving = true);
     HapticFeedback.mediumImpact();
 
     try {
       final bool success = await _saveSummaryToHistory(widget.summary);
 
-      if (!mounted) {
-        return;
-      }
+      if (!mounted) return;
 
       setState(() {
         _isSaving = false;
@@ -101,6 +236,7 @@ class _SummaryScreenState extends State<SummaryScreen> {
         _showSnack(
           message: 'Trip saved to history.',
           color: _kTeal,
+          darkText: true,
         );
       } else {
         HapticFeedback.heavyImpact();
@@ -109,16 +245,12 @@ class _SummaryScreenState extends State<SummaryScreen> {
           color: _kRed,
         );
       }
-    } catch (e, st) {
-      debugPrint('SummaryScreen save failed: $e\n$st');
+    } catch (error, stackTrace) {
+      debugPrint('SummaryScreen save failed: $error\n$stackTrace');
 
-      if (!mounted) {
-        return;
-      }
+      if (!mounted) return;
 
-      setState(() {
-        _isSaving = false;
-      });
+      setState(() => _isSaving = false);
 
       _showSnack(
         message: 'Save failed. Please try again.',
@@ -128,94 +260,199 @@ class _SummaryScreenState extends State<SummaryScreen> {
   }
 
   Future<bool> _saveSummaryToHistory(TripSummary summary) async {
+    final Map<String, dynamic> payload = _summaryToJson(summary);
+
     try {
-      final SharedPreferences prefs = await SharedPreferences.getInstance();
+      await Supabase.instance.client
+          .from('saved_trips')
+          .upsert(payload, onConflict: 'id');
 
-      final List<String> existing = prefs.getStringList('trip_history') ??
-          prefs.getStringList('saved_trips') ??
-          prefs.getStringList('trips') ??
-          <String>[];
-
-      final Map<String, dynamic> payload = _summaryToJson(summary);
-      final List<String> next = <String>[];
-      bool replaced = false;
-
-      for (final String item in existing) {
-        try {
-          final Object? decoded = jsonDecode(item);
-
-          if (decoded is Map<String, dynamic>) {
-            if (decoded['id'] == summary.id) {
-              next.add(jsonEncode(payload));
-              replaced = true;
-            } else {
-              next.add(item);
-            }
-          } else {
-            next.add(item);
-          }
-        } catch (_) {
-          next.add(item);
-        }
-      }
-
-      if (!replaced) {
-        next.insert(0, jsonEncode(payload));
-      }
-
-      await prefs.setStringList('trip_history', next);
-
-      if (prefs.containsKey('saved_trips')) {
-        await prefs.remove('saved_trips');
-      }
-      if (prefs.containsKey('trips')) {
-        await prefs.remove('trips');
-      }
+      await _saveLocalMirror(payload);
 
       return true;
-    } catch (e, st) {
-      debugPrint('SummaryScreen history save error: $e\n$st');
+    } catch (error, stackTrace) {
+      debugPrint('SummaryScreen Supabase save error: $error\n$stackTrace');
+
+      // Do not silently mark as saved when cloud save fails. Keep a local mirror
+      // only as a recovery/cache copy.
+      try {
+        await _saveLocalMirror(payload);
+      } catch (localError, localStackTrace) {
+        debugPrint(
+          'SummaryScreen local fallback save failed: '
+          '$localError\n$localStackTrace',
+        );
+      }
+
       return false;
     }
   }
 
+  Future<void> _saveLocalMirror(Map<String, dynamic> payload) async {
+    final SharedPreferences prefs = await SharedPreferences.getInstance();
+
+    final List<String> existing = prefs.getStringList('trip_history') ??
+        prefs.getStringList('saved_trips') ??
+        prefs.getStringList('trips') ??
+        <String>[];
+
+    final String id = payload['id']?.toString() ?? '';
+    final String encodedPayload = jsonEncode(payload);
+    final List<String> next = <String>[encodedPayload];
+
+    for (final String item in existing) {
+      if (next.length >= _kMaxLocalHistoryItems) break;
+
+      try {
+        final Object? decoded = jsonDecode(item);
+        if (decoded is Map && decoded['id']?.toString() == id) {
+          continue;
+        }
+      } catch (_) {
+        // Keep legacy/corrupted entries at the end so the app never destroys
+        // user history during a cache update.
+      }
+
+      next.add(item);
+    }
+
+    await prefs.setStringList('trip_history', next);
+
+    if (prefs.containsKey('saved_trips')) await prefs.remove('saved_trips');
+    if (prefs.containsKey('trips')) await prefs.remove('trips');
+  }
+
   Map<String, dynamic> _summaryToJson(TripSummary summary) {
+    // Must match public.saved_trips schema exactly.
+    // Extra keys will make Supabase/PostgREST reject the upsert.
     return <String, dynamic>{
       'id': summary.id,
-      'date': summary.date.toIso8601String(),
-      'totalSeconds': summary.totalTime.inSeconds,
-      'stoppedSeconds': summary.stoppedTime.inSeconds,
-      'movingSeconds': _movingTime.inSeconds,
+      'date': summary.date.millisecondsSinceEpoch,
+      'distanceMiles': _safeDouble(summary.distanceMiles),
       'maxSpeedMph': _safeDouble(summary.maxSpeedMph),
       'avgSpeedMph': _safeDouble(summary.avgSpeedMph),
+      'totalTimeSeconds': math.max(0, summary.totalTime.inSeconds),
       'altitudeGainFt': _safeDouble(summary.altitudeGainFt),
-      'maxAltitudeFt': _safeDouble(summary.maxAltitudeFt),
-      'minAltitudeFt': _safeDouble(summary.minAltitudeFt),
-      'distanceMiles': _safeDouble(summary.distanceMiles),
-      'pointCount': summary.points.length,
+      'route_points': _validPoints.map(_pointToJson).toList(growable: false),
+    };
+  }
+
+  Map<String, dynamic> _pointToJson(TripPoint point) {
+    // route_points is JSONB, so extra fields are safe and make replay/export
+    // better without changing the saved_trips table columns.
+    return <String, dynamic>{
+      'lat': _safeDouble(point.position.latitude),
+      'lng': _safeDouble(point.position.longitude),
+      'spd': _safeDouble(point.speedMph),
+      'altFt': _safeDouble(point.altitudeFt),
+      'time': point.timestamp.millisecondsSinceEpoch,
+      'acc': _safeDouble(point.accuracyMeters),
     };
   }
 
   Future<void> _copySummary() async {
     HapticFeedback.selectionClick();
 
-    final String summaryText = _buildShareText();
+    await Clipboard.setData(ClipboardData(text: _buildShareText()));
 
-    await Clipboard.setData(ClipboardData(text: summaryText));
-
-    if (!mounted) {
-      return;
-    }
+    if (!mounted) return;
 
     _showSnack(
       message: 'Trip summary copied.',
       color: _kGold,
+      darkText: true,
     );
+  }
+
+  Future<void> _exportGpx() async {
+    HapticFeedback.selectionClick();
+
+    if (_validPoints.length < 2) {
+      _showSnack(
+        message: 'Not enough route points to export GPX.',
+        color: _kGold,
+        darkText: true,
+      );
+      return;
+    }
+
+    final String gpx = _buildGpxText();
+
+    await Clipboard.setData(ClipboardData(text: gpx));
+
+    if (!mounted) return;
+
+    _showSnack(
+      message: 'GPX copied. Paste it into a .gpx file.',
+      color: _kTeal,
+      darkText: true,
+    );
+  }
+
+  String _buildGpxText() {
+    final String name = 'TrackPro AI Trip ${widget.summary.id}';
+    final String time = widget.summary.date.toUtc().toIso8601String();
+
+    final StringBuffer buffer = StringBuffer()
+      ..writeln('<?xml version="1.0" encoding="UTF-8"?>')
+      ..writeln(
+        '<gpx version="1.1" creator="TrackPro AI" '
+        'xmlns="http://www.topografix.com/GPX/1/1" '
+        'xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" '
+        'xsi:schemaLocation="http://www.topografix.com/GPX/1/1 '
+        'http://www.topografix.com/GPX/1/1/gpx.xsd">',
+      )
+      ..writeln('  <metadata>')
+      ..writeln('    <name>${_xmlEscape(name)}</name>')
+      ..writeln('    <time>$time</time>')
+      ..writeln('  </metadata>')
+      ..writeln('  <trk>')
+      ..writeln('    <name>${_xmlEscape(name)}</name>')
+      ..writeln('    <trkseg>');
+
+    for (final TripPoint point in _validPoints) {
+      final double lat = point.position.latitude;
+      final double lng = point.position.longitude;
+      final double ele = _safeDouble(point.altitudeFt) * 0.3048;
+
+      buffer
+        ..write('      <trkpt lat="${lat.toStringAsFixed(7)}" ')
+        ..writeln('lon="${lng.toStringAsFixed(7)}">')
+        ..writeln('        <ele>${ele.toStringAsFixed(2)}</ele>')
+        ..writeln(
+            '        <time>${point.timestamp.toUtc().toIso8601String()}</time>')
+        ..writeln('        <extensions>')
+        ..writeln(
+          '          <speed_mph>${_safeDouble(point.speedMph).toStringAsFixed(2)}</speed_mph>',
+        )
+        ..writeln(
+          '          <accuracy_m>${_safeDouble(point.accuracyMeters).toStringAsFixed(1)}</accuracy_m>',
+        )
+        ..writeln('        </extensions>')
+        ..writeln('      </trkpt>');
+    }
+
+    buffer
+      ..writeln('    </trkseg>')
+      ..writeln('  </trk>')
+      ..writeln('</gpx>');
+
+    return buffer.toString();
+  }
+
+  static String _xmlEscape(String value) {
+    return value
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&apos;');
   }
 
   void _showSnack({
     required String message,
     required Color color,
+    bool darkText = false,
   }) {
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
@@ -224,10 +461,14 @@ class _SummaryScreenState extends State<SummaryScreen> {
           behavior: SnackBarBehavior.floating,
           backgroundColor: color,
           duration: const Duration(seconds: 2),
+          margin: const EdgeInsets.all(16),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(14),
+          ),
           content: Text(
             message,
-            style: const TextStyle(
-              color: Colors.black,
+            style: TextStyle(
+              color: darkText ? Colors.black : Colors.white,
               fontWeight: FontWeight.w800,
             ),
           ),
@@ -250,22 +491,11 @@ class _SummaryScreenState extends State<SummaryScreen> {
   void _openMap() {
     HapticFeedback.lightImpact();
 
-    final List<TripPoint> validPoints = widget.summary.points.where(
-      (TripPoint point) {
-        final double lat = point.position.latitude;
-        final double lng = point.position.longitude;
-
-        return lat.isFinite &&
-            lng.isFinite &&
-            lat.abs() <= 90.0 &&
-            lng.abs() <= 180.0;
-      },
-    ).toList(growable: false);
-
-    if (validPoints.isEmpty) {
+    if (_validPoints.isEmpty) {
       _showSnack(
         message: 'No route points available for this trip.',
         color: _kGold,
+        darkText: true,
       );
       return;
     }
@@ -273,7 +503,7 @@ class _SummaryScreenState extends State<SummaryScreen> {
     Navigator.of(context).push(
       CupertinoPageRoute<void>(
         builder: (_) => MapScreen(
-          points: validPoints,
+          points: _validPoints,
           isLive: false,
           tripStartTime: widget.summary.date,
         ),
@@ -304,15 +534,17 @@ Moving Time: ${_formatDuration(_movingTime)}
 Average Speed: $avgSpeed ${_settings.speedUnit}
 Max Speed: $maxSpeed ${_settings.speedUnit}
 Altitude Gain: $altitude
-Route Points: ${widget.summary.points.length}
+Route Points: ${_validPoints.length}
+Route Quality: ${_routeQuality.score}% - ${_routeQuality.label}
 Date: ${widget.summary.date}
 ''';
   }
 
   Duration get _movingTime {
-    if (!widget.summary.movingTime.isNegative &&
-        widget.summary.movingTime > Duration.zero) {
-      return widget.summary.movingTime;
+    final Duration summaryMoving = widget.summary.movingTime;
+
+    if (!summaryMoving.isNegative && summaryMoving > Duration.zero) {
+      return summaryMoving;
     }
 
     final Duration moving =
@@ -332,15 +564,12 @@ Date: ${widget.summary.date}
     final double distance = _safeDouble(
       _settings.toDisplayDistance(summary.distanceMiles),
     );
-
     final double avgSpeed = _safeDouble(
       _settings.toDisplaySpeed(summary.avgSpeedMph),
     );
-
     final double maxSpeed = _safeDouble(
       _settings.toDisplaySpeed(summary.maxSpeedMph),
     );
-
     final double altitudeGain =
         _safeDouble(summary.altitudeGainFt * _altFactor);
     final double maxAltitude = _safeDouble(summary.maxAltitudeFt * _altFactor);
@@ -372,7 +601,7 @@ Date: ${widget.summary.date}
                   onBack: () => Navigator.of(context).pop(),
                   onMap: _openMap,
                   onCopy: _copySummary,
-                  pointCount: summary.points.length,
+                  pointCount: _validPoints.length,
                 ),
                 Expanded(
                   child: CustomScrollView(
@@ -380,223 +609,242 @@ Date: ${widget.summary.date}
                     slivers: <Widget>[
                       SliverPadding(
                         padding: const EdgeInsets.fromLTRB(16, 8, 16, 112),
-                        sliver: SliverList(
-                          delegate: SliverChildListDelegate(
-                            <Widget>[
-                              _HeroDistanceCard(
-                                distance: distance,
-                                unit: _settings.distanceUnit.toUpperCase(),
-                                date: summary.date,
-                                duration: summary.formattedTotalTime,
-                                pointCount: summary.points.length,
-                              ),
-                              const SizedBox(height: 14),
-                              _QuickActionsRow(
-                                onMap: _openMap,
-                                onCopy: _copySummary,
-                                onToggleCharts: () {
-                                  HapticFeedback.selectionClick();
-                                  setState(() {
-                                    _showCharts = !_showCharts;
-                                  });
-                                },
-                                chartsVisible: _showCharts,
-                              ),
-                              const SizedBox(height: 14),
-                              AiAnalysisCard(summary: summary),
-                              const SizedBox(height: 14),
-                              _SectionCard(
-                                title: 'TIME METRICS',
-                                icon: CupertinoIcons.timer,
-                                children: <Widget>[
-                                  Row(
-                                    children: <Widget>[
-                                      Expanded(
-                                        child: _StatBox(
-                                          label: 'TOTAL',
-                                          value: summary.formattedTotalTime,
-                                          icon: CupertinoIcons.timer,
-                                          color: _kTeal,
-                                        ),
+                        sliver: SliverList.list(
+                          children: <Widget>[
+                            _HeroDistanceCard(
+                              distance: distance,
+                              unit: _settings.distanceUnit.toUpperCase(),
+                              date: summary.date,
+                              duration: summary.formattedTotalTime,
+                              pointCount: _validPoints.length,
+                            ),
+                            const SizedBox(height: 14),
+                            _QuickActionsRow(
+                              onMap: _openMap,
+                              onCopy: _copySummary,
+                              onExportGpx: _exportGpx,
+                              onToggleCharts: () {
+                                HapticFeedback.selectionClick();
+                                setState(() => _showCharts = !_showCharts);
+                              },
+                              chartsVisible: _showCharts,
+                            ),
+                            const SizedBox(height: 14),
+                            AiAnalysisCard(summary: summary),
+                            const SizedBox(height: 14),
+                            _SectionCard(
+                              title: 'TIME METRICS',
+                              icon: CupertinoIcons.timer,
+                              children: <Widget>[
+                                Row(
+                                  children: <Widget>[
+                                    Expanded(
+                                      child: _StatBox(
+                                        label: 'TOTAL',
+                                        value: summary.formattedTotalTime,
+                                        icon: CupertinoIcons.timer,
+                                        color: _kTeal,
                                       ),
-                                      const SizedBox(width: 10),
-                                      Expanded(
-                                        child: _StatBox(
-                                          label: 'MOVING',
-                                          value: _formatDuration(_movingTime),
-                                          icon: CupertinoIcons.play_circle,
-                                          color: _kGreen,
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                  const SizedBox(height: 10),
-                                  _StatBox(
-                                    label: 'STOPPED TIME',
-                                    value: summary.formattedStoppedTime,
-                                    icon: CupertinoIcons.pause_circle,
-                                    color: _kGold,
-                                    wide: true,
-                                  ),
-                                ],
-                              ),
-                              const SizedBox(height: 12),
-                              _SectionCard(
-                                title:
-                                    'SPEED ANALYTICS (${_settings.speedUnit.toUpperCase()})',
-                                icon: CupertinoIcons.speedometer,
-                                children: <Widget>[
-                                  Row(
-                                    children: <Widget>[
-                                      Expanded(
-                                        child: _StatBox(
-                                          label: 'MAXIMUM',
-                                          value: maxSpeed.toStringAsFixed(0),
-                                          icon: CupertinoIcons.bolt_fill,
-                                          color: _kGoldSoft,
-                                          large: true,
-                                        ),
-                                      ),
-                                      const SizedBox(width: 10),
-                                      Expanded(
-                                        child: _StatBox(
-                                          label: 'AVERAGE',
-                                          value: avgSpeed.toStringAsFixed(0),
-                                          icon: CupertinoIcons.chart_bar,
-                                          color: _kBlue,
-                                          large: true,
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                  if (_showCharts &&
-                                      summary.points.length > 5) ...<Widget>[
-                                    const SizedBox(height: 18),
-                                    _ChartHeader(
-                                      title: 'Speed profile',
-                                      color: _kBlue,
-                                      unit: _settings.speedUnit,
                                     ),
-                                    const SizedBox(height: 8),
-                                    _PerformanceChart(
-                                      points: summary.points,
-                                      getValue: (TripPoint point) {
-                                        return _settings.toDisplaySpeed(
-                                          point.speedMph,
-                                        );
-                                      },
-                                      color: _kBlue,
+                                    const SizedBox(width: 10),
+                                    Expanded(
+                                      child: _StatBox(
+                                        label: 'MOVING',
+                                        value: _formatDuration(_movingTime),
+                                        icon: CupertinoIcons.play_circle,
+                                        color: _kGreen,
+                                      ),
                                     ),
                                   ],
-                                ],
-                              ),
-                              const SizedBox(height: 12),
-                              _SectionCard(
-                                title: 'ELEVATION PROFILE ($_altUnit)',
-                                icon: CupertinoIcons.graph_square,
-                                children: <Widget>[
-                                  Row(
-                                    children: <Widget>[
-                                      Expanded(
-                                        child: _StatBox(
-                                          label: 'GAIN',
-                                          value:
-                                              '+${altitudeGain.toStringAsFixed(0)}',
-                                          icon: CupertinoIcons.arrow_up_right,
-                                          color: _kTeal,
-                                        ),
+                                ),
+                                const SizedBox(height: 10),
+                                _StatBox(
+                                  label: 'STOPPED TIME',
+                                  value: summary.formattedStoppedTime,
+                                  icon: CupertinoIcons.pause_circle,
+                                  color: _kGold,
+                                  wide: true,
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 12),
+                            _SectionCard(
+                              title:
+                                  'SPEED ANALYTICS (${_settings.speedUnit.toUpperCase()})',
+                              icon: CupertinoIcons.speedometer,
+                              children: <Widget>[
+                                Row(
+                                  children: <Widget>[
+                                    Expanded(
+                                      child: _StatBox(
+                                        label: 'MAXIMUM',
+                                        value: maxSpeed.toStringAsFixed(0),
+                                        icon: CupertinoIcons.bolt_fill,
+                                        color: _kGoldSoft,
+                                        large: true,
                                       ),
-                                      const SizedBox(width: 8),
-                                      Expanded(
-                                        child: _StatBox(
-                                          label: 'MAX',
-                                          value: maxAltitude.toStringAsFixed(0),
-                                          icon: CupertinoIcons.chevron_up,
-                                          color: _kGold,
-                                        ),
-                                      ),
-                                      const SizedBox(width: 8),
-                                      Expanded(
-                                        child: _StatBox(
-                                          label: 'MIN',
-                                          value: minAltitude.toStringAsFixed(0),
-                                          icon: CupertinoIcons.chevron_down,
-                                          color: _kPurple,
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                  if (_showCharts &&
-                                      summary.points.length > 5) ...<Widget>[
-                                    const SizedBox(height: 18),
-                                    _ChartHeader(
-                                      title: 'Elevation profile',
-                                      color: _kTeal,
-                                      unit: _altUnit,
                                     ),
-                                    const SizedBox(height: 8),
-                                    _PerformanceChart(
-                                      points: summary.points,
-                                      getValue: (TripPoint point) {
-                                        final double alt =
-                                            point.altitudeFt * _altFactor;
-
-                                        return alt.isFinite ? alt : 0.0;
-                                      },
-                                      color: _kTeal,
+                                    const SizedBox(width: 10),
+                                    Expanded(
+                                      child: _StatBox(
+                                        label: 'AVERAGE',
+                                        value: avgSpeed.toStringAsFixed(0),
+                                        icon: CupertinoIcons.chart_bar,
+                                        color: _kBlue,
+                                        large: true,
+                                      ),
                                     ),
                                   ],
-                                ],
-                              ),
-                              const SizedBox(height: 12),
-                              _SectionCard(
-                                title: 'ROUTE QUALITY',
-                                icon: CupertinoIcons.location_fill,
-                                children: <Widget>[
-                                  Row(
-                                    children: <Widget>[
-                                      Expanded(
-                                        child: _StatBox(
-                                          label: 'POINTS',
-                                          value: '${summary.points.length}',
-                                          icon: CupertinoIcons
-                                              .circle_grid_hex_fill,
-                                          color: _kBlue,
-                                        ),
-                                      ),
-                                      const SizedBox(width: 10),
-                                      Expanded(
-                                        child: _StatBox(
-                                          label: 'PACE',
-                                          value: _paceLabel(avgSpeed),
-                                          icon: CupertinoIcons.gauge,
-                                          color: _paceColor(avgSpeed),
-                                        ),
-                                      ),
-                                    ],
+                                ),
+                                if (_showCharts &&
+                                    _validPoints.length > 5) ...<Widget>[
+                                  const SizedBox(height: 18),
+                                  _ChartHeader(
+                                    title: 'Speed profile',
+                                    color: _kBlue,
+                                    unit: _settings.speedUnit,
                                   ),
-                                  const SizedBox(height: 12),
-                                  _RouteInsightStrip(
-                                    distance: distance,
-                                    avgSpeed: avgSpeed,
-                                    pointCount: summary.points.length,
-                                    speedUnit: _settings.speedUnit,
-                                    distanceUnit: _settings.distanceUnit,
+                                  const SizedBox(height: 8),
+                                  _PerformanceChart(
+                                    points: _validPoints,
+                                    getValue: (TripPoint point) {
+                                      return _settings.toDisplaySpeed(
+                                        point.speedMph,
+                                      );
+                                    },
+                                    color: _kBlue,
                                   ),
                                 ],
-                              ),
-                              const SizedBox(height: 20),
-                              _SaveButton(
-                                isSaving: _isSaving,
-                                isSaved: _isSaved,
-                                onTap: _handleSaveTrip,
-                              ),
-                              const SizedBox(height: 12),
-                              _DismissButton(
-                                onTap: () => Navigator.of(context).pop(),
-                              ),
-                            ],
-                          ),
+                              ],
+                            ),
+                            const SizedBox(height: 12),
+                            _SectionCard(
+                              title: 'ELEVATION PROFILE ($_altUnit)',
+                              icon: CupertinoIcons.graph_square,
+                              children: <Widget>[
+                                Row(
+                                  children: <Widget>[
+                                    Expanded(
+                                      child: _StatBox(
+                                        label: 'GAIN',
+                                        value:
+                                            '+${altitudeGain.toStringAsFixed(0)}',
+                                        icon: CupertinoIcons.arrow_up_right,
+                                        color: _kTeal,
+                                      ),
+                                    ),
+                                    const SizedBox(width: 8),
+                                    Expanded(
+                                      child: _StatBox(
+                                        label: 'MAX',
+                                        value: maxAltitude.toStringAsFixed(0),
+                                        icon: CupertinoIcons.chevron_up,
+                                        color: _kGold,
+                                      ),
+                                    ),
+                                    const SizedBox(width: 8),
+                                    Expanded(
+                                      child: _StatBox(
+                                        label: 'MIN',
+                                        value: minAltitude.toStringAsFixed(0),
+                                        icon: CupertinoIcons.chevron_down,
+                                        color: _kPurple,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                if (_showCharts &&
+                                    _validPoints.length > 5) ...<Widget>[
+                                  const SizedBox(height: 18),
+                                  _ChartHeader(
+                                    title: 'Elevation profile',
+                                    color: _kTeal,
+                                    unit: _altUnit,
+                                  ),
+                                  const SizedBox(height: 8),
+                                  _PerformanceChart(
+                                    points: _validPoints,
+                                    getValue: (TripPoint point) {
+                                      final double alt =
+                                          point.altitudeFt * _altFactor;
+                                      return alt.isFinite ? alt : 0.0;
+                                    },
+                                    color: _kTeal,
+                                  ),
+                                ],
+                              ],
+                            ),
+                            const SizedBox(height: 12),
+                            _SectionCard(
+                              title: 'ROUTE QUALITY',
+                              icon: CupertinoIcons.location_fill,
+                              children: <Widget>[
+                                Row(
+                                  children: <Widget>[
+                                    Expanded(
+                                      child: _StatBox(
+                                        label: 'QUALITY',
+                                        value: '${_routeQuality.score}%',
+                                        icon: CupertinoIcons.checkmark_shield,
+                                        color: _routeQuality.color,
+                                      ),
+                                    ),
+                                    const SizedBox(width: 10),
+                                    Expanded(
+                                      child: _StatBox(
+                                        label: 'PACE',
+                                        value: _paceLabel(avgSpeed),
+                                        icon: CupertinoIcons.gauge,
+                                        color: _paceColor(avgSpeed),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 10),
+                                Row(
+                                  children: <Widget>[
+                                    Expanded(
+                                      child: _StatBox(
+                                        label: 'POINTS',
+                                        value: '${_validPoints.length}',
+                                        icon:
+                                            CupertinoIcons.circle_grid_hex_fill,
+                                        color: _kBlue,
+                                      ),
+                                    ),
+                                    const SizedBox(width: 10),
+                                    Expanded(
+                                      child: _StatBox(
+                                        label: 'ACCURACY',
+                                        value: _routeQuality.accuracyLabel,
+                                        icon: CupertinoIcons.scope,
+                                        color: _routeQuality.color,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 12),
+                                _RouteInsightStrip(
+                                  distance: distance,
+                                  avgSpeed: avgSpeed,
+                                  pointCount: _validPoints.length,
+                                  speedUnit: _settings.speedUnit,
+                                  distanceUnit: _settings.distanceUnit,
+                                  quality: _routeQuality,
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 20),
+                            _SaveButton(
+                              isSaving: _isSaving,
+                              isSaved: _isSaved,
+                              onTap: _handleSaveTrip,
+                            ),
+                            const SizedBox(height: 12),
+                            _DismissButton(
+                              onTap: () => Navigator.of(context).pop(),
+                            ),
+                          ],
                         ),
                       ),
                     ],
@@ -610,11 +858,41 @@ Date: ${widget.summary.date}
     );
   }
 
-  static double _safeDouble(double value) {
-    if (!value.isFinite) {
-      return 0.0;
+  static List<TripPoint> _validatedPoints(List<TripPoint> points) {
+    if (points.isEmpty) return const <TripPoint>[];
+
+    final List<TripPoint> valid = <TripPoint>[];
+    double? lastLat;
+    double? lastLng;
+
+    for (final TripPoint point in points) {
+      final double lat = point.position.latitude;
+      final double lng = point.position.longitude;
+
+      final bool ok = lat.isFinite &&
+          lng.isFinite &&
+          lat.abs() <= 90.0 &&
+          lng.abs() <= 180.0;
+
+      if (!ok) continue;
+      if (lastLat != null &&
+          lastLng != null &&
+          lastLat == lat &&
+          lastLng == lng &&
+          valid.isNotEmpty) {
+        continue;
+      }
+
+      valid.add(point);
+      lastLat = lat;
+      lastLng = lng;
     }
 
+    return List<TripPoint>.unmodifiable(valid);
+  }
+
+  static double _safeDouble(double value) {
+    if (!value.isFinite) return 0.0;
     return value < 0.0 ? 0.0 : value;
   }
 
@@ -641,43 +919,23 @@ Date: ${widget.summary.date}
   }
 
   static String _paceLabel(double avgSpeed) {
-    if (avgSpeed <= 0.5) {
-      return 'IDLE';
-    }
-    if (avgSpeed < 15) {
-      return 'SLOW';
-    }
-    if (avgSpeed < 45) {
-      return 'CITY';
-    }
-    if (avgSpeed < 85) {
-      return 'CRUISE';
-    }
-
+    if (avgSpeed <= 0.5) return 'IDLE';
+    if (avgSpeed < 15) return 'SLOW';
+    if (avgSpeed < 45) return 'CITY';
+    if (avgSpeed < 85) return 'CRUISE';
     return 'FAST';
   }
 
   static Color _paceColor(double avgSpeed) {
-    if (avgSpeed <= 0.5) {
-      return Colors.white38;
-    }
-    if (avgSpeed < 15) {
-      return _kTeal;
-    }
-    if (avgSpeed < 45) {
-      return _kGreen;
-    }
-    if (avgSpeed < 85) {
-      return _kGold;
-    }
-
+    if (avgSpeed <= 0.5) return Colors.white38;
+    if (avgSpeed < 15) return _kTeal;
+    if (avgSpeed < 45) return _kGreen;
+    if (avgSpeed < 85) return _kGold;
     return _kRed;
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// HEADER
-// ─────────────────────────────────────────────────────────────────────────────
+// Reusable widgets
 
 class _SummaryAppBar extends StatelessWidget {
   const _SummaryAppBar({
@@ -720,10 +978,9 @@ class _SummaryAppBar extends StatelessWidget {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: <Widget>[
-                      const Text(
+                      const _SafeText(
                         'SESSION OVERVIEW',
                         maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
                         style: TextStyle(
                           color: Colors.white,
                           fontSize: 15,
@@ -732,10 +989,9 @@ class _SummaryAppBar extends StatelessWidget {
                         ),
                       ),
                       const SizedBox(height: 2),
-                      Text(
+                      _SafeText(
                         '$pointCount route points · performance analytics',
                         maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
                         style: TextStyle(
                           color: Colors.white.withValues(alpha: 0.42),
                           fontSize: 11,
@@ -778,7 +1034,10 @@ class _HeaderMiniButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return GestureDetector(
-      onTap: onTap,
+      onTap: () {
+        HapticFeedback.selectionClick();
+        onTap();
+      },
       behavior: HitTestBehavior.opaque,
       child: Container(
         width: 42,
@@ -788,19 +1047,11 @@ class _HeaderMiniButton extends StatelessWidget {
           borderRadius: BorderRadius.circular(14),
           border: Border.all(color: color.withValues(alpha: 0.16)),
         ),
-        child: Icon(
-          icon,
-          color: color,
-          size: 17,
-        ),
+        child: Icon(icon, color: color, size: 17),
       ),
     );
   }
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// HERO CARD
-// ─────────────────────────────────────────────────────────────────────────────
 
 class _HeroDistanceCard extends StatelessWidget {
   const _HeroDistanceCard({
@@ -828,14 +1079,15 @@ class _HeroDistanceCard extends StatelessWidget {
         children: <Widget>[
           Row(
             children: <Widget>[
-              _IconBadge(
+              const _IconBadge(
                 icon: CupertinoIcons.location_fill,
                 color: _kTeal,
               ),
               const SizedBox(width: 10),
               const Expanded(
-                child: Text(
+                child: _SafeText(
                   'TOTAL DISTANCE',
+                  maxLines: 1,
                   style: TextStyle(
                     color: _kTeal,
                     fontSize: 11,
@@ -860,6 +1112,9 @@ class _HeroDistanceCard extends StatelessWidget {
               children: <Widget>[
                 Text(
                   distance.toStringAsFixed(2),
+                  maxLines: 1,
+                  overflow: TextOverflow.clip,
+                  softWrap: false,
                   style: const TextStyle(
                     color: Colors.white,
                     fontSize: 58,
@@ -874,6 +1129,9 @@ class _HeroDistanceCard extends StatelessWidget {
                 const SizedBox(width: 10),
                 Text(
                   unit,
+                  maxLines: 1,
+                  overflow: TextOverflow.clip,
+                  softWrap: false,
                   style: const TextStyle(
                     color: _kTeal,
                     fontSize: 20,
@@ -932,10 +1190,9 @@ class _MiniMetric extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
-          Text(
+          _SafeText(
             label,
             maxLines: 1,
-            overflow: TextOverflow.ellipsis,
             style: TextStyle(
               color: color.withValues(alpha: 0.75),
               fontSize: 9,
@@ -944,10 +1201,9 @@ class _MiniMetric extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 5),
-          Text(
+          _SafeText(
             value,
             maxLines: 1,
-            overflow: TextOverflow.ellipsis,
             style: const TextStyle(
               color: Colors.white,
               fontSize: 15,
@@ -960,54 +1216,69 @@ class _MiniMetric extends StatelessWidget {
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// QUICK ACTIONS
-// ─────────────────────────────────────────────────────────────────────────────
-
 class _QuickActionsRow extends StatelessWidget {
   const _QuickActionsRow({
     required this.onMap,
     required this.onCopy,
+    required this.onExportGpx,
     required this.onToggleCharts,
     required this.chartsVisible,
   });
 
   final VoidCallback onMap;
   final VoidCallback onCopy;
+  final VoidCallback onExportGpx;
   final VoidCallback onToggleCharts;
   final bool chartsVisible;
 
   @override
   Widget build(BuildContext context) {
-    return Row(
+    return Column(
       children: <Widget>[
-        Expanded(
-          child: _ActionChipButton(
-            icon: CupertinoIcons.map_fill,
-            label: 'MAP',
-            color: _kTeal,
-            onTap: onMap,
-          ),
+        Row(
+          children: <Widget>[
+            Expanded(
+              child: _ActionChipButton(
+                icon: CupertinoIcons.map_fill,
+                label: 'MAP',
+                color: _kTeal,
+                onTap: onMap,
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: _ActionChipButton(
+                icon: CupertinoIcons.doc_on_doc,
+                label: 'COPY',
+                color: _kGold,
+                onTap: onCopy,
+              ),
+            ),
+          ],
         ),
-        const SizedBox(width: 10),
-        Expanded(
-          child: _ActionChipButton(
-            icon: CupertinoIcons.doc_on_doc,
-            label: 'COPY',
-            color: _kGold,
-            onTap: onCopy,
-          ),
-        ),
-        const SizedBox(width: 10),
-        Expanded(
-          child: _ActionChipButton(
-            icon: chartsVisible
-                ? CupertinoIcons.chart_bar_fill
-                : CupertinoIcons.chart_bar,
-            label: chartsVisible ? 'CHARTS ON' : 'CHARTS OFF',
-            color: _kBlue,
-            onTap: onToggleCharts,
-          ),
+        const SizedBox(height: 10),
+        Row(
+          children: <Widget>[
+            Expanded(
+              child: _ActionChipButton(
+                icon: CupertinoIcons.arrow_down_doc_fill,
+                label: 'EXPORT GPX',
+                color: _kGreen,
+                onTap: onExportGpx,
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: _ActionChipButton(
+                icon: chartsVisible
+                    ? CupertinoIcons.chart_bar_fill
+                    : CupertinoIcons.chart_bar,
+                label: chartsVisible ? 'CHARTS' : 'NO CHARTS',
+                color: _kBlue,
+                onTap: onToggleCharts,
+              ),
+            ),
+          ],
         ),
       ],
     );
@@ -1030,10 +1301,13 @@ class _ActionChipButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return GestureDetector(
-      onTap: onTap,
+      onTap: () {
+        HapticFeedback.selectionClick();
+        onTap();
+      },
       behavior: HitTestBehavior.opaque,
       child: Container(
-        height: 48,
+        height: 44,
         decoration: BoxDecoration(
           color: color.withValues(alpha: 0.1),
           borderRadius: BorderRadius.circular(16),
@@ -1045,10 +1319,9 @@ class _ActionChipButton extends StatelessWidget {
             Icon(icon, color: color, size: 15),
             const SizedBox(width: 7),
             Flexible(
-              child: Text(
+              child: _SafeText(
                 label,
                 maxLines: 1,
-                overflow: TextOverflow.ellipsis,
                 style: TextStyle(
                   color: color,
                   fontSize: 11,
@@ -1063,10 +1336,6 @@ class _ActionChipButton extends StatelessWidget {
     );
   }
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// SECTION CARD
-// ─────────────────────────────────────────────────────────────────────────────
 
 class _SectionCard extends StatelessWidget {
   const _SectionCard({
@@ -1092,10 +1361,9 @@ class _SectionCard extends StatelessWidget {
               Icon(icon, color: _kTeal, size: 15),
               const SizedBox(width: 8),
               Expanded(
-                child: Text(
+                child: _SafeText(
                   title,
                   maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
                   style: const TextStyle(
                     color: _kTeal,
                     fontSize: 10,
@@ -1113,10 +1381,6 @@ class _SectionCard extends StatelessWidget {
     );
   }
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// STATS
-// ─────────────────────────────────────────────────────────────────────────────
 
 class _StatBox extends StatelessWidget {
   const _StatBox({
@@ -1153,10 +1417,9 @@ class _StatBox extends StatelessWidget {
               Icon(icon, color: color, size: 14),
               const SizedBox(width: 7),
               Expanded(
-                child: Text(
+                child: _SafeText(
                   label,
                   maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
                   style: TextStyle(
                     color: color.withValues(alpha: 0.85),
                     fontSize: 9,
@@ -1173,6 +1436,9 @@ class _StatBox extends StatelessWidget {
             alignment: Alignment.centerLeft,
             child: Text(
               value,
+              maxLines: 1,
+              overflow: TextOverflow.clip,
+              softWrap: false,
               style: TextStyle(
                 color: Colors.white,
                 fontSize: large ? 26 : 18,
@@ -1197,10 +1463,6 @@ class _StatBox extends StatelessWidget {
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// CHART
-// ─────────────────────────────────────────────────────────────────────────────
-
 class _ChartHeader extends StatelessWidget {
   const _ChartHeader({
     required this.title,
@@ -1216,8 +1478,9 @@ class _ChartHeader extends StatelessWidget {
   Widget build(BuildContext context) {
     return Row(
       children: <Widget>[
-        Text(
+        _SafeText(
           title.toUpperCase(),
+          maxLines: 1,
           style: TextStyle(
             color: color.withValues(alpha: 0.78),
             fontSize: 10,
@@ -1226,10 +1489,7 @@ class _ChartHeader extends StatelessWidget {
           ),
         ),
         const Spacer(),
-        _SmallPill(
-          text: unit.toUpperCase(),
-          color: color,
-        ),
+        _SmallPill(text: unit.toUpperCase(), color: color),
       ],
     );
   }
@@ -1270,7 +1530,7 @@ class _PerformanceChart extends StatelessWidget {
             gridData: FlGridData(
               show: true,
               drawVerticalLine: false,
-              horizontalInterval: maxY / 3,
+              horizontalInterval: math.max(1.0, maxY / 3.0),
               getDrawingHorizontalLine: (_) {
                 return FlLine(
                   color: Colors.white.withValues(alpha: 0.05),
@@ -1327,22 +1587,18 @@ class _PerformanceChart extends StatelessWidget {
   }
 
   List<FlSpot> _buildSpots() {
-    if (points.isEmpty) {
-      return const <FlSpot>[];
-    }
+    if (points.isEmpty) return const <FlSpot>[];
 
     final int sampleRate = (points.length / _kMaxChartSamples)
         .ceil()
-        .clamp(1, points.length)
+        .clamp(1, math.max(1, points.length))
         .toInt();
 
     final List<FlSpot> spots = <FlSpot>[];
 
     for (int i = 0; i < points.length; i += sampleRate) {
       final double value = getValue(points[i]);
-      if (!value.isFinite) {
-        continue;
-      }
+      if (!value.isFinite) continue;
 
       spots.add(
         FlSpot(
@@ -1352,7 +1608,7 @@ class _PerformanceChart extends StatelessWidget {
       );
     }
 
-    return spots;
+    return List<FlSpot>.unmodifiable(spots);
   }
 }
 
@@ -1373,8 +1629,10 @@ class _ChartEmptyState extends StatelessWidget {
         borderRadius: BorderRadius.circular(16),
         border: Border.all(color: color.withValues(alpha: 0.12)),
       ),
-      child: Text(
+      child: _SafeText(
         'Not enough data for chart',
+        maxLines: 1,
+        textAlign: TextAlign.center,
         style: TextStyle(
           color: Colors.white.withValues(alpha: 0.42),
           fontSize: 12,
@@ -1385,10 +1643,6 @@ class _ChartEmptyState extends StatelessWidget {
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// ROUTE INSIGHT
-// ─────────────────────────────────────────────────────────────────────────────
-
 class _RouteInsightStrip extends StatelessWidget {
   const _RouteInsightStrip({
     required this.distance,
@@ -1396,6 +1650,7 @@ class _RouteInsightStrip extends StatelessWidget {
     required this.pointCount,
     required this.speedUnit,
     required this.distanceUnit,
+    required this.quality,
   });
 
   final double distance;
@@ -1403,12 +1658,15 @@ class _RouteInsightStrip extends StatelessWidget {
   final int pointCount;
   final String speedUnit;
   final String distanceUnit;
+  final _RouteQualitySnapshot quality;
 
   @override
   Widget build(BuildContext context) {
     final String message = pointCount < 3
         ? 'Route data is limited. Longer trips will produce better insights.'
-        : 'Route captured with $pointCount points over ${distance.toStringAsFixed(1)} $distanceUnit at ${avgSpeed.toStringAsFixed(0)} $speedUnit average.';
+        : '${quality.label} route quality · $pointCount points over '
+            '${distance.toStringAsFixed(1)} $distanceUnit at '
+            '${avgSpeed.toStringAsFixed(0)} $speedUnit average.';
 
     return Container(
       width: double.infinity,
@@ -1420,15 +1678,13 @@ class _RouteInsightStrip extends StatelessWidget {
       ),
       child: Row(
         children: <Widget>[
-          const Icon(
-            CupertinoIcons.sparkles,
-            color: _kTeal,
-            size: 17,
-          ),
+          const Icon(CupertinoIcons.sparkles, color: _kTeal, size: 17),
           const SizedBox(width: 10),
           Expanded(
-            child: Text(
+            child: _SafeText(
               message,
+              maxLines: 3,
+              softWrap: true,
               style: TextStyle(
                 color: Colors.white.withValues(alpha: 0.68),
                 fontSize: 12,
@@ -1442,10 +1698,6 @@ class _RouteInsightStrip extends StatelessWidget {
     );
   }
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// SAVE / DISMISS / AI
-// ─────────────────────────────────────────────────────────────────────────────
 
 class _SaveButton extends StatelessWidget {
   const _SaveButton({
@@ -1471,7 +1723,7 @@ class _SaveButton extends StatelessWidget {
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 220),
           width: double.infinity,
-          height: 58,
+          height: 56,
           decoration: BoxDecoration(
             gradient: isSaved
                 ? null
@@ -1499,27 +1751,33 @@ class _SaveButton extends StatelessWidget {
           child: Center(
             child: isSaving
                 ? const CupertinoActivityIndicator(color: Colors.black)
-                : Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: <Widget>[
-                      Icon(
-                        isSaved
-                            ? CupertinoIcons.check_mark_circled_solid
-                            : CupertinoIcons.cloud_upload_fill,
-                        color: isSaved ? _kGreen : Colors.black,
-                        size: 18,
-                      ),
-                      const SizedBox(width: 10),
-                      Text(
-                        isSaved ? 'TRIP SAVED' : 'SAVE TO HISTORY',
-                        style: TextStyle(
+                : FittedBox(
+                    fit: BoxFit.scaleDown,
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: <Widget>[
+                        Icon(
+                          isSaved
+                              ? CupertinoIcons.check_mark_circled_solid
+                              : CupertinoIcons.cloud_upload_fill,
                           color: isSaved ? _kGreen : Colors.black,
-                          fontSize: 14,
-                          fontWeight: FontWeight.w900,
-                          letterSpacing: 1.1,
+                          size: 18,
                         ),
-                      ),
-                    ],
+                        const SizedBox(width: 10),
+                        Text(
+                          isSaved ? 'TRIP SAVED' : 'SAVE TO HISTORY',
+                          maxLines: 1,
+                          overflow: TextOverflow.clip,
+                          softWrap: false,
+                          style: TextStyle(
+                            color: isSaved ? _kGreen : Colors.black,
+                            fontSize: 14,
+                            fontWeight: FontWeight.w900,
+                            letterSpacing: 1.1,
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
           ),
         ),
@@ -1544,15 +1802,16 @@ class _DismissButton extends StatelessWidget {
         borderRadius: BorderRadius.circular(22),
         onPressed: onTap,
         child: Container(
-          height: 56,
+          height: 54,
           alignment: Alignment.center,
           decoration: BoxDecoration(
             color: Colors.white.withValues(alpha: 0.055),
             borderRadius: BorderRadius.circular(22),
             border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
           ),
-          child: const Text(
+          child: const _SafeText(
             'DISMISS',
+            maxLines: 1,
             style: TextStyle(
               color: Colors.white,
               fontSize: 14,
@@ -1584,8 +1843,9 @@ class _AiFab extends StatelessWidget {
         color: Colors.white,
         size: 18,
       ),
-      label: const Text(
+      label: const _SafeText(
         'ASK AI',
+        maxLines: 1,
         style: TextStyle(
           color: Colors.white,
           fontWeight: FontWeight.w900,
@@ -1595,10 +1855,6 @@ class _AiFab extends StatelessWidget {
     );
   }
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// SHARED SMALL WIDGETS
-// ─────────────────────────────────────────────────────────────────────────────
 
 class _GlassCard extends StatelessWidget {
   const _GlassCard({
@@ -1656,7 +1912,10 @@ class _RoundIconButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return GestureDetector(
-      onTap: onTap,
+      onTap: () {
+        HapticFeedback.lightImpact();
+        onTap();
+      },
       behavior: HitTestBehavior.opaque,
       child: Container(
         width: 42,
@@ -1666,11 +1925,7 @@ class _RoundIconButton extends StatelessWidget {
           borderRadius: BorderRadius.circular(14),
           border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
         ),
-        child: Icon(
-          icon,
-          color: Colors.white,
-          size: 19,
-        ),
+        child: Icon(icon, color: Colors.white, size: 19),
       ),
     );
   }
@@ -1695,11 +1950,7 @@ class _IconBadge extends StatelessWidget {
         borderRadius: BorderRadius.circular(12),
         border: Border.all(color: color.withValues(alpha: 0.18)),
       ),
-      child: Icon(
-        icon,
-        color: color,
-        size: 16,
-      ),
+      child: Icon(icon, color: color, size: 16),
     );
   }
 }
@@ -1722,14 +1973,45 @@ class _SmallPill extends StatelessWidget {
         borderRadius: BorderRadius.circular(99),
         border: Border.all(color: color.withValues(alpha: 0.16)),
       ),
-      child: Text(
+      child: _SafeText(
         text,
+        maxLines: 1,
         style: TextStyle(
           color: color,
           fontSize: 9,
           fontWeight: FontWeight.w900,
           letterSpacing: 0.8,
         ),
+      ),
+    );
+  }
+}
+
+class _SafeText extends StatelessWidget {
+  const _SafeText(
+    this.data, {
+    required this.style,
+    this.maxLines,
+    this.textAlign,
+    this.softWrap = false,
+  });
+
+  final String data;
+  final TextStyle style;
+  final int? maxLines;
+  final TextAlign? textAlign;
+  final bool softWrap;
+
+  @override
+  Widget build(BuildContext context) {
+    return IgnorePointer(
+      child: Text(
+        data,
+        maxLines: maxLines,
+        overflow: TextOverflow.clip,
+        softWrap: softWrap,
+        textAlign: textAlign,
+        style: style,
       ),
     );
   }

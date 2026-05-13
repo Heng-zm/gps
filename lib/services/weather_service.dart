@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
@@ -9,9 +10,14 @@ import 'settings_service.dart';
 
 /// WeatherService — OpenWeatherMap current weather + 5-day / 3-hour forecast.
 ///
-/// Uses:
-/// - Current weather: /data/2.5/weather
-/// - Forecast: /data/2.5/forecast
+/// Optimized version:
+/// - persistent HTTP client
+/// - cache by unit + nearby location
+/// - in-flight request de-duplication
+/// - retry once for temporary failures
+/// - safer JSON parsing
+/// - better forecast parsing
+/// - keeps returning cached weather when network fails
 class WeatherService {
   WeatherService._internal();
 
@@ -21,7 +27,7 @@ class WeatherService {
 
   // ── API config ────────────────────────────────────────────────────────────
   //
-  // Recommended:
+  // Recommended for production:
   // Move this API key to a secure config file, .env, or remote config.
   static const String _apiKey = '8e8b91972447e6527d3ff5da24cc63d1';
 
@@ -30,8 +36,14 @@ class WeatherService {
   static const String _forecastPath = '/data/2.5/forecast';
 
   static const Duration _requestTimeout = Duration(seconds: 8);
+  static const Duration _retryDelay = Duration(milliseconds: 450);
 
   // ── Cache ─────────────────────────────────────────────────────────────────
+  static const Duration _cacheDuration = Duration(minutes: 10);
+
+  /// Around 1 km. Prevents refetching when the user barely moved.
+  static const double _locationEpsilon = 0.01;
+
   WeatherData? _cache;
   DateTime? _lastFetch;
   bool? _cachedIsMetric;
@@ -39,11 +51,12 @@ class WeatherService {
   double? _cachedLon;
 
   Future<WeatherData?>? _inFlightRequest;
+  http.Client? _client;
 
-  static const Duration _cacheDuration = Duration(minutes: 10);
-
-  // Around 1 km. Prevents refetching when the user barely moved.
-  static const double _locationEpsilon = 0.01;
+  http.Client get _httpClient {
+    _client ??= http.Client();
+    return _client!;
+  }
 
   // ── Public API ────────────────────────────────────────────────────────────
 
@@ -77,9 +90,14 @@ class WeatherService {
     try {
       return await request;
     } finally {
-      _inFlightRequest = null;
+      if (identical(_inFlightRequest, request)) {
+        _inFlightRequest = null;
+      }
     }
   }
+
+  /// Returns cached weather immediately without doing network work.
+  WeatherData? get cachedWeather => _cache;
 
   /// Clear cache manually, for example when unit settings change.
   void invalidateCache() {
@@ -88,6 +106,13 @@ class WeatherService {
     _cachedIsMetric = null;
     _cachedLat = null;
     _cachedLon = null;
+    _inFlightRequest = null;
+  }
+
+  /// Safe to call on app shutdown.
+  void dispose() {
+    _client?.close();
+    _client = null;
     _inFlightRequest = null;
   }
 
@@ -100,25 +125,26 @@ class WeatherService {
   }) async {
     final String units = isMetric ? 'metric' : 'imperial';
 
-    final Uri currentUrl = Uri.https(_authority, _currentPath, {
+    final Uri currentUrl = Uri.https(_authority, _currentPath, <String, String>{
       'lat': lat.toStringAsFixed(4),
       'lon': lon.toStringAsFixed(4),
       'appid': _apiKey,
       'units': units,
     });
 
-    final Uri forecastUrl = Uri.https(_authority, _forecastPath, {
+    final Uri forecastUrl =
+        Uri.https(_authority, _forecastPath, <String, String>{
       'lat': lat.toStringAsFixed(4),
       'lon': lon.toStringAsFixed(4),
       'appid': _apiKey,
       'units': units,
-      'cnt': '4',
+      'cnt': '8',
     });
 
     try {
       final List<http.Response?> responses = await Future.wait<http.Response?>([
-        _safeGet(currentUrl),
-        _safeGet(forecastUrl),
+        _safeGetWithRetry(currentUrl),
+        _safeGetWithRetry(forecastUrl),
       ]);
 
       final http.Response? currentRes = responses[0];
@@ -129,10 +155,10 @@ class WeatherService {
         return _cache;
       }
 
-      if (currentRes.statusCode != 200) {
+      if (!_isSuccess(currentRes.statusCode)) {
         debugPrint(
           '[WeatherService] Current weather failed: '
-          '${currentRes.statusCode} — ${_safeShortBody(currentRes.body)}',
+          '${currentRes.statusCode} - ${_safeShortBody(currentRes.body)}',
         );
         return _cache;
       }
@@ -171,14 +197,31 @@ class WeatherService {
     }
   }
 
+  Future<http.Response?> _safeGetWithRetry(Uri uri) async {
+    final http.Response? first = await _safeGet(uri);
+
+    if (first == null) {
+      await Future<void>.delayed(_retryDelay);
+      return _safeGet(uri);
+    }
+
+    if (_isTemporaryStatus(first.statusCode)) {
+      await Future<void>.delayed(_retryDelay);
+      final http.Response? second = await _safeGet(uri);
+      return second ?? first;
+    }
+
+    return first;
+  }
+
   Future<http.Response?> _safeGet(Uri uri) async {
     try {
-      return await http.get(uri).timeout(_requestTimeout);
+      return await _httpClient.get(uri).timeout(_requestTimeout);
     } on TimeoutException catch (e) {
-      debugPrint('[WeatherService] Request timeout: $uri — $e');
+      debugPrint('[WeatherService] Request timeout: $uri - $e');
       return null;
     } catch (e) {
-      debugPrint('[WeatherService] Request failed: $uri — $e');
+      debugPrint('[WeatherService] Request failed: $uri - $e');
       return null;
     }
   }
@@ -189,10 +232,10 @@ class WeatherService {
       return null;
     }
 
-    if (forecastRes.statusCode != 200) {
+    if (!_isSuccess(forecastRes.statusCode)) {
       debugPrint(
         '[WeatherService] Forecast failed: '
-        '${forecastRes.statusCode} — ${_safeShortBody(forecastRes.body)}',
+        '${forecastRes.statusCode} - ${_safeShortBody(forecastRes.body)}',
       );
       return null;
     }
@@ -213,9 +256,12 @@ class WeatherService {
         : const <String, dynamic>{};
 
     final double temperature = _asDouble(main['temp']);
-    final double feelsLike = _asDouble(main['feels_like']);
+    final double feelsLike = _asDouble(
+      main['feels_like'],
+      fallback: temperature,
+    );
     final double windSpeed = _asDouble(wind['speed']);
-    final int humidity = _asInt(main['humidity']);
+    final int humidity = _asInt(main['humidity']).clamp(0, 100);
     final int weatherId = _asInt(weather['id']);
 
     final String condition = _owmIdToCondition(weatherId);
@@ -243,56 +289,67 @@ class WeatherService {
     required double fallbackTemperature,
   }) {
     if (forecastJson == null) {
-      return _ForecastValues(
-        precipProbabilityPct: 0,
-        forecastLater: fallbackTemperature,
-        forecastEvening: fallbackTemperature,
-        forecastNight: fallbackTemperature,
-      );
+      return _ForecastValues.fallback(fallbackTemperature);
     }
 
     final List<dynamic> list = _asList(forecastJson['list']);
-
-    double forecastLater = fallbackTemperature;
-    double forecastEvening = fallbackTemperature;
-    double forecastNight = fallbackTemperature;
-    int precipProbabilityPct = 0;
-
-    if (list.isNotEmpty) {
-      final Map<String, dynamic> item0 = _asMap(list[0]);
-      precipProbabilityPct =
-          (_asDouble(item0['pop']) * 100).clamp(0.0, 100.0).round();
+    if (list.isEmpty) {
+      return _ForecastValues.fallback(fallbackTemperature);
     }
 
-    if (list.length > 1) {
-      final Map<String, dynamic> item1 = _asMap(list[1]);
-      forecastLater = _asDouble(
-        _asMap(item1['main'])['temp'],
+    double later = fallbackTemperature;
+    double evening = fallbackTemperature;
+    double night = fallbackTemperature;
+    int maxPopPct = 0;
+
+    for (int i = 0; i < math.min(list.length, 8); i++) {
+      final Map<String, dynamic> item = _asMap(list[i]);
+      final Map<String, dynamic> itemMain = _asMap(item['main']);
+
+      final double temp = _asDouble(
+        itemMain['temp'],
         fallback: fallbackTemperature,
       );
+
+      final int pop = (_asDouble(item['pop']) * 100).clamp(0.0, 100.0).round();
+      if (pop > maxPopPct) maxPopPct = pop;
+
+      if (i == 1) later = temp;
+      if (i == 3) evening = temp;
+      if (i == 5 || i == list.length - 1) night = temp;
     }
 
-    if (list.length > 2) {
-      final Map<String, dynamic> item2 = _asMap(list[2]);
-      forecastEvening = _asDouble(
-        _asMap(item2['main'])['temp'],
-        fallback: fallbackTemperature,
-      );
-    }
-
-    if (list.length > 3) {
-      final Map<String, dynamic> item3 = _asMap(list[3]);
-      forecastNight = _asDouble(
-        _asMap(item3['main'])['temp'],
-        fallback: fallbackTemperature,
-      );
+    // Keep useful values even when API returned fewer than expected items.
+    if (list.length == 1) {
+      later = _forecastTempAt(list, 0, fallbackTemperature);
+      evening = later;
+      night = later;
+    } else if (list.length == 2) {
+      evening = _forecastTempAt(list, 1, fallbackTemperature);
+      night = evening;
+    } else if (list.length <= 4) {
+      night = _forecastTempAt(list, list.length - 1, fallbackTemperature);
     }
 
     return _ForecastValues(
-      precipProbabilityPct: precipProbabilityPct,
-      forecastLater: forecastLater,
-      forecastEvening: forecastEvening,
-      forecastNight: forecastNight,
+      precipProbabilityPct: maxPopPct,
+      forecastLater: later,
+      forecastEvening: evening,
+      forecastNight: night,
+    );
+  }
+
+  double _forecastTempAt(
+    List<dynamic> list,
+    int index,
+    double fallbackTemperature,
+  ) {
+    if (index < 0 || index >= list.length) return fallbackTemperature;
+
+    final Map<String, dynamic> item = _asMap(list[index]);
+    return _asDouble(
+      _asMap(item['main'])['temp'],
+      fallback: fallbackTemperature,
     );
   }
 
@@ -343,6 +400,18 @@ class WeatherService {
         lon <= 180.0;
   }
 
+  bool _isSuccess(int statusCode) {
+    return statusCode >= 200 && statusCode < 300;
+  }
+
+  bool _isTemporaryStatus(int statusCode) {
+    return statusCode == 408 ||
+        statusCode == 409 ||
+        statusCode == 425 ||
+        statusCode == 429 ||
+        (statusCode >= 500 && statusCode <= 599);
+  }
+
   // ── JSON helpers ──────────────────────────────────────────────────────────
 
   Map<String, dynamic>? _decodeObject(String body) {
@@ -383,10 +452,14 @@ class WeatherService {
   }
 
   double _asDouble(dynamic value, {double fallback = 0.0}) {
-    if (value is num) return value.toDouble();
+    if (value is num) {
+      final double parsed = value.toDouble();
+      return parsed.isFinite ? parsed : fallback;
+    }
 
     if (value is String) {
-      return double.tryParse(value) ?? fallback;
+      final double? parsed = double.tryParse(value);
+      return parsed != null && parsed.isFinite ? parsed : fallback;
     }
 
     return fallback;
@@ -408,16 +481,7 @@ class WeatherService {
     return '${body.substring(0, maxLength)}...';
   }
 
-  // ── OWM weather ID → human condition ──────────────────────────────────────
-  //
-  // Reference:
-  // 2xx Thunderstorm
-  // 3xx Drizzle
-  // 5xx Rain
-  // 6xx Snow
-  // 7xx Atmosphere
-  // 800 Clear
-  // 80x Clouds
+  // ── OWM weather ID -> human condition ──────────────────────────────────────
   String _owmIdToCondition(int id) {
     if (id == 800) return 'Clear Sky';
 
@@ -454,6 +518,15 @@ class _ForecastValues {
     required this.forecastEvening,
     required this.forecastNight,
   });
+
+  factory _ForecastValues.fallback(double temperature) {
+    return _ForecastValues(
+      precipProbabilityPct: 0,
+      forecastLater: temperature,
+      forecastEvening: temperature,
+      forecastNight: temperature,
+    );
+  }
 
   final int precipProbabilityPct;
   final double forecastLater;

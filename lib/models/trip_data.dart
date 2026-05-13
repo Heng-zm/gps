@@ -1,13 +1,13 @@
 import 'package:latlong2/latlong.dart';
 
 /// Represents a single GPS data point captured during a trip.
+///
+/// Supports both old and new JSON formats:
+/// - speed / spd / speedMph / speed_mph
+/// - alt / altFt / altitudeFt
+/// - time / timestamp / ts
+/// - acc / accuracy / accuracyMeters / accuracy_m
 class TripPoint {
-  final LatLng position;
-  final double speedMph;
-  final double altitudeFt;
-  final DateTime timestamp;
-  final double accuracyMeters;
-
   const TripPoint({
     required this.position,
     required this.speedMph,
@@ -16,33 +16,115 @@ class TripPoint {
     required this.accuracyMeters,
   });
 
-  Map<String, dynamic> toJson() => {
-        'lat': position.latitude,
-        'lng': position.longitude,
-        'speed': speedMph,
-        'alt': altitudeFt,
-        'time': timestamp.millisecondsSinceEpoch,
-        'acc': accuracyMeters,
-      };
+  final LatLng position;
+  final double speedMph;
+  final double altitudeFt;
+  final DateTime timestamp;
+  final double accuracyMeters;
+
+  bool get isValid {
+    return position.latitude.isFinite &&
+        position.longitude.isFinite &&
+        position.latitude.abs() <= 90.0 &&
+        position.longitude.abs() <= 180.0;
+  }
+
+  double get speedKmh => _safeDouble(speedMph) * 1.609344;
+
+  double get altitudeMeters => _safeDouble(altitudeFt) / 3.28084;
+
+  Map<String, dynamic> toJson() {
+    return <String, dynamic>{
+      'lat': _safeDouble(position.latitude),
+      'lng': _safeDouble(position.longitude),
+      'speed': _safeDouble(speedMph),
+      'spd': _safeDouble(speedMph),
+      'alt': _safeDouble(altitudeFt),
+      'altFt': _safeDouble(altitudeFt),
+      'time': timestamp.millisecondsSinceEpoch,
+      'acc': _safeDouble(accuracyMeters),
+    };
+  }
 
   factory TripPoint.fromJson(Map<String, dynamic> json) {
+    final double lat = _readDouble(json['lat']);
+    final double lng = _readDouble(json['lng']);
+
+    final DateTime parsedTime = _readDateTime(
+      json['time'] ?? json['timestamp'] ?? json['ts'],
+    );
+
     return TripPoint(
-      position: LatLng(
-        (json['lat'] as num?)?.toDouble() ?? 0.0,
-        (json['lng'] as num?)?.toDouble() ?? 0.0,
+      position: LatLng(lat, lng),
+      speedMph: _readDouble(
+        json['speed'] ?? json['spd'] ?? json['speedMph'] ?? json['speed_mph'],
       ),
-      speedMph: (json['speed'] as num?)?.toDouble() ?? 0.0,
-      altitudeFt: (json['alt'] as num?)?.toDouble() ?? 0.0,
-      timestamp: DateTime.fromMillisecondsSinceEpoch(
-        (json['time'] as num?)?.toInt() ?? 0,
+      altitudeFt: _readDouble(
+        json['alt'] ??
+            json['altFt'] ??
+            json['altitudeFt'] ??
+            json['altitude_ft'],
       ),
-      accuracyMeters: (json['acc'] as num?)?.toDouble() ?? 0.0,
+      timestamp: parsedTime,
+      accuracyMeters: _readDouble(
+        json['acc'] ??
+            json['accuracy'] ??
+            json['accuracyMeters'] ??
+            json['accuracy_m'],
+      ),
+    );
+  }
+
+  static TripPoint? tryFromJson(Object? raw) {
+    if (raw is! Map) return null;
+
+    try {
+      final TripPoint point = TripPoint.fromJson(
+        Map<String, dynamic>.from(raw),
+      );
+
+      return point.isValid ? point : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  TripPoint copyWith({
+    LatLng? position,
+    double? speedMph,
+    double? altitudeFt,
+    DateTime? timestamp,
+    double? accuracyMeters,
+  }) {
+    return TripPoint(
+      position: position ?? this.position,
+      speedMph: speedMph ?? this.speedMph,
+      altitudeFt: altitudeFt ?? this.altitudeFt,
+      timestamp: timestamp ?? this.timestamp,
+      accuracyMeters: accuracyMeters ?? this.accuracyMeters,
     );
   }
 }
 
 /// Represents the completed statistics and path of a recorded journey.
 class TripSummary {
+  TripSummary({
+    required this.id,
+    required this.date,
+    required this.totalTime,
+    required this.stoppedTime,
+    required this.movingTime,
+    required this.maxSpeedMph,
+    required this.avgSpeedMph,
+    required this.altitudeGainFt,
+    required this.maxAltitudeFt,
+    required this.minAltitudeFt,
+    required this.distanceMiles,
+    required List<TripPoint> points,
+  }) : points = List<TripPoint>.unmodifiable(
+          points.where((TripPoint point) => point.isValid),
+        );
+
   final String id;
   final DateTime date;
   final Duration totalTime;
@@ -56,88 +138,250 @@ class TripSummary {
   final double distanceMiles;
   final List<TripPoint> points;
 
-  // PERFORMANCE: Cached formatters.
-  // These run only once per trip, preventing lag during list scrolling.
+  /// Cached formatters. These run only once per trip.
   late final String formattedTotalTime = _formatDuration(totalTime);
   late final String formattedStoppedTime = _formatDuration(stoppedTime);
-  late final String formattedMovingTime = _formatDuration(movingTime);
+  late final String formattedMovingTime = _formatDuration(effectiveMovingTime);
 
-  TripSummary({
-    required this.id,
-    required this.date,
-    required this.totalTime,
-    required this.stoppedTime,
-    required this.movingTime,
-    required this.maxSpeedMph,
-    required this.avgSpeedMph,
-    required this.altitudeGainFt,
-    required this.maxAltitudeFt,
-    required this.minAltitudeFt,
-    required this.distanceMiles,
-    required this.points,
-  });
+  int get pointCount => points.length;
 
-  static String _formatDuration(Duration d) {
-    if (d.isNegative) return "0s";
-    final h = d.inHours;
-    final m = d.inMinutes.remainder(60);
-    final s = d.inSeconds.remainder(60);
+  bool get hasRoute => points.length >= 2;
+
+  Duration get effectiveMovingTime {
+    if (!movingTime.isNegative && movingTime > Duration.zero) {
+      return movingTime;
+    }
+
+    final Duration fallback = totalTime - stoppedTime;
+    return fallback.isNegative ? Duration.zero : fallback;
+  }
+
+  double get stoppedRatio {
+    final int total = totalTime.inSeconds;
+    if (total <= 0) return 0.0;
+
+    final int stopped = stoppedTime.inSeconds.clamp(0, total);
+    return stopped / total;
+  }
+
+  int get routeQualityScore => _calculateRouteQuality(points);
+
+  String get routeQualityLabel {
+    final int score = routeQualityScore;
+    if (score >= 88) return 'Excellent';
+    if (score >= 72) return 'Good';
+    if (score >= 50) return 'Fair';
+    return 'Weak';
+  }
+
+  Map<String, dynamic> toJson() {
+    return <String, dynamic>{
+      'id': id,
+      'date': date.millisecondsSinceEpoch,
+      'totalSec': _safeSeconds(totalTime),
+      'stopSec': _safeSeconds(stoppedTime),
+      'movSec': _safeSeconds(effectiveMovingTime),
+      'maxSpd': _safeDouble(maxSpeedMph),
+      'avgSpd': _safeDouble(avgSpeedMph),
+      'altGain': _safeDouble(altitudeGainFt),
+      'maxAlt': _safeDouble(maxAltitudeFt),
+      'minAlt': _safeDouble(minAltitudeFt),
+      'dist': _safeDouble(distanceMiles),
+      'pts': points
+          .map((TripPoint point) => point.toJson())
+          .toList(growable: false),
+
+      // Compatibility keys for Supabase/history code.
+      'totalTimeSeconds': _safeSeconds(totalTime),
+      'stoppedSeconds': _safeSeconds(stoppedTime),
+      'movingSeconds': _safeSeconds(effectiveMovingTime),
+      'maxSpeedMph': _safeDouble(maxSpeedMph),
+      'avgSpeedMph': _safeDouble(avgSpeedMph),
+      'altitudeGainFt': _safeDouble(altitudeGainFt),
+      'maxAltitudeFt': _safeDouble(maxAltitudeFt),
+      'minAltitudeFt': _safeDouble(minAltitudeFt),
+      'distanceMiles': _safeDouble(distanceMiles),
+      'route_points': points
+          .map((TripPoint point) => point.toJson())
+          .toList(growable: false),
+      'routeQuality': routeQualityScore,
+    };
+  }
+
+  factory TripSummary.fromJson(Map<String, dynamic> json) {
+    final List<TripPoint> parsedPoints = _parsePoints(
+      json['pts'] ?? json['points'] ?? json['route_points'] ?? json['route'],
+    );
+
+    final DateTime date = _readDateTime(json['date'] ?? json['dateIso']);
+
+    return TripSummary(
+      id: json['id']?.toString() ?? '',
+      date: date,
+      totalTime: Duration(
+        seconds: _readInt(json['totalSec'] ?? json['totalTimeSeconds']),
+      ),
+      stoppedTime: Duration(
+        seconds: _readInt(json['stopSec'] ?? json['stoppedSeconds']),
+      ),
+      movingTime: Duration(
+        seconds: _readInt(json['movSec'] ?? json['movingSeconds']),
+      ),
+      maxSpeedMph: _readDouble(json['maxSpd'] ?? json['maxSpeedMph']),
+      avgSpeedMph: _readDouble(json['avgSpd'] ?? json['avgSpeedMph']),
+      altitudeGainFt: _readDouble(json['altGain'] ?? json['altitudeGainFt']),
+      maxAltitudeFt: _readDouble(json['maxAlt'] ?? json['maxAltitudeFt']),
+      minAltitudeFt: _readDouble(json['minAlt'] ?? json['minAltitudeFt']),
+      distanceMiles: _readDouble(json['dist'] ?? json['distanceMiles']),
+      points: parsedPoints,
+    );
+  }
+
+  static TripSummary? tryFromJson(Object? raw) {
+    if (raw is! Map) return null;
+
+    try {
+      final TripSummary summary = TripSummary.fromJson(
+        Map<String, dynamic>.from(raw),
+      );
+
+      if (summary.id.isEmpty && summary.points.isEmpty) return null;
+      return summary;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  static List<TripPoint> _parsePoints(Object? raw) {
+    if (raw is! List) return const <TripPoint>[];
+
+    final List<TripPoint> points = <TripPoint>[];
+
+    for (final Object? item in raw) {
+      final TripPoint? point = TripPoint.tryFromJson(item);
+      if (point != null) points.add(point);
+    }
+
+    return List<TripPoint>.unmodifiable(points);
+  }
+
+  static String _formatDuration(Duration duration) {
+    final Duration safe = duration.isNegative ? Duration.zero : duration;
+
+    final int h = safe.inHours;
+    final int m = safe.inMinutes.remainder(60);
+    final int s = safe.inSeconds.remainder(60);
 
     if (h > 0) {
       return '${h}h ${m.toString().padLeft(2, '0')}m';
     }
+
     if (m > 0) {
       return '${m}m ${s.toString().padLeft(2, '0')}s';
     }
+
     return '${s}s';
   }
 
-  // --- Serialization ---
+  static int _calculateRouteQuality(List<TripPoint> points) {
+    if (points.length < 3) return 45;
 
-  Map<String, dynamic> toJson() => {
-        'id': id,
-        'date': date.millisecondsSinceEpoch,
-        'totalSec': totalTime.inSeconds,
-        'stopSec': stoppedTime.inSeconds,
-        'movSec': movingTime.inSeconds,
-        'maxSpd': maxSpeedMph,
-        'avgSpd': avgSpeedMph,
-        'altGain': altitudeGainFt,
-        'maxAlt': maxAltitudeFt,
-        'minAlt': minAltitudeFt,
-        'dist': distanceMiles,
-        'pts': points.map((p) => p.toJson()).toList(),
-      };
+    int score = 100;
+    int weakAccuracy = 0;
+    int duplicatePoints = 0;
+    double accuracySum = 0.0;
+    int accuracyCount = 0;
 
-  // BUG FIX: Uses num type-casting for safe JSON decoding from Supabase/Cloud sources.
-  factory TripSummary.fromJson(Map<String, dynamic> json) {
-    // Optimized list parsing
-    final ptsRaw = json['pts'] as List? ?? [];
-    final parsedPoints = ptsRaw
-        .map((p) => TripPoint.fromJson(p as Map<String, dynamic>))
-        .toList(growable: false);
+    double? lastLat;
+    double? lastLng;
 
-    return TripSummary(
-      id: json['id']?.toString() ?? '',
-      date: DateTime.fromMillisecondsSinceEpoch(
-        (json['date'] as num?)?.toInt() ?? 0,
-      ),
-      totalTime: Duration(
-        seconds: (json['totalSec'] as num?)?.toInt() ?? 0,
-      ),
-      stoppedTime: Duration(
-        seconds: (json['stopSec'] as num?)?.toInt() ?? 0,
-      ),
-      movingTime: Duration(
-        seconds: (json['movSec'] as num?)?.toInt() ?? 0,
-      ),
-      maxSpeedMph: (json['maxSpd'] as num?)?.toDouble() ?? 0.0,
-      avgSpeedMph: (json['avgSpd'] as num?)?.toDouble() ?? 0.0,
-      altitudeGainFt: (json['altGain'] as num?)?.toDouble() ?? 0.0,
-      maxAltitudeFt: (json['maxAlt'] as num?)?.toDouble() ?? 0.0,
-      minAltitudeFt: (json['minAlt'] as num?)?.toDouble() ?? 0.0,
-      distanceMiles: (json['dist'] as num?)?.toDouble() ?? 0.0,
-      points: parsedPoints,
-    );
+    for (final TripPoint point in points) {
+      final double accuracy = point.accuracyMeters;
+
+      if (accuracy.isFinite && accuracy > 0.0) {
+        accuracySum += accuracy;
+        accuracyCount++;
+        if (accuracy > 35.0) weakAccuracy++;
+      }
+
+      final double lat = point.position.latitude;
+      final double lng = point.position.longitude;
+      if (lastLat != null &&
+          lastLng != null &&
+          lat == lastLat &&
+          lng == lastLng) {
+        duplicatePoints++;
+      }
+
+      lastLat = lat;
+      lastLng = lng;
+    }
+
+    final double avgAccuracy =
+        accuracyCount == 0 ? 0.0 : accuracySum / accuracyCount;
+
+    if (points.length < 10) score -= 16;
+    if (points.length < 5) score -= 20;
+    score -= (weakAccuracy * 4).clamp(0, 28);
+    score -= (duplicatePoints * 3).clamp(0, 18);
+
+    if (avgAccuracy > 10.0) score -= 6;
+    if (avgAccuracy > 20.0) score -= 10;
+    if (avgAccuracy > 35.0) score -= 14;
+
+    return score.clamp(0, 100);
   }
+
+  static int _safeSeconds(Duration duration) {
+    return duration.isNegative ? 0 : duration.inSeconds;
+  }
+}
+
+double _readDouble(Object? value) {
+  if (value is num) {
+    final double parsed = value.toDouble();
+    return parsed.isFinite ? parsed : 0.0;
+  }
+
+  if (value is String) {
+    final double? parsed = double.tryParse(value);
+    return parsed != null && parsed.isFinite ? parsed : 0.0;
+  }
+
+  return 0.0;
+}
+
+int _readInt(Object? value) {
+  if (value is int) return value;
+  if (value is num) return value.toInt();
+  if (value is String) return int.tryParse(value) ?? 0;
+  return 0;
+}
+
+DateTime _readDateTime(Object? value) {
+  if (value is DateTime) return value;
+
+  if (value is num) {
+    final int millis = value.toInt();
+    if (millis > 0) {
+      return DateTime.fromMillisecondsSinceEpoch(millis);
+    }
+  }
+
+  if (value is String) {
+    final int? millis = int.tryParse(value);
+    if (millis != null && millis > 0) {
+      return DateTime.fromMillisecondsSinceEpoch(millis);
+    }
+
+    final DateTime? parsed = DateTime.tryParse(value);
+    if (parsed != null) return parsed;
+  }
+
+  return DateTime.now();
+}
+
+double _safeDouble(double value) {
+  if (!value.isFinite) return 0.0;
+  return value < 0.0 ? 0.0 : value;
 }

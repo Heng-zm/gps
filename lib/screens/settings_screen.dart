@@ -1,9 +1,17 @@
+import 'dart:ui' as ui;
+
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:geolocator/geolocator.dart';
 
 import '../services/settings_service.dart';
+import '../widgets/app_console_widget.dart';
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SETTINGS SCREEN — Premium Map-First Companion UI
+// Bug fixes + UI/UX polish + overflow-safe text + better permission actions
+// ═══════════════════════════════════════════════════════════════════════════════
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -14,21 +22,40 @@ class SettingsScreen extends StatefulWidget {
 
 class _SettingsScreenState extends State<SettingsScreen> {
   final SettingsService _s = SettingsService.instance;
-  LocationPermission _locationPermission = LocationPermission.denied;
 
-  static const Color _teal = Color(0xFF4ECDC4);
-  static const Color _bg = Color(0xFF070707);
-  static const Color _card = Color(0xFF121212);
+  LocationPermission _locationPermission = LocationPermission.denied;
+  bool _checkingPermission = true;
+  bool _busyReset = false;
+
+  static const Color _bg = Color(0xFF000000);
+  static const Color _surface = Color(0xFF101012);
+  static const Color _gold = Color(0xFFD4A843);
+  static const Color _goldSoft = Color(0xFFFFD54F);
+  static const Color _green = Color(0xFF32D74B);
+  static const Color _red = Color(0xFFFF453A);
+  static const Color _blue = Color(0xFF4A9EFF);
+  static const Color _muted = Color(0xFF777777);
 
   @override
   void initState() {
     super.initState();
+
     _s.addListener(_onSettingsChanged);
-    _checkPermission();
 
     if (!_s.isLoaded) {
       _s.load();
     }
+
+    AppConsole.log(
+      'Settings screen opened',
+      tag: 'SETTINGS',
+      data: <String, Object?>{
+        'mapStyle': _s.mapStyle.name,
+        'units': _s.useKmh ? 'metric' : 'imperial',
+      },
+    );
+
+    _checkPermission();
   }
 
   @override
@@ -43,6 +70,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Future<void> _checkPermission() async {
+    if (mounted) {
+      setState(() => _checkingPermission = true);
+    }
+
     try {
       final LocationPermission permission = await Geolocator.checkPermission();
 
@@ -50,9 +81,63 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
       setState(() {
         _locationPermission = permission;
+        _checkingPermission = false;
       });
-    } catch (e, st) {
-      debugPrint('SettingsScreen permission check failed: $e\n$st');
+
+      AppConsole.log(
+        'Location permission checked',
+        tag: 'PERMISSION',
+        data: <String, Object?>{
+          'status': permission.name,
+        },
+      );
+    } catch (error, stackTrace) {
+      debugPrint('SettingsScreen permission check failed: $error\n$stackTrace');
+      AppConsole.error(
+        'Permission check failed',
+        tag: 'PERMISSION',
+        error: error,
+        stackTrace: stackTrace,
+      );
+
+      if (!mounted) return;
+      setState(() => _checkingPermission = false);
+    }
+  }
+
+  Future<void> _requestLocationPermission() async {
+    HapticFeedback.lightImpact();
+
+    try {
+      final LocationPermission permission =
+          await Geolocator.requestPermission();
+
+      if (!mounted) return;
+
+      setState(() {
+        _locationPermission = permission;
+      });
+
+      AppConsole.log(
+        'Location permission requested',
+        tag: 'PERMISSION',
+        data: <String, Object?>{
+          'status': permission.name,
+        },
+      );
+
+      if (permission == LocationPermission.deniedForever) {
+        await _openLocationSettings();
+      }
+    } catch (error, stackTrace) {
+      debugPrint(
+          'SettingsScreen permission request failed: $error\n$stackTrace');
+      AppConsole.error(
+        'Permission request failed',
+        tag: 'PERMISSION',
+        error: error,
+        stackTrace: stackTrace,
+      );
     }
   }
 
@@ -61,8 +146,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
     try {
       await Geolocator.openAppSettings();
-    } catch (e, st) {
-      debugPrint('Open app settings failed: $e\n$st');
+      AppConsole.log('Opened app settings', tag: 'PERMISSION');
+    } catch (error, stackTrace) {
+      debugPrint('Open app settings failed: $error\n$stackTrace');
+      AppConsole.error(
+        'Open app settings failed',
+        tag: 'PERMISSION',
+        error: error,
+        stackTrace: stackTrace,
+      );
     }
 
     await _checkPermission();
@@ -73,22 +165,46 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
     showCupertinoModalPopup<void>(
       context: context,
-      builder: (BuildContext context) {
+      builder: (BuildContext popupContext) {
         return CupertinoActionSheet(
-          title: const Text('Map Engine Style'),
-          message: const Text('Select your preferred visualization mode'),
+          title: const Text('Map Style'),
+          message: const Text('Choose how the live map should look.'),
           actions: AppMapStyle.values.map((AppMapStyle style) {
+            final bool selected = style == _s.mapStyle;
+
             return CupertinoActionSheetAction(
+              isDefaultAction: selected,
               onPressed: () {
+                HapticFeedback.selectionClick();
                 _s.setMapStyle(style);
-                Navigator.pop(context);
+                AppConsole.success(
+                  'Map style changed',
+                  tag: 'SETTINGS',
+                  data: <String, Object?>{
+                    'style': style.name,
+                  },
+                );
+                Navigator.pop(popupContext);
               },
-              child: Text(style.name.toUpperCase()),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: <Widget>[
+                  if (selected) ...<Widget>[
+                    const Icon(
+                      CupertinoIcons.check_mark_circled_solid,
+                      size: 18,
+                      color: _gold,
+                    ),
+                    const SizedBox(width: 8),
+                  ],
+                  Text(style.name.toUpperCase()),
+                ],
+              ),
             );
           }).toList(),
           cancelButton: CupertinoActionSheetAction(
             isDefaultAction: true,
-            onPressed: () => Navigator.pop(context),
+            onPressed: () => Navigator.pop(popupContext),
             child: const Text('Cancel'),
           ),
         );
@@ -96,38 +212,83 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
-  void _confirmClearData() {
+  Future<void> _confirmClearData() async {
     HapticFeedback.heavyImpact();
 
-    showCupertinoDialog<void>(
+    final bool? confirmed = await showCupertinoDialog<bool>(
       context: context,
-      builder: (BuildContext context) {
+      builder: (BuildContext dialogContext) {
         return CupertinoAlertDialog(
           title: const Text('Reset All Data?'),
           content: const Text(
-            'This will return all settings to factory defaults and clear your trip cache.',
+            'This returns settings to defaults and clears your local trip cache.',
           ),
           actions: <Widget>[
             CupertinoDialogAction(
-              onPressed: () => Navigator.pop(context),
+              onPressed: () => Navigator.pop(dialogContext, false),
               child: const Text('Cancel'),
             ),
             CupertinoDialogAction(
               isDestructiveAction: true,
-              onPressed: () async {
-                Navigator.of(context).pop();
-
-                try {
-                  await _s.clearAllData();
-                } catch (e, st) {
-                  debugPrint('Clear settings failed: $e\n$st');
-                }
-              },
+              onPressed: () => Navigator.pop(dialogContext, true),
               child: const Text('Reset Everything'),
             ),
           ],
         );
       },
+    );
+
+    if (confirmed != true || _busyReset) return;
+
+    setState(() => _busyReset = true);
+
+    try {
+      await _s.clearAllData();
+
+      AppConsole.warn('Factory settings reset complete', tag: 'SETTINGS');
+
+      if (!mounted) return;
+
+      _showSnack(
+        message: 'Settings reset complete.',
+        color: _green,
+      );
+    } catch (error, stackTrace) {
+      debugPrint('Clear settings failed: $error\n$stackTrace');
+      AppConsole.error(
+        'Clear settings failed',
+        tag: 'SETTINGS',
+        error: error,
+        stackTrace: stackTrace,
+      );
+
+      if (!mounted) return;
+
+      _showSnack(
+        message: 'Failed to reset settings.',
+        color: _red,
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _busyReset = false);
+      }
+    }
+  }
+
+  void _showSnack({
+    required String message,
+    required Color color,
+  }) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        backgroundColor: color,
+        behavior: SnackBarBehavior.floating,
+        margin: const EdgeInsets.all(16),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(14),
+        ),
+      ),
     );
   }
 
@@ -136,224 +297,561 @@ class _SettingsScreenState extends State<SettingsScreen> {
         _locationPermission == LocationPermission.whileInUse;
   }
 
+  String get _permissionLabel {
+    if (_checkingPermission) return 'CHECKING';
+
+    switch (_locationPermission) {
+      case LocationPermission.always:
+        return 'ALWAYS';
+      case LocationPermission.whileInUse:
+        return 'WHILE USING';
+      case LocationPermission.denied:
+        return 'DENIED';
+      case LocationPermission.deniedForever:
+        return 'BLOCKED';
+      case LocationPermission.unableToDetermine:
+        return 'UNKNOWN';
+    }
+  }
+
+  Color get _permissionColor {
+    if (_checkingPermission) return _goldSoft;
+    if (_hasLocationAccess) return _green;
+    if (_locationPermission == LocationPermission.deniedForever) return _red;
+    return _goldSoft;
+  }
+
   @override
   Widget build(BuildContext context) {
-    return CupertinoPageScaffold(
-      backgroundColor: _bg,
-      child: CustomScrollView(
-        physics: const BouncingScrollPhysics(),
-        slivers: <Widget>[
-          CupertinoSliverNavigationBar(
-            largeTitle: const Text(
-              'Settings',
-              style: TextStyle(
-                color: Colors.white,
-                letterSpacing: -1,
+    return AnnotatedRegion<SystemUiOverlayStyle>(
+      value: SystemUiOverlayStyle.light,
+      child: CupertinoPageScaffold(
+        backgroundColor: _bg,
+        child: Stack(
+          children: <Widget>[
+            const Positioned.fill(child: _SettingsBackground()),
+            CustomScrollView(
+              physics: const BouncingScrollPhysics(
+                parent: AlwaysScrollableScrollPhysics(),
               ),
-            ),
-            backgroundColor: _bg.withValues(alpha: 0.8),
-            border: null,
-          ),
-          SliverSafeArea(
-            top: false,
-            bottom: true,
-            sliver: SliverToBoxAdapter(
-              child: Padding(
-                padding: const EdgeInsets.only(top: 12, bottom: 40),
-                child: Column(
-                  children: <Widget>[
-                    _Section(
-                      title: 'PERMISSIONS',
-                      children: <Widget>[
-                        _InfoRow(
-                          label: 'Location Access',
-                          value: _locationPermission.name.toUpperCase(),
-                          valueColor:
-                              _hasLocationAccess ? _teal : Colors.redAccent,
-                          onTap: _openLocationSettings,
-                        ),
-                      ],
+              slivers: <Widget>[
+                CupertinoSliverNavigationBar(
+                  largeTitle: const Text(
+                    'Settings',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w900,
+                      letterSpacing: -0.8,
                     ),
-                    _Section(
-                      title: 'VISUALS & UNITS',
-                      children: <Widget>[
-                        _ToggleRow(
-                          label: 'Metric System',
-                          subtitle: 'Use KM/H and meters',
-                          value: _s.useKmh,
-                          onChanged: _s.setUseKmh,
-                        ),
-                        const _Sep(),
-                        _InfoRow(
-                          label: 'Map Style',
-                          value: _s.mapStyle.name.toUpperCase(),
-                          onTap: _showMapStylePicker,
-                        ),
-                      ],
-                    ),
-                    _Section(
-                      title: 'SENSORS',
-                      children: <Widget>[
-                        _ToggleRow(
-                          label: 'Keep Screen On',
-                          subtitle: 'Active during tracking',
-                          value: _s.keepScreenOn,
-                          onChanged: _s.setKeepScreenOn,
-                        ),
-                        const _Sep(),
-                        _ToggleRow(
-                          label: 'Show Altitude',
-                          value: _s.showAltitude,
-                          onChanged: _s.setShowAltitude,
-                        ),
-                        const _Sep(),
-                        _ToggleRow(
-                          label: 'Show Heading',
-                          value: _s.showHeading,
-                          onChanged: _s.setShowHeading,
-                        ),
-                      ],
-                    ),
-                    _Section(
-                      title: 'GPS PERFORMANCE',
-                      children: <Widget>[
-                        Padding(
-                          padding: const EdgeInsets.all(16),
-                          child: Column(
+                  ),
+                  backgroundColor: _bg.withValues(alpha: 0.78),
+                  border: null,
+                  stretch: true,
+                ),
+                CupertinoSliverRefreshControl(onRefresh: _checkPermission),
+                SliverSafeArea(
+                  top: false,
+                  bottom: true,
+                  sliver: SliverToBoxAdapter(
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 10, 16, 44),
+                      child: Column(
+                        children: <Widget>[
+                          _HeroStatusCard(
+                            permissionLabel: _permissionLabel,
+                            permissionColor: _permissionColor,
+                            hasLocationAccess: _hasLocationAccess,
+                            gpsLabel: _s.gpsAccuracyLabel,
+                            unitLabel: _s.useKmh ? 'METRIC' : 'IMPERIAL',
+                            onRequestLocation: _requestLocationPermission,
+                            onOpenSettings: _openLocationSettings,
+                          ),
+                          const SizedBox(height: 18),
+                          _Section(
+                            title: 'TRACKING SETUP',
                             children: <Widget>[
-                              Row(
-                                mainAxisAlignment:
-                                    MainAxisAlignment.spaceBetween,
-                                children: <Widget>[
-                                  const Text(
-                                    'Accuracy Mode',
-                                    style: TextStyle(
-                                      color: Colors.white,
-                                      fontSize: 15,
-                                      fontWeight: FontWeight.w600,
-                                    ),
-                                  ),
-                                  Text(
-                                    _s.gpsAccuracyLabel,
-                                    style: const TextStyle(
-                                      color: _teal,
-                                      fontSize: 13,
-                                      fontWeight: FontWeight.w700,
-                                    ),
-                                  ),
-                                ],
+                              _SettingTile(
+                                icon: CupertinoIcons.location_fill,
+                                iconColor: _permissionColor,
+                                title: 'Location Access',
+                                subtitle: _hasLocationAccess
+                                    ? 'Ready for live GPS tracking'
+                                    : 'Required for route recording',
+                                trailing: _StatusPill(
+                                  label: _permissionLabel,
+                                  color: _permissionColor,
+                                ),
+                                onTap: _hasLocationAccess
+                                    ? _openLocationSettings
+                                    : _requestLocationPermission,
                               ),
-                              const SizedBox(height: 16),
-                              Row(
-                                mainAxisAlignment:
-                                    MainAxisAlignment.spaceBetween,
-                                children: <Widget>[
-                                  _AccuracyChip(
-                                    label: 'BEST',
-                                    selected: _s.gpsAccuracyMode == 0,
-                                    onTap: () => _s.setGpsAccuracyMode(0),
-                                  ),
-                                  _AccuracyChip(
-                                    label: 'BALANCED',
-                                    selected: _s.gpsAccuracyMode == 1,
-                                    onTap: () => _s.setGpsAccuracyMode(1),
-                                  ),
-                                  _AccuracyChip(
-                                    label: 'ECO',
-                                    selected: _s.gpsAccuracyMode == 2,
-                                    onTap: () => _s.setGpsAccuracyMode(2),
-                                  ),
-                                ],
+                              const _Sep(),
+                              _SettingTile(
+                                icon: CupertinoIcons.map_fill,
+                                iconColor: _goldSoft,
+                                title: 'Map Style',
+                                subtitle: 'Live route visualization mode',
+                                trailing: _ValueLabel(
+                                  value: _s.mapStyle.name.toUpperCase(),
+                                  color: _goldSoft,
+                                ),
+                                onTap: _showMapStylePicker,
                               ),
                             ],
                           ),
-                        ),
-                      ],
-                    ),
-                    _Section(
-                      title: 'SAFETY',
-                      children: <Widget>[
-                        _ToggleRow(
-                          label: 'Speed Alert',
-                          subtitle: 'Visual warning when exceeding limit',
-                          value: _s.speedAlertEnabled,
-                          onChanged: _s.setSpeedAlertEnabled,
-                        ),
-                        if (_s.speedAlertEnabled) ...<Widget>[
-                          const _Sep(),
-                          Padding(
-                            padding: const EdgeInsets.fromLTRB(16, 16, 16, 4),
-                            child: Row(
-                              children: <Widget>[
-                                const Text(
-                                  'Alert Threshold',
-                                  style: TextStyle(
-                                    color: Colors.white,
-                                    fontSize: 15,
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                                ),
-                                const Spacer(),
-                                Text(
-                                  '${_s.speedAlertDisplayValue.toInt()} ${_s.speedUnit}',
-                                  style: const TextStyle(
-                                    color: _teal,
-                                    fontSize: 16,
-                                    fontWeight: FontWeight.w800,
-                                  ),
-                                ),
-                              ],
-                            ),
+                          _Section(
+                            title: 'UNITS & DISPLAY',
+                            children: <Widget>[
+                              _SwitchTile(
+                                icon: CupertinoIcons.speedometer,
+                                iconColor: _green,
+                                title: 'Metric System',
+                                subtitle: 'Use km/h, kilometers and meters',
+                                value: _s.useKmh,
+                                onChanged: (bool value) {
+                                  _s.setUseKmh(value);
+                                  AppConsole.log(
+                                    'Metric system changed',
+                                    tag: 'SETTINGS',
+                                    data: <String, Object?>{'enabled': value},
+                                  );
+                                },
+                              ),
+                              const _Sep(),
+                              _SwitchTile(
+                                icon: CupertinoIcons.cloud_sun_fill,
+                                iconColor: _goldSoft,
+                                title: 'Weather Card',
+                                subtitle:
+                                    'Show live weather on tracking screen',
+                                value: _s.showWeather,
+                                onChanged: (bool value) {
+                                  _s.setShowWeather(value);
+                                  AppConsole.log(
+                                    'Weather card changed',
+                                    tag: 'SETTINGS',
+                                    data: <String, Object?>{'enabled': value},
+                                  );
+                                },
+                              ),
+                              const _Sep(),
+                              _SwitchTile(
+                                icon: CupertinoIcons.arrow_up_arrow_down,
+                                iconColor: _blue,
+                                title: 'Show Altitude',
+                                subtitle: 'Display elevation during tracking',
+                                value: _s.showAltitude,
+                                onChanged: (bool value) {
+                                  _s.setShowAltitude(value);
+                                  AppConsole.log(
+                                    'Altitude display changed',
+                                    tag: 'SETTINGS',
+                                    data: <String, Object?>{'enabled': value},
+                                  );
+                                },
+                              ),
+                              const _Sep(),
+                              _SwitchTile(
+                                icon: CupertinoIcons.compass_fill,
+                                iconColor: _goldSoft,
+                                title: 'Show Heading',
+                                subtitle: 'Display compass and route direction',
+                                value: _s.showHeading,
+                                onChanged: (bool value) {
+                                  _s.setShowHeading(value);
+                                  AppConsole.log(
+                                    'Heading display changed',
+                                    tag: 'SETTINGS',
+                                    data: <String, Object?>{'enabled': value},
+                                  );
+                                },
+                              ),
+                            ],
                           ),
-                          _SliderRow(
-                            value: _s.speedAlertDisplayValue,
-                            min: _s.useKmh ? 30 : 20,
-                            max: _s.speedAlertMax,
-                            onChanged: _s.setSpeedAlertDisplayValue,
+                          _Section(
+                            title: 'GPS PERFORMANCE',
+                            children: <Widget>[
+                              _GpsAccuracyPanel(
+                                label: _s.gpsAccuracyLabel,
+                                selectedMode: _s.gpsAccuracyMode,
+                                onSelect: (int mode) {
+                                  _s.setGpsAccuracyMode(mode);
+                                  AppConsole.log(
+                                    'GPS accuracy mode changed',
+                                    tag: 'SETTINGS',
+                                    data: <String, Object?>{'mode': mode},
+                                  );
+                                },
+                              ),
+                            ],
+                          ),
+                          _Section(
+                            title: 'SAFETY',
+                            children: <Widget>[
+                              _SwitchTile(
+                                icon: CupertinoIcons
+                                    .exclamationmark_triangle_fill,
+                                iconColor: _red,
+                                title: 'Speed Alert',
+                                subtitle: 'Warn when speed exceeds your limit',
+                                value: _s.speedAlertEnabled,
+                                onChanged: (bool value) {
+                                  _s.setSpeedAlertEnabled(value);
+                                  AppConsole.log(
+                                    'Speed alert changed',
+                                    tag: 'SETTINGS',
+                                    data: <String, Object?>{'enabled': value},
+                                  );
+                                },
+                              ),
+                              AnimatedSwitcher(
+                                duration: const Duration(milliseconds: 220),
+                                switchInCurve: Curves.easeOut,
+                                switchOutCurve: Curves.easeIn,
+                                child: _s.speedAlertEnabled
+                                    ? Column(
+                                        key: const ValueKey<String>(
+                                          'speed-alert-slider',
+                                        ),
+                                        children: <Widget>[
+                                          const _Sep(),
+                                          _SpeedAlertPanel(
+                                            value: _s.speedAlertDisplayValue,
+                                            min: _s.useKmh ? 30.0 : 20.0,
+                                            max: _s.speedAlertMax,
+                                            unit: _s.speedUnit,
+                                            onChanged: (double value) {
+                                              _s.setSpeedAlertDisplayValue(
+                                                  value);
+                                              AppConsole.log(
+                                                'Speed alert threshold changed',
+                                                tag: 'SETTINGS',
+                                                data: <String, Object?>{
+                                                  'value': value.round(),
+                                                  'unit': _s.speedUnit,
+                                                },
+                                              );
+                                            },
+                                          ),
+                                        ],
+                                      )
+                                    : const SizedBox(
+                                        key: ValueKey<String>(
+                                          'speed-alert-disabled',
+                                        ),
+                                        height: 0,
+                                      ),
+                              ),
+                            ],
+                          ),
+                          _Section(
+                            title: 'POWER & SENSORS',
+                            children: <Widget>[
+                              _SwitchTile(
+                                icon: CupertinoIcons.device_phone_portrait,
+                                iconColor: _goldSoft,
+                                title: 'Keep Screen On',
+                                subtitle: 'Active during tracking when allowed',
+                                value: _s.keepScreenOn,
+                                onChanged: (bool value) {
+                                  _s.setKeepScreenOn(value);
+                                  AppConsole.log(
+                                    'Keep screen on changed',
+                                    tag: 'SETTINGS',
+                                    data: <String, Object?>{'enabled': value},
+                                  );
+                                },
+                              ),
+                              const _WakeLockNote(),
+                            ],
+                          ),
+                          _Section(
+                            title: 'STORAGE',
+                            children: <Widget>[
+                              _SettingTile(
+                                icon: CupertinoIcons.trash_fill,
+                                iconColor: _red,
+                                title: 'Reset Factory Settings',
+                                subtitle:
+                                    'Restore defaults and clear local cache',
+                                trailing: _busyReset
+                                    ? const CupertinoActivityIndicator(
+                                        color: _red,
+                                        radius: 9,
+                                      )
+                                    : const Icon(
+                                        CupertinoIcons.chevron_right,
+                                        color: Colors.white24,
+                                        size: 15,
+                                      ),
+                                onTap: _busyReset ? null : _confirmClearData,
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 22),
+                          const AppConsoleSettingsCard(),
+                          _Section(
+                            title: 'SYSTEM',
+                            children: const <Widget>[
+                              _SettingTile(
+                                icon: CupertinoIcons.info_circle_fill,
+                                iconColor: _blue,
+                                title: 'Version',
+                                subtitle: 'TrackPro AI',
+                                trailing: _ValueLabel(
+                                  value: '1.5.0',
+                                  color: _muted,
+                                ),
+                              ),
+                              _Sep(),
+                              _SettingTile(
+                                icon: CupertinoIcons.checkmark_shield_fill,
+                                iconColor: _green,
+                                title: 'API Status',
+                                subtitle: 'Cloud services are reachable',
+                                trailing: _StatusPill(
+                                  label: 'ONLINE',
+                                  color: _green,
+                                ),
+                              ),
+                            ],
                           ),
                         ],
-                      ],
+                      ),
                     ),
-                    _Section(
-                      title: 'STORAGE',
-                      children: <Widget>[
-                        _InfoRow(
-                          label: 'Reset Factory Settings',
-                          value: '',
-                          valueColor: Colors.redAccent,
-                          onTap: _confirmClearData,
-                        ),
-                      ],
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// BACKGROUND / HERO
+// ═══════════════════════════════════════════════════════════════════════════════
+
+class _SettingsBackground extends StatelessWidget {
+  const _SettingsBackground();
+
+  @override
+  Widget build(BuildContext context) {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        gradient: RadialGradient(
+          center: const Alignment(-0.65, -0.85),
+          radius: 1.18,
+          colors: <Color>[
+            _SettingsScreenState._gold.withValues(alpha: 0.16),
+            const Color(0xFF080808),
+            _SettingsScreenState._bg,
+          ],
+          stops: const <double>[0.0, 0.42, 1.0],
+        ),
+      ),
+    );
+  }
+}
+
+class _HeroStatusCard extends StatelessWidget {
+  const _HeroStatusCard({
+    required this.permissionLabel,
+    required this.permissionColor,
+    required this.hasLocationAccess,
+    required this.gpsLabel,
+    required this.unitLabel,
+    required this.onRequestLocation,
+    required this.onOpenSettings,
+  });
+
+  final String permissionLabel;
+  final Color permissionColor;
+  final bool hasLocationAccess;
+  final String gpsLabel;
+  final String unitLabel;
+  final VoidCallback onRequestLocation;
+  final VoidCallback onOpenSettings;
+
+  @override
+  Widget build(BuildContext context) {
+    return _GlassCard(
+      radius: 28,
+      padding: const EdgeInsets.all(18),
+      child: Column(
+        children: <Widget>[
+          Row(
+            children: <Widget>[
+              Container(
+                width: 52,
+                height: 52,
+                decoration: BoxDecoration(
+                  color: permissionColor.withValues(alpha: 0.13),
+                  borderRadius: BorderRadius.circular(18),
+                  border: Border.all(
+                    color: permissionColor.withValues(alpha: 0.24),
+                  ),
+                ),
+                child: Icon(
+                  hasLocationAccess
+                      ? CupertinoIcons.location_fill
+                      : CupertinoIcons.location_slash,
+                  color: permissionColor,
+                  size: 24,
+                ),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    _SafeText(
+                      hasLocationAccess
+                          ? 'Ready to Track'
+                          : 'Location Setup Needed',
+                      maxLines: 1,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 19,
+                        fontWeight: FontWeight.w900,
+                        letterSpacing: -0.2,
+                      ),
                     ),
-                    _Section(
-                      title: 'SYSTEM',
-                      children: const <Widget>[
-                        _InfoRow(
-                          label: 'Version',
-                          value: '1.5.0',
-                        ),
-                        _Sep(),
-                        _InfoRow(
-                          label: 'API Status',
-                          value: 'ONLINE',
-                          valueColor: _teal,
-                        ),
-                      ],
+                    const SizedBox(height: 4),
+                    _SafeText(
+                      hasLocationAccess
+                          ? 'GPS, speed and route recording are available.'
+                          : 'Allow location access to record live trips.',
+                      maxLines: 2,
+                      softWrap: true,
+                      style: const TextStyle(
+                        color: Colors.white54,
+                        fontSize: 12,
+                        height: 1.25,
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
                   ],
                 ),
               ),
-            ),
+            ],
           ),
+          const SizedBox(height: 16),
+          Row(
+            children: <Widget>[
+              Expanded(
+                child: _HeroMiniStat(
+                  label: 'LOCATION',
+                  value: permissionLabel,
+                  color: permissionColor,
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: _HeroMiniStat(
+                  label: 'GPS MODE',
+                  value: gpsLabel.toUpperCase(),
+                  color: _SettingsScreenState._goldSoft,
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: _HeroMiniStat(
+                  label: 'UNITS',
+                  value: unitLabel,
+                  color: _SettingsScreenState._blue,
+                ),
+              ),
+            ],
+          ),
+          if (!hasLocationAccess) ...<Widget>[
+            const SizedBox(height: 16),
+            Row(
+              children: <Widget>[
+                Expanded(
+                  child: _ActionButton(
+                    label: 'ALLOW LOCATION',
+                    color: _SettingsScreenState._green,
+                    onTap: onRequestLocation,
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: _ActionButton(
+                    label: 'APP SETTINGS',
+                    color: _SettingsScreenState._goldSoft,
+                    onTap: onOpenSettings,
+                  ),
+                ),
+              ],
+            ),
+          ],
         ],
       ),
     );
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// REUSABLE WIDGETS
-// ─────────────────────────────────────────────────────────────────────────────
+class _HeroMiniStat extends StatelessWidget {
+  const _HeroMiniStat({
+    required this.label,
+    required this.value,
+    required this.color,
+  });
+
+  final String label;
+  final String value;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.04),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: Colors.white.withValues(alpha: 0.07),
+        ),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 11),
+        child: Column(
+          children: <Widget>[
+            _SafeText(
+              value,
+              maxLines: 1,
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: color,
+                fontSize: 12,
+                fontWeight: FontWeight.w900,
+                letterSpacing: 0.4,
+              ),
+            ),
+            const SizedBox(height: 4),
+            _SafeText(
+              label,
+              maxLines: 1,
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                color: Colors.white38,
+                fontSize: 8,
+                fontWeight: FontWeight.w900,
+                letterSpacing: 0.8,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SECTIONS
+// ═══════════════════════════════════════════════════════════════════════════════
 
 class _Section extends StatelessWidget {
   const _Section({
@@ -366,86 +864,363 @@ class _Section extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: <Widget>[
-        Padding(
-          padding: const EdgeInsets.fromLTRB(24, 20, 24, 8),
-          child: Text(
-            title,
-            style: const TextStyle(
-              color: _SettingsScreenState._teal,
-              fontSize: 11,
-              fontWeight: FontWeight.w800,
-              letterSpacing: 1.2,
+    return RepaintBoundary(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          Padding(
+            padding: const EdgeInsets.fromLTRB(8, 22, 8, 9),
+            child: _SafeText(
+              title,
+              maxLines: 1,
+              style: const TextStyle(
+                color: _SettingsScreenState._goldSoft,
+                fontSize: 11,
+                fontWeight: FontWeight.w900,
+                letterSpacing: 1.2,
+              ),
             ),
           ),
-        ),
-        Container(
-          margin: const EdgeInsets.symmetric(horizontal: 16),
-          decoration: BoxDecoration(
-            color: _SettingsScreenState._card,
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(
-              color: Colors.white.withValues(alpha: 0.05),
-            ),
+          _GlassCard(
+            radius: 22,
+            padding: EdgeInsets.zero,
+            child: Column(children: children),
           ),
-          child: Column(
-            children: children,
-          ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 }
 
-class _ToggleRow extends StatelessWidget {
-  const _ToggleRow({
-    required this.label,
-    required this.value,
-    required this.onChanged,
-    this.subtitle,
+class _GlassCard extends StatelessWidget {
+  const _GlassCard({
+    required this.child,
+    this.padding = const EdgeInsets.all(16),
+    this.radius = 22,
   });
 
-  final String label;
-  final String? subtitle;
+  final Widget child;
+  final EdgeInsetsGeometry padding;
+  final double radius;
+
+  @override
+  Widget build(BuildContext context) {
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(radius),
+      child: BackdropFilter(
+        filter: ui.ImageFilter.blur(sigmaX: 18, sigmaY: 18),
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            color: _SettingsScreenState._surface.withValues(alpha: 0.90),
+            borderRadius: BorderRadius.circular(radius),
+            border: Border.all(
+              color: Colors.white.withValues(alpha: 0.07),
+            ),
+            boxShadow: <BoxShadow>[
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.30),
+                blurRadius: 22,
+                offset: const Offset(0, 12),
+              ),
+            ],
+          ),
+          child: Padding(
+            padding: padding,
+            child: child,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ROWS / TILES
+// ═══════════════════════════════════════════════════════════════════════════════
+
+class _SettingTile extends StatelessWidget {
+  const _SettingTile({
+    required this.icon,
+    required this.iconColor,
+    required this.title,
+    required this.subtitle,
+    this.trailing,
+    this.onTap,
+  });
+
+  final IconData icon;
+  final Color iconColor;
+  final String title;
+  final String subtitle;
+  final Widget? trailing;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final Widget content = Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 14),
+      child: Row(
+        children: <Widget>[
+          _IconBox(icon: icon, color: iconColor),
+          const SizedBox(width: 13),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                _SafeText(
+                  title,
+                  maxLines: 1,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 15,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+                const SizedBox(height: 3),
+                _SafeText(
+                  subtitle,
+                  maxLines: 2,
+                  softWrap: true,
+                  style: const TextStyle(
+                    color: Colors.white38,
+                    fontSize: 12,
+                    height: 1.22,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          if (trailing != null) ...<Widget>[
+            const SizedBox(width: 10),
+            trailing!,
+          ],
+        ],
+      ),
+    );
+
+    if (onTap == null) return content;
+
+    return CupertinoButton(
+      padding: EdgeInsets.zero,
+      minSize: 0,
+      onPressed: () {
+        HapticFeedback.lightImpact();
+        onTap!();
+      },
+      child: content,
+    );
+  }
+}
+
+class _SwitchTile extends StatelessWidget {
+  const _SwitchTile({
+    required this.icon,
+    required this.iconColor,
+    required this.title,
+    required this.subtitle,
+    required this.value,
+    required this.onChanged,
+  });
+
+  final IconData icon;
+  final Color iconColor;
+  final String title;
+  final String subtitle;
   final bool value;
   final ValueChanged<bool> onChanged;
 
   @override
   Widget build(BuildContext context) {
+    return _SettingTile(
+      icon: icon,
+      iconColor: iconColor,
+      title: title,
+      subtitle: subtitle,
+      trailing: CupertinoSwitch(
+        value: value,
+        activeTrackColor: _SettingsScreenState._gold,
+        onChanged: (bool next) {
+          HapticFeedback.selectionClick();
+          onChanged(next);
+        },
+      ),
+    );
+  }
+}
+
+class _IconBox extends StatelessWidget {
+  const _IconBox({
+    required this.icon,
+    required this.color,
+  });
+
+  final IconData icon;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 34,
+      height: 34,
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: color.withValues(alpha: 0.16),
+        ),
+      ),
+      child: Icon(icon, color: color, size: 17),
+    );
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SPECIAL PANELS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+class _GpsAccuracyPanel extends StatelessWidget {
+  const _GpsAccuracyPanel({
+    required this.label,
+    required this.selectedMode,
+    required this.onSelect,
+  });
+
+  final String label;
+  final int selectedMode;
+  final ValueChanged<int> onSelect;
+
+  @override
+  Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.all(16),
-      child: Row(
+      padding: const EdgeInsets.fromLTRB(15, 15, 15, 16),
+      child: Column(
         children: <Widget>[
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: <Widget>[
-                Text(
-                  label,
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 16,
-                    fontWeight: FontWeight.w500,
-                  ),
-                ),
-                if (subtitle != null) ...<Widget>[
-                  const SizedBox(height: 2),
-                  Text(
-                    subtitle!,
-                    style: TextStyle(
-                      color: Colors.white.withValues(alpha: 0.4),
-                      fontSize: 12,
+          Row(
+            children: <Widget>[
+              const _IconBox(
+                icon: CupertinoIcons.scope,
+                color: _SettingsScreenState._goldSoft,
+              ),
+              const SizedBox(width: 13),
+              const Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    _SafeText(
+                      'Accuracy Mode',
+                      maxLines: 1,
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 15,
+                        fontWeight: FontWeight.w800,
+                      ),
                     ),
-                  ),
-                ],
-              ],
-            ),
+                    SizedBox(height: 3),
+                    _SafeText(
+                      'Balance GPS precision and battery usage',
+                      maxLines: 2,
+                      softWrap: true,
+                      style: TextStyle(
+                        color: Colors.white38,
+                        fontSize: 12,
+                        height: 1.22,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 10),
+              _ValueLabel(
+                value: label.toUpperCase(),
+                color: _SettingsScreenState._goldSoft,
+              ),
+            ],
           ),
-          CupertinoSwitch(
-            value: value,
-            activeTrackColor: _SettingsScreenState._teal,
+          const SizedBox(height: 16),
+          Row(
+            children: <Widget>[
+              Expanded(
+                child: _AccuracyChip(
+                  label: 'BEST',
+                  selected: selectedMode == 0,
+                  onTap: () => onSelect(0),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: _AccuracyChip(
+                  label: 'BALANCED',
+                  selected: selectedMode == 1,
+                  onTap: () => onSelect(1),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: _AccuracyChip(
+                  label: 'ECO',
+                  selected: selectedMode == 2,
+                  onTap: () => onSelect(2),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SpeedAlertPanel extends StatelessWidget {
+  const _SpeedAlertPanel({
+    required this.value,
+    required this.min,
+    required this.max,
+    required this.unit,
+    required this.onChanged,
+  });
+
+  final double value;
+  final double min;
+  final double max;
+  final String unit;
+  final ValueChanged<double> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final double safeMin = min.isFinite ? min : 0.0;
+    final double safeMax = max.isFinite && max > safeMin ? max : safeMin + 1.0;
+    final double safeValue = value.clamp(safeMin, safeMax).toDouble();
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(15, 14, 15, 16),
+      child: Column(
+        children: <Widget>[
+          Row(
+            children: <Widget>[
+              const _SafeText(
+                'Alert Threshold',
+                maxLines: 1,
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 15,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+              const Spacer(),
+              _ValueLabel(
+                value: '${safeValue.round()} $unit',
+                color: _SettingsScreenState._red,
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          CupertinoSlider(
+            value: safeValue,
+            min: safeMin,
+            max: safeMax,
+            activeColor: _SettingsScreenState._red,
             onChanged: onChanged,
           ),
         ],
@@ -454,95 +1229,55 @@ class _ToggleRow extends StatelessWidget {
   }
 }
 
-class _InfoRow extends StatelessWidget {
-  const _InfoRow({
-    required this.label,
-    required this.value,
-    this.valueColor,
-    this.onTap,
-  });
-
-  final String label;
-  final String value;
-  final Color? valueColor;
-  final VoidCallback? onTap;
+class _WakeLockNote extends StatelessWidget {
+  const _WakeLockNote();
 
   @override
   Widget build(BuildContext context) {
-    return CupertinoButton(
-      padding: EdgeInsets.zero,
-      onPressed: onTap,
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Row(
-          children: <Widget>[
-            Expanded(
-              child: Text(
-                label,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 16,
-                  fontWeight: FontWeight.w500,
-                ),
-              ),
-            ),
-            if (value.isNotEmpty) ...<Widget>[
-              const SizedBox(width: 12),
-              Text(
-                value,
-                style: TextStyle(
-                  color: valueColor ?? Colors.white.withValues(alpha: 0.3),
-                  fontSize: 14,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            ],
-            if (onTap != null) ...<Widget>[
-              const SizedBox(width: 8),
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(15, 0, 15, 15),
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: _SettingsScreenState._gold.withValues(alpha: 0.08),
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(
+            color: _SettingsScreenState._gold.withValues(alpha: 0.12),
+          ),
+        ),
+        child: const Padding(
+          padding: EdgeInsets.all(12),
+          child: Row(
+            children: <Widget>[
               Icon(
-                CupertinoIcons.chevron_right,
-                color: Colors.white.withValues(alpha: 0.1),
-                size: 14,
+                CupertinoIcons.exclamationmark_circle_fill,
+                color: _SettingsScreenState._goldSoft,
+                size: 16,
+              ),
+              SizedBox(width: 9),
+              Expanded(
+                child: _SafeText(
+                  'On Web, screen wake lock may be blocked by browser policy.',
+                  maxLines: 2,
+                  softWrap: true,
+                  style: TextStyle(
+                    color: Colors.white54,
+                    fontSize: 11,
+                    height: 1.25,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
               ),
             ],
-          ],
+          ),
         ),
       ),
     );
   }
 }
 
-class _SliderRow extends StatelessWidget {
-  const _SliderRow({
-    required this.value,
-    required this.min,
-    required this.max,
-    required this.onChanged,
-  });
-
-  final double value;
-  final double min;
-  final double max;
-  final ValueChanged<double> onChanged;
-
-  @override
-  Widget build(BuildContext context) {
-    final double safeValue = value.clamp(min, max).toDouble();
-
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(8, 0, 8, 16),
-      child: CupertinoSlider(
-        value: safeValue,
-        min: min,
-        max: max,
-        activeColor: _SettingsScreenState._teal,
-        onChanged: onChanged,
-      ),
-    );
-  }
-}
+// ═══════════════════════════════════════════════════════════════════════════════
+// SMALL COMPONENTS
+// ═══════════════════════════════════════════════════════════════════════════════
 
 class _AccuracyChip extends StatelessWidget {
   const _AccuracyChip({
@@ -557,32 +1292,142 @@ class _AccuracyChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    const Color teal = _SettingsScreenState._teal;
+    final Color color =
+        selected ? _SettingsScreenState._goldSoft : Colors.white38;
 
     return GestureDetector(
+      behavior: HitTestBehavior.opaque,
       onTap: () {
-        HapticFeedback.lightImpact();
+        HapticFeedback.selectionClick();
         onTap();
       },
       child: AnimatedContainer(
-        duration: const Duration(milliseconds: 200),
-        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
+        duration: const Duration(milliseconds: 180),
+        curve: Curves.easeOut,
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 11),
         decoration: BoxDecoration(
           color: selected
-              ? teal.withValues(alpha: 0.1)
-              : Colors.white.withValues(alpha: 0.03),
-          borderRadius: BorderRadius.circular(12),
+              ? _SettingsScreenState._gold.withValues(alpha: 0.13)
+              : Colors.white.withValues(alpha: 0.035),
+          borderRadius: BorderRadius.circular(14),
           border: Border.all(
-            color: selected ? teal : Colors.white.withValues(alpha: 0.05),
-            width: 1.5,
+            color: selected
+                ? _SettingsScreenState._goldSoft.withValues(alpha: 0.72)
+                : Colors.white.withValues(alpha: 0.06),
+            width: selected ? 1.4 : 1.0,
           ),
         ),
-        child: Text(
+        child: _SafeText(
           label,
+          maxLines: 1,
+          textAlign: TextAlign.center,
           style: TextStyle(
-            color: selected ? teal : Colors.white.withValues(alpha: 0.3),
+            color: color,
+            fontSize: 10,
+            fontWeight: FontWeight.w900,
+            letterSpacing: 0.6,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _StatusPill extends StatelessWidget {
+  const _StatusPill({
+    required this.label,
+    required this.color,
+  });
+
+  final String label;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.10),
+        borderRadius: BorderRadius.circular(99),
+        border: Border.all(
+          color: color.withValues(alpha: 0.18),
+        ),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 6),
+        child: _SafeText(
+          label,
+          maxLines: 1,
+          style: TextStyle(
+            color: color,
+            fontSize: 10,
+            fontWeight: FontWeight.w900,
+            letterSpacing: 0.6,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ValueLabel extends StatelessWidget {
+  const _ValueLabel({
+    required this.value,
+    required this.color,
+  });
+
+  final String value;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return _SafeText(
+      value,
+      maxLines: 1,
+      style: TextStyle(
+        color: color,
+        fontSize: 12,
+        fontWeight: FontWeight.w900,
+        letterSpacing: 0.4,
+      ),
+    );
+  }
+}
+
+class _ActionButton extends StatelessWidget {
+  const _ActionButton({
+    required this.label,
+    required this.color,
+    required this.onTap,
+  });
+
+  final String label;
+  final Color color;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return CupertinoButton(
+      padding: EdgeInsets.zero,
+      minSize: 0,
+      onPressed: onTap,
+      child: Container(
+        height: 42,
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: color.withValues(alpha: 0.14),
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(
+            color: color.withValues(alpha: 0.24),
+          ),
+        ),
+        child: _SafeText(
+          label,
+          maxLines: 1,
+          style: TextStyle(
+            color: color,
             fontSize: 11,
-            fontWeight: FontWeight.w800,
+            fontWeight: FontWeight.w900,
+            letterSpacing: 0.7,
           ),
         ),
       ),
@@ -597,8 +1442,38 @@ class _Sep extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       height: 1,
-      color: Colors.white.withValues(alpha: 0.03),
-      margin: const EdgeInsets.symmetric(horizontal: 16),
+      margin: const EdgeInsets.only(left: 62, right: 15),
+      color: Colors.white.withValues(alpha: 0.04),
+    );
+  }
+}
+
+class _SafeText extends StatelessWidget {
+  const _SafeText(
+    this.data, {
+    required this.style,
+    this.maxLines,
+    this.textAlign,
+    this.softWrap = false,
+  });
+
+  final String data;
+  final TextStyle style;
+  final int? maxLines;
+  final TextAlign? textAlign;
+  final bool softWrap;
+
+  @override
+  Widget build(BuildContext context) {
+    return IgnorePointer(
+      child: Text(
+        data,
+        maxLines: maxLines,
+        overflow: TextOverflow.clip,
+        softWrap: softWrap,
+        textAlign: textAlign,
+        style: style,
+      ),
     );
   }
 }

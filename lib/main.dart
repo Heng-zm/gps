@@ -11,6 +11,7 @@ import 'screens/history_screen.dart';
 import 'screens/settings_screen.dart';
 import 'screens/tracking_screen.dart';
 import 'services/settings_service.dart';
+import 'widgets/app_console_widget.dart';
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // DESIGN TOKENS — PREMIUM LIQUID GLASS OLED
@@ -62,22 +63,64 @@ const String _kSupabaseUrl = 'https://uozzhvzewdsxpxmxsntr.supabase.co';
 const String _kSupabaseAnonKey =
     'sb_publishable_nrR6DFCgBKlgRnyINe5z0w_XDGmIsN2';
 
+const String _kAppVersion = '1.5.0';
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // ENTRY POINT
 // ═══════════════════════════════════════════════════════════════════════════════
 
 Future<void> main() async {
-  WidgetsFlutterBinding.ensureInitialized();
+  await runZonedGuarded<Future<void>>(
+    () async {
+      WidgetsFlutterBinding.ensureInitialized();
 
-  FlutterError.onError = (FlutterErrorDetails details) {
-    FlutterError.presentError(details);
-    debugPrint('Flutter error: ${details.exceptionAsString()}');
-  };
+      FlutterError.onError = (FlutterErrorDetails details) {
+        FlutterError.presentError(details);
+        debugPrint('Flutter error: ${details.exceptionAsString()}');
+        if (details.stack != null) {
+          debugPrint(details.stack.toString());
+        }
 
-  await _configureSystemUi();
-  await _bootstrapServices();
+        AppConsole.flutterError(details);
+      };
 
-  runApp(const TrackProAI());
+      ui.PlatformDispatcher.instance.onError = (
+        Object error,
+        StackTrace stackTrace,
+      ) {
+        debugPrint('Platform error: $error\n$stackTrace');
+        AppConsole.error(
+          'Platform error',
+          tag: 'APP',
+          error: error,
+          stackTrace: stackTrace,
+        );
+        return true;
+      };
+
+      AppConsole.log(
+        'TrackPro AI booting',
+        tag: 'APP',
+        data: <String, Object?>{
+          'version': _kAppVersion,
+        },
+      );
+
+      await _configureSystemUi();
+      await _bootstrapServices();
+
+      runApp(const TrackProAI());
+    },
+    (Object error, StackTrace stackTrace) {
+      debugPrint('Uncaught zone error: $error\n$stackTrace');
+      AppConsole.error(
+        'Uncaught zone error',
+        tag: 'APP',
+        error: error,
+        stackTrace: stackTrace,
+      );
+    },
+  );
 }
 
 Future<void> _configureSystemUi() async {
@@ -89,25 +132,78 @@ Future<void> _configureSystemUi() async {
     await SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
 
     _applySystemUiStyle();
+    AppConsole.success('System UI configured', tag: 'APP');
   } catch (e, st) {
     debugPrint('System UI config failed: $e\n$st');
+    AppConsole.error(
+      'System UI config failed',
+      tag: 'APP',
+      error: e,
+      stackTrace: st,
+    );
   }
 }
 
 Future<void> _bootstrapServices() async {
+  AppConsole.log('Bootstrapping services', tag: 'APP');
+  await _initSupabase();
+  await _initSettings();
+  AppConsole.success('Bootstrap completed', tag: 'APP');
+}
+
+Future<void> _initSupabase() async {
+  if (_kSupabaseUrl.trim().isEmpty || _kSupabaseAnonKey.trim().isEmpty) {
+    debugPrint('Supabase skipped: missing URL or anon key.');
+    AppConsole.warn('Supabase skipped: missing URL or anon key',
+        tag: 'SUPABASE');
+    return;
+  }
+
   try {
     await Supabase.initialize(
       url: _kSupabaseUrl,
       anonKey: _kSupabaseAnonKey,
     );
-  } catch (e, st) {
-    debugPrint('Supabase init error: $e\n$st');
-  }
 
+    debugPrint('Supabase initialized successfully.');
+    AppConsole.success(
+      'Supabase initialized',
+      tag: 'SUPABASE',
+      data: <String, Object?>{
+        'url': _kSupabaseUrl,
+      },
+    );
+  } catch (e, st) {
+    // Keep the app usable even if Supabase is offline/misconfigured.
+    debugPrint('Supabase init error: $e\n$st');
+    AppConsole.error(
+      'Supabase init failed',
+      tag: 'SUPABASE',
+      error: e,
+      stackTrace: st,
+    );
+  }
+}
+
+Future<void> _initSettings() async {
   try {
     await SettingsService.instance.load();
+    AppConsole.success(
+      'Settings loaded',
+      tag: 'SETTINGS',
+      data: <String, Object?>{
+        'mapStyle': SettingsService.instance.mapStyle.name,
+        'units': SettingsService.instance.useKmh ? 'metric' : 'imperial',
+      },
+    );
   } catch (e, st) {
     debugPrint('Settings load error: $e\n$st');
+    AppConsole.error(
+      'Settings load failed',
+      tag: 'SETTINGS',
+      error: e,
+      stackTrace: st,
+    );
   }
 }
 
@@ -278,6 +374,8 @@ class _AppShellState extends State<AppShell>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
 
+    AppConsole.log('App shell initialized', tag: 'APP');
+
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) _applySystemUiStyle();
     });
@@ -285,6 +383,7 @@ class _AppShellState extends State<AppShell>
 
   @override
   void dispose() {
+    AppConsole.log('App shell disposed', tag: 'APP');
     WidgetsBinding.instance.removeObserver(this);
     _ctrl.dispose();
     super.dispose();
@@ -293,6 +392,14 @@ class _AppShellState extends State<AppShell>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (!mounted) return;
+
+    AppConsole.log(
+      'Lifecycle changed',
+      tag: 'APP',
+      data: <String, Object?>{
+        'state': state.name,
+      },
+    );
 
     if (state == AppLifecycleState.resumed) {
       _applySystemUiStyle();
@@ -306,6 +413,15 @@ class _AppShellState extends State<AppShell>
     }
 
     HapticFeedback.selectionClick();
+
+    AppConsole.log(
+      'Tab changed',
+      tag: 'NAV',
+      data: <String, Object?>{
+        'from': _labels[_current],
+        'to': _labels[index],
+      },
+    );
 
     final double currentVisualT = _pillAnim.value.clamp(0.0, 1.0);
 
