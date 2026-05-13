@@ -35,6 +35,3 @@ dev_dependencies:
 flutter:
 <<<<<<< HEAD
   uses-material-design: true
-=======
-  uses-material-design: true
->>>>>>> 985cd4ae80ced52263feb6db488ae19e6b416fee
