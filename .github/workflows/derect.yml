@@ -24,8 +24,67 @@ jobs:
           channel: 'stable'
           cache: true
 
+      - name: 🍎 Force iOS deployment target 14.0 for Mapbox
+        run: |
+          set -e
+
+          # mapbox_maps_flutter requires iOS 14.0+
+          # This patches Podfile, Xcode project, and Generated config before pod install.
+
+          if [ ! -f ios/Podfile ]; then
+            flutter create --platforms=ios .
+          fi
+
+          # Ensure Podfile has platform :ios, '14.0'
+          if grep -q "^platform :ios" ios/Podfile; then
+            sed -i '' "s/^platform :ios.*/platform :ios, '14.0'/" ios/Podfile
+          else
+            sed -i '' "1s/^/platform :ios, '14.0'\n/" ios/Podfile
+          fi
+
+          # Ensure every pod target uses 14.0+
+          if ! grep -q "IPHONEOS_DEPLOYMENT_TARGET = '14.0'" ios/Podfile; then
+            cat >> ios/Podfile <<'RUBY_PATCH'
+
+          post_install do |installer|
+            installer.pods_project.targets.each do |target|
+              flutter_additional_ios_build_settings(target)
+
+              target.build_configurations.each do |config|
+                config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '14.0'
+              end
+            end
+          end
+          RUBY_PATCH
+          fi
+
+          # Patch Xcode project deployment target too.
+          PBX="ios/Runner.xcodeproj/project.pbxproj"
+          if [ -f "$PBX" ]; then
+            sed -i '' 's/IPHONEOS_DEPLOYMENT_TARGET = [0-9.]*;/IPHONEOS_DEPLOYMENT_TARGET = 14.0;/g' "$PBX"
+          fi
+
+          # Patch Flutter xcconfig files too.
+          for f in ios/Flutter/Generated.xcconfig ios/Flutter/Release.xcconfig ios/Flutter/Debug.xcconfig; do
+            mkdir -p "$(dirname "$f")"
+            touch "$f"
+            if grep -q "^IPHONEOS_DEPLOYMENT_TARGET=" "$f"; then
+              sed -i '' "s/^IPHONEOS_DEPLOYMENT_TARGET=.*/IPHONEOS_DEPLOYMENT_TARGET=14.0/" "$f"
+            else
+              echo "IPHONEOS_DEPLOYMENT_TARGET=14.0" >> "$f"
+            fi
+          done
+
+          echo "✅ iOS deployment target set to 14.0"
+
       - name: 📦 Install pub dependencies
         run: flutter pub get
+
+      - name: 🧹 Clean iOS Pods
+        run: |
+          rm -rf ios/Pods
+          rm -f ios/Podfile.lock
+          rm -rf ~/Library/Developer/Xcode/DerivedData
 
       - name: 🔧 Generate Xcode config (config-only, no build)
         run: |
@@ -55,15 +114,17 @@ jobs:
             echo "// Unsigned sideload overrides"
             echo "CODE_SIGNING_ALLOWED=NO"
             echo "CODE_SIGNING_REQUIRED=NO"
-            echo "CODE_SIGNING_IDENTITY="
+            echo "CODE_SIGN_IDENTITY="
             echo "DEVELOPMENT_TEAM="
             echo "PROVISIONING_PROFILE_SPECIFIER="
+            echo "IPHONEOS_DEPLOYMENT_TARGET=14.0"
           } >> ios/Flutter/Generated.xcconfig
 
           for f in ios/Flutter/Release.xcconfig ios/Flutter/Debug.xcconfig; do
             [ -f "$f" ] && {
               echo "CODE_SIGNING_ALLOWED=NO"  >> "$f"
               echo "CODE_SIGNING_REQUIRED=NO" >> "$f"
+              echo "IPHONEOS_DEPLOYMENT_TARGET=14.0" >> "$f"
             }
           done
 
@@ -82,6 +143,7 @@ jobs:
             CODE_SIGN_IDENTITY="" \
             DEVELOPMENT_TEAM="" \
             PROVISIONING_PROFILE_SPECIFIER="" \
+            IPHONEOS_DEPLOYMENT_TARGET=14.0 \
             CURRENT_PROJECT_VERSION=${{ github.run_number }} \
             MARKETING_VERSION=1.1.${{ github.run_number }} \
             build
@@ -100,16 +162,12 @@ jobs:
           fi
 
           echo "✅ Found: $APP_PATH"
+          rm -rf Payload
           mkdir -p Payload
           cp -r "$APP_PATH" Payload/Runner.app
           zip -qq -r -9 GPS-Tracker.ipa Payload
           echo "✅ IPA size: $(du -sh GPS-Tracker.ipa | cut -f1)"
 
-      # ---------------------------------------------------------------
-      # OTA: Generate manifest.plist + install page hosted on gh-pages
-      # iOS Safari reads itms-services://?action=download-manifest&url=
-      # and triggers a native install prompt — no PC required.
-      # ---------------------------------------------------------------
       - name: 🌐 Generate OTA manifest + install page
         run: |
           REPO="${{ github.repository }}"
@@ -118,16 +176,12 @@ jobs:
           OWNER="${{ github.repository_owner }}"
           REPO_NAME="${{ github.event.repository.name }}"
 
-          # The IPA will be uploaded as a release asset — build its direct URL
           IPA_URL="https://github.com/${REPO}/releases/download/v${VERSION}/GPS-Tracker-v${VERSION}.ipa"
-
-          # GitHub Pages URL for this repo
           PAGES_URL="https://${OWNER}.github.io/${REPO_NAME}"
           MANIFEST_URL="${PAGES_URL}/manifest.plist"
 
           mkdir -p ota
 
-          # manifest.plist — iOS reads this to know what to install
           cat > ota/manifest.plist << PLIST
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
@@ -140,16 +194,16 @@ jobs:
                 <key>assets</key>
                 <array>
                   <dict>
-                    <key>kind</key>       <string>software-package</string>
-                    <key>url</key>        <string>${IPA_URL}</string>
+                    <key>kind</key><string>software-package</string>
+                    <key>url</key><string>${IPA_URL}</string>
                   </dict>
                 </array>
                 <key>metadata</key>
                 <dict>
-                  <key>bundle-identifier</key> <string>com.example.gpsTracker</string>
-                  <key>bundle-version</key>     <string>${VERSION}</string>
-                  <key>kind</key>               <string>software</string>
-                  <key>title</key>              <string>GPS Tracker</string>
+                  <key>bundle-identifier</key><string>com.example.gpsTracker</string>
+                  <key>bundle-version</key><string>${VERSION}</string>
+                  <key>kind</key><string>software</string>
+                  <key>title</key><string>GPS Tracker</string>
                 </dict>
               </dict>
             </array>
@@ -157,7 +211,6 @@ jobs:
           </plist>
           PLIST
 
-          # index.html — tap the button on iPhone Safari to install
           cat > ota/index.html << HTML
           <!DOCTYPE html>
           <html lang="en">
@@ -211,18 +264,17 @@ jobs:
 
             | Field | Value |
             |---|---|
-            | Platform | iOS (unsigned OTA) |
+            | Platform | iOS 14.0+ unsigned OTA |
             | Flutter | 3.27.4 |
             | Build | ${{ github.run_number }} |
 
-            ### 📲 Direct Install (no PC needed)
+            ### 📲 Direct Install
             Open this link **in Safari on your iPhone**:
 
             👉 ${{ env.PAGES_URL }}
 
             > ⚠️ Unsigned build — device UDID must be registered, or use Sideloadly/AltStore.
 
-      # Deploy the OTA page to GitHub Pages so the install link is always live
       - name: 📤 Deploy OTA page to GitHub Pages
         uses: peaceiris/actions-gh-pages@v4
         with:
