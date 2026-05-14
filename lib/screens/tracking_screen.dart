@@ -1431,11 +1431,11 @@ class _FullScreenLiveMapState extends State<_FullScreenLiveMap> {
           puckBearingEnabled: true,
           puckBearing: mb.PuckBearing.HEADING,
           pulsingEnabled: true,
-          pulsingColor: const Color(0xFF1A73FF).toARGB32(),
+          pulsingColor: const Color(0xFF1A73FF).value,
           pulsingMaxRadius: 48.0,
           showAccuracyRing: true,
-          accuracyRingColor: const Color(0x331A73FF).toARGB32(),
-          accuracyRingBorderColor: const Color(0x881A73FF).toARGB32(),
+          accuracyRingColor: const Color(0x331A73FF).value,
+          accuracyRingBorderColor: const Color(0x881A73FF).value,
         ),
       );
       _locationReady = true;
@@ -1618,10 +1618,10 @@ class _FullScreenLiveMapState extends State<_FullScreenLiveMap> {
       await _routeOuterManager?.create(
         mb.PolylineAnnotationOptions(
           geometry: line,
-          lineColor: Colors.white.toARGB32(),
+          lineColor: Colors.white.value,
           lineWidth: 12.5,
           lineOpacity: 0.92,
-          lineBorderColor: Colors.black.toARGB32(),
+          lineBorderColor: Colors.black.value,
           lineBorderWidth: 2.5,
           lineJoin: mb.LineJoin.ROUND,
         ),
@@ -1630,7 +1630,7 @@ class _FullScreenLiveMapState extends State<_FullScreenLiveMap> {
       await _routeCoreManager?.create(
         mb.PolylineAnnotationOptions(
           geometry: line,
-          lineColor: const Color(0xFF2F22FF).toARGB32(),
+          lineColor: const Color(0xFF2F22FF).value,
           lineWidth: 6.5,
           lineOpacity: 0.98,
           lineJoin: mb.LineJoin.ROUND,
@@ -1677,10 +1677,10 @@ class _FullScreenLiveMapState extends State<_FullScreenLiveMap> {
       await _plannedOuterManager?.create(
         mb.PolylineAnnotationOptions(
           geometry: line,
-          lineColor: Colors.white.toARGB32(),
+          lineColor: Colors.white.value,
           lineWidth: 11.0,
           lineOpacity: 0.82,
-          lineBorderColor: Colors.black.toARGB32(),
+          lineBorderColor: Colors.black.value,
           lineBorderWidth: 2.0,
           lineJoin: mb.LineJoin.ROUND,
         ),
@@ -1689,7 +1689,7 @@ class _FullScreenLiveMapState extends State<_FullScreenLiveMap> {
       await _plannedCoreManager?.create(
         mb.PolylineAnnotationOptions(
           geometry: line,
-          lineColor: _kBlue.toARGB32(),
+          lineColor: _kBlue.value,
           lineWidth: 5.4,
           lineOpacity: 0.94,
           lineJoin: mb.LineJoin.ROUND,
