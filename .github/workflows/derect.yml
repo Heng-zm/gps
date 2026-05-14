@@ -24,39 +24,82 @@ jobs:
           channel: 'stable'
           cache: true
 
-      - name: 🍎 Force iOS deployment target 14.0 for Mapbox
+      - name: 🍎 Patch Podfile iOS 14.0 for Mapbox
         run: |
           set -e
-
-          # mapbox_maps_flutter requires iOS 14.0+
-          # This patches Podfile, Xcode project, and Generated config before pod install.
 
           if [ ! -f ios/Podfile ]; then
             flutter create --platforms=ios .
           fi
 
-          # Ensure Podfile has platform :ios, '14.0'
+          # Ensure platform is iOS 14.0+
           if grep -q "^platform :ios" ios/Podfile; then
             sed -i '' "s/^platform :ios.*/platform :ios, '14.0'/" ios/Podfile
           else
             sed -i '' "1s/^/platform :ios, '14.0'\n/" ios/Podfile
           fi
 
-          # Ensure every pod target uses 14.0+
-          if ! grep -q "IPHONEOS_DEPLOYMENT_TARGET = '14.0'" ios/Podfile; then
-            cat >> ios/Podfile <<'RUBY_PATCH'
+          # CocoaPods supports only ONE post_install hook.
+          # This script removes every existing post_install block and appends one clean unified hook.
+          ruby <<'RUBY'
+          path = 'ios/Podfile'
+          podfile = File.read(path)
 
-          post_install do |installer|
-            installer.pods_project.targets.each do |target|
-              flutter_additional_ios_build_settings(target)
+          def remove_post_install_blocks(text)
+            result = +""
+            i = 0
 
-              target.build_configurations.each do |config|
-                config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '14.0'
+            while i < text.length
+              start_idx = text.index(/^\s*post_install\s+do\s+\|installer\|/, i)
+
+              if start_idx.nil?
+                result << text[i..]
+                break
+              end
+
+              result << text[i...start_idx]
+
+              line_end = text.index("\n", start_idx) || text.length
+              j = line_end + 1
+              depth = 1
+
+              while j < text.length && depth > 0
+                next_line_end = text.index("\n", j) || text.length
+                line = text[j...next_line_end]
+
+                # Count Ruby do/end enough for normal Flutter Podfile hook blocks.
+                depth += line.scan(/\bdo\b/).length
+                depth -= line.scan(/^\s*end\s*$/).length
+
+                j = next_line_end + 1
+              end
+
+              i = j
+            end
+
+            result
+          end
+
+          podfile = remove_post_install_blocks(podfile).rstrip
+
+          unified_hook = <<~HOOK
+
+            post_install do |installer|
+              installer.pods_project.targets.each do |target|
+                flutter_additional_ios_build_settings(target)
+
+                target.build_configurations.each do |config|
+                  config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '14.0'
+                  config.build_settings['CODE_SIGNING_ALLOWED'] = 'NO'
+                  config.build_settings['CODE_SIGNING_REQUIRED'] = 'NO'
+                  config.build_settings['CODE_SIGN_IDENTITY'] = ''
+                end
               end
             end
-          end
-          RUBY_PATCH
-          fi
+          HOOK
+
+          File.write(path, podfile + "\n" + unified_hook)
+          RUBY
 
           # Patch Xcode project deployment target too.
           PBX="ios/Runner.xcodeproj/project.pbxproj"
@@ -64,10 +107,11 @@ jobs:
             sed -i '' 's/IPHONEOS_DEPLOYMENT_TARGET = [0-9.]*;/IPHONEOS_DEPLOYMENT_TARGET = 14.0;/g' "$PBX"
           fi
 
-          # Patch Flutter xcconfig files too.
+          # Patch Flutter xcconfig files.
           for f in ios/Flutter/Generated.xcconfig ios/Flutter/Release.xcconfig ios/Flutter/Debug.xcconfig; do
             mkdir -p "$(dirname "$f")"
             touch "$f"
+
             if grep -q "^IPHONEOS_DEPLOYMENT_TARGET=" "$f"; then
               sed -i '' "s/^IPHONEOS_DEPLOYMENT_TARGET=.*/IPHONEOS_DEPLOYMENT_TARGET=14.0/" "$f"
             else
@@ -75,7 +119,7 @@ jobs:
             fi
           done
 
-          echo "✅ iOS deployment target set to 14.0"
+          echo "✅ Podfile patched with single post_install hook and iOS 14.0"
 
       - name: 📦 Install pub dependencies
         run: flutter pub get
@@ -86,7 +130,7 @@ jobs:
           rm -f ios/Podfile.lock
           rm -rf ~/Library/Developer/Xcode/DerivedData
 
-      - name: 🔧 Generate Xcode config (config-only, no build)
+      - name: 🔧 Generate Xcode config
         run: |
           flutter build ios --release --config-only --no-codesign \
             --build-number=${{ github.run_number }} \
@@ -97,7 +141,7 @@ jobs:
           cd ios
           pod install --repo-update
 
-      - name: 🔓 Patch Xcode signing (unsigned / sideload build)
+      - name: 🔓 Patch Xcode signing
         run: |
           PBX="ios/Runner.xcodeproj/project.pbxproj"
 
@@ -120,17 +164,9 @@ jobs:
             echo "IPHONEOS_DEPLOYMENT_TARGET=14.0"
           } >> ios/Flutter/Generated.xcconfig
 
-          for f in ios/Flutter/Release.xcconfig ios/Flutter/Debug.xcconfig; do
-            [ -f "$f" ] && {
-              echo "CODE_SIGNING_ALLOWED=NO"  >> "$f"
-              echo "CODE_SIGNING_REQUIRED=NO" >> "$f"
-              echo "IPHONEOS_DEPLOYMENT_TARGET=14.0" >> "$f"
-            }
-          done
-
           echo "✅ Signing patches applied."
 
-      - name: 🏗️ Build iOS app (unsigned, xcodebuild)
+      - name: 🏗️ Build iOS app
         run: |
           xcodebuild \
             -workspace ios/Runner.xcworkspace \
@@ -148,7 +184,7 @@ jobs:
             MARKETING_VERSION=1.1.${{ github.run_number }} \
             build
 
-      - name: 📦 Package IPA for sideloading
+      - name: 📦 Package IPA
         run: |
           APP_PATH=$(find build/DerivedData \
             -name "Runner.app" \
@@ -247,7 +283,6 @@ jobs:
           </html>
           HTML
 
-          echo "✅ OTA files generated."
           echo "MANIFEST_URL=${MANIFEST_URL}" >> $GITHUB_ENV
           echo "PAGES_URL=${PAGES_URL}" >> $GITHUB_ENV
 
