@@ -11,6 +11,12 @@ jobs:
     name: 🎉 Windows Release Build
     runs-on: windows-latest
 
+    env:
+      APP_NAME: GPS-Tracker
+      APP_VERSION: 1.1.${{ github.run_number }}
+      ZIP_NAME: GPS-Tracker-Windows-v1.1.${{ github.run_number }}.zip
+      RELEASE_TAG: windows-v1.1.${{ github.run_number }}
+
     steps:
       - name: 📥 Checkout repository
         uses: actions/checkout@v4
@@ -40,20 +46,11 @@ jobs:
         shell: pwsh
         run: flutter pub get
 
-      - name: 🔧 Generate missing platform files if needed
+      - name: 🔧 Generate missing Windows platform files if needed
         shell: pwsh
         run: |
           if (!(Test-Path "windows")) {
             flutter create --platforms=windows .
-          }
-
-      - name: 🧩 Repair Windows plugin symlinks
-        shell: pwsh
-        run: |
-          flutter pub get
-          flutter build windows --debug
-          if (Test-Path "build\windows") {
-            Remove-Item -Recurse -Force "build\windows" -ErrorAction SilentlyContinue
           }
 
       - name: 🏗️ Build Windows EXE release
@@ -61,9 +58,10 @@ jobs:
         run: |
           flutter build windows --release `
             --build-number=${{ github.run_number }} `
-            --build-name=1.1.${{ github.run_number }}
+            --build-name=${{ env.APP_VERSION }}
 
       - name: 📁 Verify build output
+        id: verify
         shell: pwsh
         run: |
           $OutputDir = "build\windows\x64\runner\Release"
@@ -83,15 +81,25 @@ jobs:
           }
 
           Write-Host "✅ Found EXE: $($Exe.FullName)"
-          Write-Host "APP_EXE=$($Exe.Name)" | Out-File -FilePath $env:GITHUB_ENV -Append
-          Write-Host "OUTPUT_DIR=$OutputDir" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "exe_name=$($Exe.Name)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "output_dir=$OutputDir" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
 
       - name: 📦 Package Windows release ZIP
+        id: package
         shell: pwsh
         run: |
-          $Version = "1.1.${{ github.run_number }}"
-          $ZipName = "GPS-Tracker-Windows-v$Version.zip"
-          $OutputDir = "${{ env.OUTPUT_DIR }}"
+          $ZipName = "${{ env.ZIP_NAME }}"
+          $OutputDir = "${{ steps.verify.outputs.output_dir }}"
+
+          if ([string]::IsNullOrWhiteSpace($ZipName)) {
+            Write-Host "❌ ZIP_NAME is empty."
+            exit 1
+          }
+
+          if (!(Test-Path $OutputDir)) {
+            Write-Host "❌ Output folder missing: $OutputDir"
+            exit 1
+          }
 
           if (Test-Path $ZipName) {
             Remove-Item -Force $ZipName
@@ -99,25 +107,28 @@ jobs:
 
           Compress-Archive -Path "$OutputDir\*" -DestinationPath $ZipName -Force
 
+          if (!(Test-Path $ZipName)) {
+            Write-Host "❌ ZIP was not created."
+            exit 1
+          }
+
           $Size = [Math]::Round((Get-Item $ZipName).Length / 1MB, 2)
           Write-Host "✅ ZIP created: $ZipName"
           Write-Host "✅ ZIP size: $Size MB"
 
-          Write-Host "ZIP_NAME=$ZipName" | Out-File -FilePath $env:GITHUB_ENV -Append
-          Write-Host "VERSION=$Version" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "zip_name=$ZipName" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "zip_path=$ZipName" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
 
       - name: 📝 Generate install notes
         shell: pwsh
         run: |
-          $Version = "${{ env.VERSION }}"
-
           @"
-          # GPS Tracker Windows v$Version
+          # GPS Tracker Windows ${{ env.APP_VERSION }}
 
           ## Install
-          1. Download the ZIP file.
+          1. Download `${{ steps.package.outputs.zip_name }}`.
           2. Extract it.
-          3. Run the `.exe` file inside the extracted folder.
+          3. Run `${{ steps.verify.outputs.exe_name }}` inside the extracted folder.
 
           ## Notes
           - Keep all `.dll` files beside the `.exe`.
@@ -130,16 +141,29 @@ jobs:
           - Build number: ${{ github.run_number }}
           "@ | Out-File -FilePath "WINDOWS_INSTALL_NOTES.md" -Encoding utf8
 
+      - name: 🔎 Final package check
+        shell: pwsh
+        run: |
+          Write-Host "Version: ${{ env.APP_VERSION }}"
+          Write-Host "Release tag: ${{ env.RELEASE_TAG }}"
+          Write-Host "ZIP: ${{ steps.package.outputs.zip_path }}"
+          Write-Host "EXE: ${{ steps.verify.outputs.exe_name }}"
+
+          if (!(Test-Path "${{ steps.package.outputs.zip_path }}")) {
+            Write-Host "❌ Upload file missing."
+            exit 1
+          }
+
       - name: 🚀 Upload Windows ZIP to GitHub Releases
         uses: svenstaro/upload-release-action@v2
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
-          file: ${{ env.ZIP_NAME }}
-          asset_name: ${{ env.ZIP_NAME }}
-          tag: windows-v${{ env.VERSION }}
+          file: ${{ steps.package.outputs.zip_path }}
+          asset_name: ${{ steps.package.outputs.zip_name }}
+          tag: ${{ env.RELEASE_TAG }}
           overwrite: true
           body: |
-            ## 📍 GPS Tracker — Windows v${{ env.VERSION }}
+            ## 📍 GPS Tracker — Windows v${{ env.APP_VERSION }}
 
             | Field | Value |
             |---|---|
@@ -149,17 +173,17 @@ jobs:
             | Package | ZIP |
 
             ### 🪟 Install
-            1. Download `${{ env.ZIP_NAME }}`
+            1. Download `${{ steps.package.outputs.zip_name }}`
             2. Extract the ZIP
-            3. Run `${{ env.APP_EXE }}`
+            3. Run `${{ steps.verify.outputs.exe_name }}`
 
             > Keep all `.dll` files in the same folder as the `.exe`.
 
       - name: 📤 Upload build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: GPS-Tracker-Windows-v${{ env.VERSION }}
+          name: GPS-Tracker-Windows-v${{ env.APP_VERSION }}
           path: |
-            ${{ env.ZIP_NAME }}
+            ${{ steps.package.outputs.zip_path }}
             WINDOWS_INSTALL_NOTES.md
           if-no-files-found: error
