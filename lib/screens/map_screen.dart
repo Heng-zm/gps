@@ -1,4 +1,4 @@
-// ignore_for_file: unused_element
+// ignore_for_file: unused_element, deprecated_member_use
 
 import 'dart:async';
 import 'dart:convert';
@@ -20,6 +20,7 @@ import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart' as mb;
 import '../models/trip_data.dart';
 import '../utils/smooth_polyline.dart';
 import '../config/mapbox_config.dart';
+
 
 // ─────────────────────────────────────────────────────────────────────────────
 // EXTENSIONS
@@ -2695,11 +2696,11 @@ class _NativeMapboxLayerState extends State<_NativeMapboxLayer> {
           puckBearingEnabled: true,
           puckBearing: mb.PuckBearing.HEADING,
           pulsingEnabled: widget.isLive,
-          pulsingColor: _kBlue.toARGB32(),
+          pulsingColor: _kBlue.value,
           pulsingMaxRadius: 46,
           showAccuracyRing: widget.isLive,
-          accuracyRingColor: _kBlue.withValues(alpha: 0.18).toARGB32(),
-          accuracyRingBorderColor: _kBlue.withValues(alpha: 0.42).toARGB32(),
+          accuracyRingColor: _kBlue.withValues(alpha: 0.18).value,
+          accuracyRingBorderColor: _kBlue.withValues(alpha: 0.42).value,
         ),
       );
     } catch (error) {
@@ -2825,10 +2826,10 @@ class _NativeMapboxLayerState extends State<_NativeMapboxLayer> {
     await outer?.create(
       mb.PolylineAnnotationOptions(
         geometry: line,
-        lineColor: Colors.white.toARGB32(),
+        lineColor: Colors.white.value,
         lineWidth: outerWidth,
         lineOpacity: 0.86,
-        lineBorderColor: Colors.black.toARGB32(),
+        lineBorderColor: Colors.black.value,
         lineBorderWidth: 2.0,
         lineJoin: mb.LineJoin.ROUND,
       ),
@@ -2837,7 +2838,7 @@ class _NativeMapboxLayerState extends State<_NativeMapboxLayer> {
     await core?.create(
       mb.PolylineAnnotationOptions(
         geometry: line,
-        lineColor: color.toARGB32(),
+        lineColor: color.value,
         lineWidth: coreWidth,
         lineOpacity: 0.96,
         lineJoin: mb.LineJoin.ROUND,
