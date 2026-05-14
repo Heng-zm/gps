@@ -1,21 +1,26 @@
-// ignore_for_file: unused_element, prefer_const_constructors
+// ignore_for_file: unused_element, deprecated_member_use
 
 import 'dart:async';
+import 'dart:convert';
 import 'dart:math' as math;
 import 'dart:ui' as ui;
 
 import 'package:flutter/cupertino.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_compass/flutter_compass.dart';
 import 'package:flutter_map/flutter_map.dart' as fm;
 import 'package:geolocator/geolocator.dart';
+import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
+import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart' as mb;
 
 import '../models/trip_data.dart';
 import '../models/weather_data.dart';
 import '../services/services.dart';
 import '../utils/smooth_polyline.dart';
+import '../config/mapbox_config.dart';
 import '../widgets/ai_chat_sheet.dart';
 import '../widgets/speedometer_widget.dart';
 import '../widgets/weather_widget.dart';
@@ -49,6 +54,11 @@ const Duration _kWeatherGap = Duration(minutes: 10);
 const Duration _kMapThrottle = Duration(milliseconds: 420);
 const Duration _kAnimFast = Duration(milliseconds: 150);
 const Duration _kAnimMed = Duration(milliseconds: 300);
+const Duration _kActionDebounce = Duration(milliseconds: 850);
+const String _kMapboxAccessToken = String.fromEnvironment(
+  'MAPBOX_ACCESS_TOKEN',
+  defaultValue: MapboxConfig.accessToken,
+);
 
 // ── Map / GPS ────────────────────────────────────────────────────────────────
 const LatLng _kDefaultCenter = LatLng(11.5564, 104.9282);
@@ -59,6 +69,7 @@ const double _kAutoPauseEnterMph = 1.2;
 const double _kAutoPauseResumeMph = 2.8;
 const int _kAutoPauseEnterSeconds = 12;
 const int _kAutoPauseResumeSeconds = 3;
+final Distance _distanceCalc = const Distance();
 
 enum _MapFollowMode {
   followMe,
@@ -121,6 +132,182 @@ extension _MapFollowModeLabel on _MapFollowMode {
   }
 }
 
+enum _MapboxRuntimeMode {
+  auto,
+  native,
+  webFallback,
+}
+
+extension _MapboxRuntimeModeLabel on _MapboxRuntimeMode {
+  String get label {
+    switch (this) {
+      case _MapboxRuntimeMode.auto:
+        return 'AUTO';
+      case _MapboxRuntimeMode.native:
+        return 'NATIVE';
+      case _MapboxRuntimeMode.webFallback:
+        return 'WEB';
+    }
+  }
+
+  String get description {
+    switch (this) {
+      case _MapboxRuntimeMode.auto:
+        return 'Native on mobile, fallback on web';
+      case _MapboxRuntimeMode.native:
+        return 'Force native SDK on Android/iOS';
+      case _MapboxRuntimeMode.webFallback:
+        return 'Force flutter_map fallback';
+    }
+  }
+
+  _MapboxRuntimeMode get next {
+    switch (this) {
+      case _MapboxRuntimeMode.auto:
+        return _MapboxRuntimeMode.native;
+      case _MapboxRuntimeMode.native:
+        return _MapboxRuntimeMode.webFallback;
+      case _MapboxRuntimeMode.webFallback:
+        return _MapboxRuntimeMode.auto;
+    }
+  }
+}
+
+enum _MapboxStandardPreset {
+  day,
+  dusk,
+  dawn,
+  night,
+}
+
+extension _MapboxStandardPresetLabel on _MapboxStandardPreset {
+  String get label {
+    switch (this) {
+      case _MapboxStandardPreset.day:
+        return 'DAY';
+      case _MapboxStandardPreset.dusk:
+        return 'DUSK';
+      case _MapboxStandardPreset.dawn:
+        return 'DAWN';
+      case _MapboxStandardPreset.night:
+        return 'NIGHT';
+    }
+  }
+
+  String get mapboxValue {
+    switch (this) {
+      case _MapboxStandardPreset.day:
+        return 'day';
+      case _MapboxStandardPreset.dusk:
+        return 'dusk';
+      case _MapboxStandardPreset.dawn:
+        return 'dawn';
+      case _MapboxStandardPreset.night:
+        return 'night';
+    }
+  }
+
+  _MapboxStandardPreset get next {
+    switch (this) {
+      case _MapboxStandardPreset.day:
+        return _MapboxStandardPreset.dusk;
+      case _MapboxStandardPreset.dusk:
+        return _MapboxStandardPreset.dawn;
+      case _MapboxStandardPreset.dawn:
+        return _MapboxStandardPreset.night;
+      case _MapboxStandardPreset.night:
+        return _MapboxStandardPreset.day;
+    }
+  }
+}
+
+enum _DirectionsProfile {
+  drivingTraffic,
+  driving,
+  walking,
+  cycling,
+}
+
+extension _DirectionsProfileLabel on _DirectionsProfile {
+  String get label {
+    switch (this) {
+      case _DirectionsProfile.drivingTraffic:
+        return 'DRIVE+TRAFFIC';
+      case _DirectionsProfile.driving:
+        return 'DRIVING';
+      case _DirectionsProfile.walking:
+        return 'WALKING';
+      case _DirectionsProfile.cycling:
+        return 'CYCLING';
+    }
+  }
+
+  String get apiProfile {
+    switch (this) {
+      case _DirectionsProfile.drivingTraffic:
+        return 'mapbox/driving-traffic';
+      case _DirectionsProfile.driving:
+        return 'mapbox/driving';
+      case _DirectionsProfile.walking:
+        return 'mapbox/walking';
+      case _DirectionsProfile.cycling:
+        return 'mapbox/cycling';
+    }
+  }
+
+  _DirectionsProfile get next {
+    switch (this) {
+      case _DirectionsProfile.drivingTraffic:
+        return _DirectionsProfile.driving;
+      case _DirectionsProfile.driving:
+        return _DirectionsProfile.walking;
+      case _DirectionsProfile.walking:
+        return _DirectionsProfile.cycling;
+      case _DirectionsProfile.cycling:
+        return _DirectionsProfile.drivingTraffic;
+    }
+  }
+}
+
+class _PlannedRoute {
+  const _PlannedRoute({
+    required this.points,
+    required this.distanceMeters,
+    required this.durationSeconds,
+    required this.profile,
+  });
+
+  final List<LatLng> points;
+  final double distanceMeters;
+  final double durationSeconds;
+  final _DirectionsProfile profile;
+
+  String distanceLabel(SettingsService settings) {
+    final double miles = distanceMeters / 1609.344;
+    return '${settings.toDisplayDistance(miles).toStringAsFixed(1)} ${settings.distanceUnit}';
+  }
+
+  String durationLabel() {
+    final int total = durationSeconds.round().clamp(0, 1 << 31);
+    final int hours = total ~/ 3600;
+    final int minutes = (total % 3600) ~/ 60;
+    if (hours > 0) return '${hours}h ${minutes.toString().padLeft(2, '0')}m';
+    return '${minutes}m';
+  }
+}
+
+class _MapboxPlaceResult {
+  const _MapboxPlaceResult({
+    required this.name,
+    required this.address,
+    required this.position,
+  });
+
+  final String name;
+  final String address;
+  final LatLng position;
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // MAIN SCREEN
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -156,6 +343,14 @@ class _TrackingScreenState extends State<TrackingScreen>
       ValueNotifier<_MapFollowMode>(_MapFollowMode.followMe);
   final ValueNotifier<bool> _autoPausedN = ValueNotifier<bool>(false);
   final ValueNotifier<int> _autoPauseStoppedN = ValueNotifier<int>(0);
+  final ValueNotifier<bool> _actionBusyN = ValueNotifier<bool>(false);
+  final ValueNotifier<_MapboxStandardPreset> _mapPresetN =
+      ValueNotifier<_MapboxStandardPreset>(_MapboxStandardPreset.day);
+  final ValueNotifier<_MapboxRuntimeMode> _mapRuntimeModeN =
+      ValueNotifier<_MapboxRuntimeMode>(_MapboxRuntimeMode.auto);
+  final ValueNotifier<_PlannedRoute?> _plannedRouteN =
+      ValueNotifier<_PlannedRoute?>(null);
+  final ValueNotifier<bool> _directionsLoadingN = ValueNotifier<bool>(false);
 
   bool _mapReady = false;
   bool _handlingAction = false;
@@ -164,8 +359,10 @@ class _TrackingScreenState extends State<TrackingScreen>
   int _polylinePointCount = 0;
   int _pendingSignal = 0;
   DateTime? _lastWeatherFetch;
+  DateTime? _lastActionAt;
   DateTime? _lastMapMoveAt;
   LatLng? _lastMapPos;
+  int _weatherRequestToken = 0;
   int _autoPauseSlowTicks = 0;
   int _autoPauseMoveTicks = 0;
   DateTime? _autoPauseEnteredAt;
@@ -331,6 +528,11 @@ class _TrackingScreenState extends State<TrackingScreen>
     _followModeN.dispose();
     _autoPausedN.dispose();
     _autoPauseStoppedN.dispose();
+    _actionBusyN.dispose();
+    _mapPresetN.dispose();
+    _mapRuntimeModeN.dispose();
+    _plannedRouteN.dispose();
+    _directionsLoadingN.dispose();
 
     super.dispose();
   }
@@ -421,7 +623,7 @@ class _TrackingScreenState extends State<TrackingScreen>
 
     if (!_isValidLL(previous) || !_isValidLL(current)) return;
 
-    final double bearing = const Distance().bearing(previous, current);
+    final double bearing = _distanceCalc.bearing(previous, current);
     if (!bearing.isFinite) return;
 
     final double normalized = _normDeg(bearing);
@@ -440,8 +642,13 @@ class _TrackingScreenState extends State<TrackingScreen>
 
     _setN(_accuracyN, accuracy);
 
-    _pendingSignal = ((40.0 - accuracy) / 35.0 * 4.0).round().clamp(0, 4);
+    final int nextSignal = ((40.0 - accuracy) / 35.0 * 4.0).round().clamp(0, 4);
 
+    if (nextSignal == _pendingSignal && _signalDebounce?.isActive == true) {
+      return;
+    }
+
+    _pendingSignal = nextSignal;
     _signalDebounce?.cancel();
     _signalDebounce = Timer(_kSignalDebounce, () {
       if (!mounted || _disposed) return;
@@ -450,7 +657,9 @@ class _TrackingScreenState extends State<TrackingScreen>
   }
 
   void _updateMapCamera(TripPoint point) {
-    if (!_mapReady || !_isValidLL(point.position)) return;
+    if (!_mapReady || !_usesFlutterMapFallback || !_isValidLL(point.position)) {
+      return;
+    }
 
     final _MapFollowMode mode = _followModeN.value;
     if (mode == _MapFollowMode.freeView) return;
@@ -464,7 +673,7 @@ class _TrackingScreenState extends State<TrackingScreen>
 
     final LatLng? previous = _lastMapPos;
     if (previous != null && _isValidLL(previous)) {
-      final double metres = const Distance().as(
+      final double metres = _distanceCalc.as(
         LengthUnit.Meter,
         previous,
         point.position,
@@ -511,7 +720,7 @@ class _TrackingScreenState extends State<TrackingScreen>
     final _MapFollowMode next = _followModeN.value.next;
     _setN(_followModeN, next);
 
-    if (!_mapReady) return;
+    if (!_mapReady || !_usesFlutterMapFallback) return;
 
     try {
       if (next == _MapFollowMode.followMe || next == _MapFollowMode.northUp) {
@@ -536,6 +745,7 @@ class _TrackingScreenState extends State<TrackingScreen>
 
   Future<void> _fetchWeather({bool force = false}) async {
     if (!_settings.showWeather) {
+      _weatherRequestToken++;
       _setN(_weatherN, null);
       _setN(_wxLoadingN, false);
       return;
@@ -553,16 +763,19 @@ class _TrackingScreenState extends State<TrackingScreen>
       return;
     }
 
+    final int requestToken = ++_weatherRequestToken;
     _setN(_wxLoadingN, true);
 
     try {
       final Position? position = await _gps.getCurrentLocation();
-      if (!mounted || _disposed) return;
+      if (!mounted || _disposed || requestToken != _weatherRequestToken) {
+        return;
+      }
 
       if (position == null ||
           !position.latitude.isFinite ||
           !position.longitude.isFinite) {
-        _setN(_weatherN, null);
+        // Keep last good weather instead of flashing empty UI.
         return;
       }
 
@@ -571,14 +784,22 @@ class _TrackingScreenState extends State<TrackingScreen>
         position.longitude,
       );
 
-      if (!mounted || _disposed) return;
+      if (!mounted || _disposed || requestToken != _weatherRequestToken) {
+        return;
+      }
 
-      _lastWeatherFetch = DateTime.now();
-      _setN(_weatherN, data);
+      if (data != null) {
+        _lastWeatherFetch = DateTime.now();
+        _setN(_weatherN, data);
+      } else {
+        debugPrint('Weather fetch returned no data; keeping previous weather.');
+      }
     } catch (error, stackTrace) {
       debugPrint('Weather fetch error: $error\n$stackTrace');
     } finally {
-      if (mounted && !_disposed) _setN(_wxLoadingN, false);
+      if (mounted && !_disposed && requestToken == _weatherRequestToken) {
+        _setN(_wxLoadingN, false);
+      }
     }
   }
 
@@ -587,7 +808,16 @@ class _TrackingScreenState extends State<TrackingScreen>
   Future<void> _handleAction() async {
     if (_handlingAction) return;
 
+    final DateTime now = DateTime.now();
+    final DateTime? lastAction = _lastActionAt;
+    if (lastAction != null && now.difference(lastAction) < _kActionDebounce) {
+      HapticFeedback.selectionClick();
+      return;
+    }
+
+    _lastActionAt = now;
     _handlingAction = true;
+    _setN(_actionBusyN, true);
 
     try {
       if (_trackingN.value) {
@@ -595,8 +825,13 @@ class _TrackingScreenState extends State<TrackingScreen>
       } else {
         await _startTracking();
       }
+    } catch (error, stackTrace) {
+      debugPrint('Tracking action failed: $error\n$stackTrace');
     } finally {
       _handlingAction = false;
+      if (mounted && !_disposed) {
+        _setN(_actionBusyN, false);
+      }
     }
   }
 
@@ -620,6 +855,7 @@ class _TrackingScreenState extends State<TrackingScreen>
     _pendingSignal = 0;
     _lastMapPos = null;
     _lastMapMoveAt = null;
+    _setN(_posN, null);
 
     try {
       await _gps.startTracking();
@@ -634,6 +870,8 @@ class _TrackingScreenState extends State<TrackingScreen>
       _attachGpsStream();
       unawaited(_fetchWeather(force: true));
     } else {
+      _setN(_trackingN, false);
+      _setN(_speedN, 0.0);
       _promptGpsSettings();
     }
   }
@@ -725,7 +963,7 @@ class _TrackingScreenState extends State<TrackingScreen>
     Navigator.of(context).push(
       CupertinoPageRoute<void>(
         builder: (_) => MapScreen(
-          points: _gps.currentPoints,
+          points: List<TripPoint>.unmodifiable(_gps.currentPoints),
           isLive: _trackingN.value,
         ),
       ),
@@ -780,15 +1018,198 @@ class _TrackingScreenState extends State<TrackingScreen>
     );
   }
 
+  void _openMapboxControls() {
+    HapticFeedback.lightImpact();
+
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      useSafeArea: true,
+      builder: (_) => _MapboxControlsSheet(
+        posN: _posN,
+        plannedRouteN: _plannedRouteN,
+        presetN: _mapPresetN,
+        runtimeModeN: _mapRuntimeModeN,
+        directionsLoadingN: _directionsLoadingN,
+        settings: _settings,
+        onPlanRoute: _planDirectionsRoute,
+        onClearRoute: () {
+          _setN(_plannedRouteN, null);
+          Navigator.of(context).maybePop();
+        },
+      ),
+    );
+  }
+
+  Future<LatLng?> _resolveRouteStart() async {
+    final LatLng? livePosition = _posN.value;
+    if (livePosition != null && _isValidLL(livePosition)) {
+      return livePosition;
+    }
+
+    final List<TripPoint> points = _gps.currentPoints;
+    if (points.isNotEmpty && _isValidLL(points.last.position)) {
+      return points.last.position;
+    }
+
+    try {
+      final Position? current = await _gps.getCurrentLocation();
+      if (!mounted || _disposed || current == null) return null;
+
+      final LatLng resolved = LatLng(current.latitude, current.longitude);
+      if (_isValidLL(resolved)) {
+        _setN(_posN, resolved);
+        return resolved;
+      }
+    } catch (error, stackTrace) {
+      debugPrint('Route start resolve error: $error\n$stackTrace');
+    }
+
+    return null;
+  }
+
+  Future<void> _planDirectionsRoute({
+    required double destinationLat,
+    required double destinationLng,
+    required _DirectionsProfile profile,
+  }) async {
+    final LatLng? start = await _resolveRouteStart();
+    if (start == null || !_isValidLL(start)) {
+      _showSnack('GPS position is not ready. Enable location and try again.');
+      return;
+    }
+
+    final LatLng destination = LatLng(destinationLat, destinationLng);
+    if (!_isValidLL(destination)) {
+      _showSnack('Destination coordinate is invalid.');
+      return;
+    }
+
+    if (_kMapboxAccessToken.isEmpty) {
+      _showSnack('Mapbox token is missing.');
+      return;
+    }
+
+    _setN(_directionsLoadingN, true);
+
+    try {
+      final Uri uri = Uri.parse(
+        'https://api.mapbox.com/directions/v5/${profile.apiProfile}/'
+        '${start.longitude},${start.latitude};'
+        '${destination.longitude},${destination.latitude}',
+      ).replace(
+        queryParameters: <String, String>{
+          'alternatives': 'false',
+          'geometries': 'geojson',
+          'overview': 'full',
+          'steps': 'false',
+          'access_token': _kMapboxAccessToken,
+        },
+      );
+
+      final http.Response response = await http.get(uri).timeout(
+            const Duration(seconds: 15),
+          );
+
+      if (!mounted || _disposed) return;
+
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        debugPrint('Mapbox Directions error ${response.statusCode}: '
+            '${response.body}');
+        _showSnack(
+            'Route planning failed (${response.statusCode}). Check Mapbox token.');
+        return;
+      }
+
+      final Object? decoded = jsonDecode(response.body);
+      if (decoded is! Map<String, dynamic>) {
+        _showSnack('Route planning response was invalid.');
+        return;
+      }
+
+      final List<dynamic> routes = decoded['routes'] as List<dynamic>? ?? [];
+      if (routes.isEmpty || routes.first is! Map<String, dynamic>) {
+        _showSnack('No route found.');
+        return;
+      }
+
+      final Map<String, dynamic> route = routes.first as Map<String, dynamic>;
+      final Map<String, dynamic>? geometry =
+          route['geometry'] as Map<String, dynamic>?;
+      final List<dynamic> coordinates =
+          geometry?['coordinates'] as List<dynamic>? ?? [];
+
+      final List<LatLng> points = <LatLng>[];
+      for (final dynamic coordinate in coordinates) {
+        if (coordinate is! List || coordinate.length < 2) continue;
+        final double? lng = (coordinate[0] as num?)?.toDouble();
+        final double? lat = (coordinate[1] as num?)?.toDouble();
+        if (lat == null || lng == null) continue;
+
+        final LatLng point = LatLng(lat, lng);
+        if (_isValidLL(point)) points.add(point);
+      }
+
+      if (points.length < 2) {
+        _showSnack('Route has no usable geometry.');
+        return;
+      }
+
+      _setN(
+        _plannedRouteN,
+        _PlannedRoute(
+          points: List<LatLng>.unmodifiable(points),
+          distanceMeters: (route['distance'] as num?)?.toDouble() ?? 0.0,
+          durationSeconds: (route['duration'] as num?)?.toDouble() ?? 0.0,
+          profile: profile,
+        ),
+      );
+
+      if (mounted && !_disposed) {
+        Navigator.of(context).maybePop();
+        _showSnack('Route planned successfully.');
+      }
+    } on TimeoutException {
+      if (mounted && !_disposed) _showSnack('Route request timed out.');
+    } catch (error, stackTrace) {
+      debugPrint('Directions planning error: $error\n$stackTrace');
+      if (mounted && !_disposed) _showSnack('Route planning failed.');
+    } finally {
+      if (mounted && !_disposed) _setN(_directionsLoadingN, false);
+    }
+  }
+
+  void _showSnack(String message) {
+    if (!mounted || _disposed) return;
+
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Text(message),
+          behavior: SnackBarBehavior.floating,
+          duration: const Duration(seconds: 2),
+        ),
+      );
+  }
+
   void _markMapReady() {
+    if (_mapReady) return;
     _mapReady = true;
 
     final LatLng? position = _posN.value;
     if (position == null || !_isValidLL(position)) return;
 
+    if (!_usesFlutterMapFallback) return;
+
     try {
       _mapController.move(position, _kDefaultZoom);
     } catch (_) {}
+  }
+
+  bool get _usesFlutterMapFallback {
+    return kIsWeb || _mapRuntimeModeN.value == _MapboxRuntimeMode.webFallback;
   }
 
   // ── Helpers ────────────────────────────────────────────────────────────────
@@ -831,9 +1252,14 @@ class _TrackingScreenState extends State<TrackingScreen>
             Positioned.fill(
               child: _FullScreenLiveMap(
                 posN: _posN,
+                headingN: _travelHdgN,
+                followModeN: _followModeN,
                 mapController: _mapController,
                 gps: _gps,
                 settings: _settings,
+                presetN: _mapPresetN,
+                runtimeModeN: _mapRuntimeModeN,
+                plannedRouteN: _plannedRouteN,
                 polylineCount: () => _polylinePointCount,
                 onMapReady: _markMapReady,
               ),
@@ -859,6 +1285,7 @@ class _TrackingScreenState extends State<TrackingScreen>
               posN: _posN,
               settings: _settings,
             ),
+            _MapFirstFloatingModeBadge(followModeN: _followModeN),
             _MapFirstBottomDock(
               tickN: _tickN,
               trackingN: _trackingN,
@@ -866,6 +1293,7 @@ class _TrackingScreenState extends State<TrackingScreen>
               maxSpeedN: _maxSpeedN,
               autoPausedN: _autoPausedN,
               autoPauseStoppedN: _autoPauseStoppedN,
+              actionBusyN: _actionBusyN,
               followModeN: _followModeN,
               settings: _settings,
               gps: _gps,
@@ -873,6 +1301,7 @@ class _TrackingScreenState extends State<TrackingScreen>
               onMapTap: _openMap,
               onAiTap: _openAiAssistant,
               onWeatherTap: _openFullWeather,
+              onMapboxTap: _openMapboxControls,
               onFollowModeTap: _cycleMapFollowMode,
             ),
           ],
@@ -889,17 +1318,31 @@ class _TrackingScreenState extends State<TrackingScreen>
 class _FullScreenLiveMap extends StatefulWidget {
   const _FullScreenLiveMap({
     required this.posN,
+    required this.headingN,
+    required this.followModeN,
     required this.mapController,
     required this.gps,
     required this.settings,
+    required this.presetN,
+    required this.runtimeModeN,
+    required this.plannedRouteN,
     required this.polylineCount,
     required this.onMapReady,
   });
 
   final ValueNotifier<LatLng?> posN;
+  final ValueNotifier<double> headingN;
+  final ValueNotifier<_MapFollowMode> followModeN;
+
+  /// Kept only for constructor compatibility with existing TrackingScreen.
+  /// Native Mapbox uses its own [mb.MapboxMap] controller.
   final fm.MapController mapController;
+
   final GpsService gps;
   final SettingsService settings;
+  final ValueNotifier<_MapboxStandardPreset> presetN;
+  final ValueNotifier<_MapboxRuntimeMode> runtimeModeN;
+  final ValueNotifier<_PlannedRoute?> plannedRouteN;
   final int Function() polylineCount;
   final VoidCallback onMapReady;
 
@@ -908,46 +1351,380 @@ class _FullScreenLiveMap extends StatefulWidget {
 }
 
 class _FullScreenLiveMapState extends State<_FullScreenLiveMap> {
-  List<LatLng> _cachedSmooth = const <LatLng>[];
-  int _cachedCount = -1;
-  LatLng? _cachedLast;
+  mb.MapboxMap? _mapboxMap;
+  mb.PolylineAnnotationManager? _routeOuterManager;
+  mb.PolylineAnnotationManager? _routeCoreManager;
+  mb.PolylineAnnotationManager? _plannedOuterManager;
+  mb.PolylineAnnotationManager? _plannedCoreManager;
 
-  List<LatLng> _smoothedPolyline() {
-    final int count = widget.polylineCount();
-    final LatLng? last = widget.posN.value;
+  bool _styleLoaded = false;
+  bool _locationReady = false;
+  int _lastRouteCount = -1;
+  int _lastRouteSignature = 0;
+  int _lastPlannedRouteSignature = 0;
+  DateTime? _lastCameraAt;
+  DateTime? _lastRouteAt;
 
-    if (count == _cachedCount && last == _cachedLast) {
-      return _cachedSmooth;
+  @override
+  void initState() {
+    super.initState();
+    widget.posN.addListener(_onLiveMapInputChanged);
+    widget.headingN.addListener(_onLiveMapInputChanged);
+    widget.followModeN.addListener(_onFollowModeChanged);
+    widget.presetN.addListener(_onMapboxPresetChanged);
+    widget.runtimeModeN.addListener(_onMapRuntimeChanged);
+    widget.plannedRouteN.addListener(_onPlannedRouteChanged);
+  }
+
+  @override
+  void didUpdateWidget(covariant _FullScreenLiveMap oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.settings.mapStyle != widget.settings.mapStyle) {
+      unawaited(_loadMapboxStyle());
+    }
+  }
+
+  @override
+  void dispose() {
+    widget.posN.removeListener(_onLiveMapInputChanged);
+    widget.headingN.removeListener(_onLiveMapInputChanged);
+    widget.followModeN.removeListener(_onFollowModeChanged);
+    widget.presetN.removeListener(_onMapboxPresetChanged);
+    widget.runtimeModeN.removeListener(_onMapRuntimeChanged);
+    widget.plannedRouteN.removeListener(_onPlannedRouteChanged);
+    super.dispose();
+  }
+
+  void _onMapCreated(mb.MapboxMap mapboxMap) {
+    _mapboxMap = mapboxMap;
+    unawaited(_configureMapboxMap());
+  }
+
+  Future<void> _configureMapboxMap() async {
+    final mb.MapboxMap? map = _mapboxMap;
+    if (map == null) return;
+
+    try {
+      await map.scaleBar.updateSettings(mb.ScaleBarSettings(enabled: false));
+      await map.compass.updateSettings(mb.CompassSettings(enabled: false));
+      await map.attribution.updateSettings(
+        mb.AttributionSettings(enabled: true),
+      );
+      await map.logo.updateSettings(mb.LogoSettings(enabled: true));
+    } catch (error) {
+      debugPrint('Mapbox ornament settings error: $error');
     }
 
-    final List<LatLng> raw = widget.gps.currentPoints
+    await _configureNativeLocationPuck();
+    await _loadMapboxStyle();
+    widget.onMapReady();
+  }
+
+  Future<void> _configureNativeLocationPuck() async {
+    final mb.MapboxMap? map = _mapboxMap;
+    if (map == null || _locationReady) return;
+
+    try {
+      await map.location.updateSettings(
+        mb.LocationComponentSettings(
+          enabled: true,
+          puckBearingEnabled: true,
+          puckBearing: mb.PuckBearing.HEADING,
+          pulsingEnabled: true,
+          pulsingColor: const Color(0xFF1A73FF).toARGB32(),
+          pulsingMaxRadius: 48.0,
+          showAccuracyRing: true,
+          accuracyRingColor: const Color(0x331A73FF).toARGB32(),
+          accuracyRingBorderColor: const Color(0x881A73FF).toARGB32(),
+        ),
+      );
+      _locationReady = true;
+    } catch (error) {
+      debugPrint('Mapbox location puck error: $error');
+    }
+  }
+
+  Future<void> _loadMapboxStyle() async {
+    final mb.MapboxMap? map = _mapboxMap;
+    if (map == null) return;
+
+    _styleLoaded = false;
+    _lastRouteCount = -1;
+
+    try {
+      await map.loadStyleURI(_mapboxStyleUri(widget.settings.mapStyle));
+      _styleLoaded = true;
+      _routeOuterManager = null;
+      _routeCoreManager = null;
+      _plannedOuterManager = null;
+      _plannedCoreManager = null;
+      _lastRouteSignature = 0;
+      _lastPlannedRouteSignature = 0;
+
+      await _configureStandardStyle();
+      await _configureNativeLocationPuck();
+      await _rebuildPlannedRouteAnnotations(force: true);
+      await _rebuildRouteAnnotations(force: true);
+      await _moveCameraToLatest(force: true);
+    } catch (error, stackTrace) {
+      debugPrint('Mapbox style load error: $error\n$stackTrace');
+    }
+  }
+
+  Future<void> _configureStandardStyle() async {
+    final mb.MapboxMap? map = _mapboxMap;
+    if (map == null) return;
+
+    try {
+      await map.style.setStyleImportConfigProperty(
+        'basemap',
+        'lightPreset',
+        widget.presetN.value.mapboxValue,
+      );
+      await map.style.setStyleImportConfigProperty(
+        'basemap',
+        'showPointOfInterestLabels',
+        false,
+      );
+      await map.style.setStyleImportConfigProperty(
+        'basemap',
+        'showTransitLabels',
+        false,
+      );
+      await map.style.setStyleImportConfigProperty(
+        'basemap',
+        'show3dObjects',
+        true,
+      );
+    } catch (error) {
+      debugPrint('Mapbox Standard config skipped: $error');
+    }
+  }
+
+  void _onMapboxPresetChanged() {
+    unawaited(_configureStandardStyle());
+  }
+
+  void _onMapRuntimeChanged() {
+    if (mounted) setState(() {});
+  }
+
+  void _onPlannedRouteChanged() {
+    unawaited(_rebuildPlannedRouteAnnotations(force: true));
+  }
+
+  void _onFollowModeChanged() {
+    if (widget.followModeN.value != _MapFollowMode.freeView) {
+      unawaited(_moveCameraToLatest(force: true));
+    }
+  }
+
+  void _onLiveMapInputChanged() {
+    unawaited(_moveCameraToLatest());
+    unawaited(_rebuildRouteAnnotations());
+  }
+
+  Future<void> _moveCameraToLatest({bool force = false}) async {
+    final mb.MapboxMap? map = _mapboxMap;
+    final LatLng? position = widget.posN.value;
+    if (map == null || position == null || !_isValid(position)) return;
+
+    final _MapFollowMode mode = widget.followModeN.value;
+    if (mode == _MapFollowMode.freeView && !force) return;
+
+    final DateTime now = DateTime.now();
+    final DateTime? last = _lastCameraAt;
+    if (!force &&
+        last != null &&
+        now.difference(last) < const Duration(milliseconds: 520)) {
+      return;
+    }
+    _lastCameraAt = now;
+
+    final double bearing =
+        mode == _MapFollowMode.headingUp ? -_normDeg(widget.headingN.value) : 0;
+    final double pitch = mode == _MapFollowMode.headingUp ? 50.0 : 0.0;
+    final double zoom = mode == _MapFollowMode.headingUp ? 17.2 : 16.3;
+
+    try {
+      await map.easeTo(
+        mb.CameraOptions(
+          center: mb.Point(
+            coordinates: mb.Position(position.longitude, position.latitude),
+          ),
+          zoom: zoom,
+          bearing: bearing,
+          pitch: pitch,
+        ),
+        mb.MapAnimationOptions(duration: force ? 650 : 420, startDelay: 0),
+      );
+    } catch (error) {
+      debugPrint('Mapbox camera error: $error');
+    }
+  }
+
+  Future<void> _rebuildRouteAnnotations({bool force = false}) async {
+    final mb.MapboxMap? map = _mapboxMap;
+    if (map == null || !_styleLoaded) return;
+
+    final List<TripPoint> currentPoints = widget.gps.currentPoints;
+    final int count = currentPoints.length;
+    final int signature = _routeSignature(currentPoints);
+
+    if (!force &&
+        count == _lastRouteCount &&
+        signature == _lastRouteSignature) {
+      return;
+    }
+
+    final DateTime now = DateTime.now();
+    final DateTime? last = _lastRouteAt;
+    if (!force &&
+        last != null &&
+        now.difference(last) < const Duration(milliseconds: 900)) {
+      return;
+    }
+
+    _lastRouteAt = now;
+    _lastRouteCount = count;
+    _lastRouteSignature = signature;
+
+    final List<LatLng> safePoints = currentPoints
         .map((TripPoint point) => point.position)
         .where(_isValid)
         .toList(growable: false);
 
-    _cachedCount = count;
-    _cachedLast = last;
+    final List<LatLng> renderPoints = safePoints.length > 900
+        ? simplifyPolyline(safePoints, epsilon: 0.00004)
+        : safePoints;
 
-    if (raw.length < 2) {
-      _cachedSmooth = const <LatLng>[];
-      return _cachedSmooth;
+    final List<mb.Position> coordinates = renderPoints
+        .map((LatLng point) => mb.Position(point.longitude, point.latitude))
+        .toList(growable: false);
+
+    try {
+      _routeOuterManager ??=
+          await map.annotations.createPolylineAnnotationManager();
+      _routeCoreManager ??=
+          await map.annotations.createPolylineAnnotationManager();
+
+      await _routeOuterManager?.deleteAll();
+      await _routeCoreManager?.deleteAll();
+
+      if (coordinates.length < 2) return;
+
+      final mb.LineString line = mb.LineString(coordinates: coordinates);
+
+      await _routeOuterManager?.create(
+        mb.PolylineAnnotationOptions(
+          geometry: line,
+          lineColor: Colors.white.toARGB32(),
+          lineWidth: 12.5,
+          lineOpacity: 0.92,
+          lineBorderColor: Colors.black.toARGB32(),
+          lineBorderWidth: 2.5,
+          lineJoin: mb.LineJoin.ROUND,
+        ),
+      );
+
+      await _routeCoreManager?.create(
+        mb.PolylineAnnotationOptions(
+          geometry: line,
+          lineColor: const Color(0xFF2F22FF).toARGB32(),
+          lineWidth: 6.5,
+          lineOpacity: 0.98,
+          lineJoin: mb.LineJoin.ROUND,
+        ),
+      );
+    } catch (error, stackTrace) {
+      debugPrint('Mapbox route annotation error: $error\n$stackTrace');
+    }
+  }
+
+  Future<void> _rebuildPlannedRouteAnnotations({bool force = false}) async {
+    final mb.MapboxMap? map = _mapboxMap;
+    if (map == null || !_styleLoaded) return;
+
+    final _PlannedRoute? route = widget.plannedRouteN.value;
+    final int signature = _plannedRouteSignature(route);
+
+    if (!force && signature == _lastPlannedRouteSignature) {
+      return;
     }
 
-    final List<LatLng> simplified = simplifyPolyline(raw, epsilon: 0.00004);
-    final List<LatLng> smoothed = smoothPolyline(
-      simplified,
-      tension: 0.5,
-      subdivisions: 8,
+    _lastPlannedRouteSignature = signature;
+
+    try {
+      _plannedOuterManager ??=
+          await map.annotations.createPolylineAnnotationManager();
+      _plannedCoreManager ??=
+          await map.annotations.createPolylineAnnotationManager();
+
+      await _plannedOuterManager?.deleteAll();
+      await _plannedCoreManager?.deleteAll();
+
+      if (route == null || route.points.length < 2) return;
+
+      final List<mb.Position> coordinates = route.points
+          .where(_isValid)
+          .map((LatLng point) => mb.Position(point.longitude, point.latitude))
+          .toList(growable: false);
+
+      if (coordinates.length < 2) return;
+
+      final mb.LineString line = mb.LineString(coordinates: coordinates);
+
+      await _plannedOuterManager?.create(
+        mb.PolylineAnnotationOptions(
+          geometry: line,
+          lineColor: Colors.white.toARGB32(),
+          lineWidth: 11.0,
+          lineOpacity: 0.82,
+          lineBorderColor: Colors.black.toARGB32(),
+          lineBorderWidth: 2.0,
+          lineJoin: mb.LineJoin.ROUND,
+        ),
+      );
+
+      await _plannedCoreManager?.create(
+        mb.PolylineAnnotationOptions(
+          geometry: line,
+          lineColor: _kBlue.toARGB32(),
+          lineWidth: 5.4,
+          lineOpacity: 0.94,
+          lineJoin: mb.LineJoin.ROUND,
+        ),
+      );
+    } catch (error, stackTrace) {
+      debugPrint('Mapbox planned route annotation error: $error\n$stackTrace');
+    }
+  }
+
+  static int _routeSignature(List<TripPoint> points) {
+    if (points.isEmpty) return 0;
+
+    final TripPoint last = points.last;
+    final int lat = (last.position.latitude * 100000).round();
+    final int lng = (last.position.longitude * 100000).round();
+    final int speed = (last.speedMph * 10).round();
+
+    return Object.hash(points.length, lat, lng, speed);
+  }
+
+  static int _plannedRouteSignature(_PlannedRoute? route) {
+    if (route == null || route.points.isEmpty) return 0;
+
+    final LatLng first = route.points.first;
+    final LatLng last = route.points.last;
+
+    return Object.hash(
+      route.points.length,
+      (first.latitude * 100000).round(),
+      (first.longitude * 100000).round(),
+      (last.latitude * 100000).round(),
+      (last.longitude * 100000).round(),
+      route.profile,
     );
-
-    final List<LatLng> valid = <LatLng>[];
-    for (final LatLng point in smoothed) {
-      if (!_isValid(point)) continue;
-      if (valid.isEmpty || valid.last != point) valid.add(point);
-    }
-
-    _cachedSmooth = List<LatLng>.unmodifiable(valid);
-    return _cachedSmooth;
   }
 
   static bool _isValid(LatLng point) {
@@ -959,8 +1736,18 @@ class _FullScreenLiveMapState extends State<_FullScreenLiveMap> {
         point.longitude <= 180.0;
   }
 
-  @override
-  Widget build(BuildContext context) {
+  static double _normDeg(double degrees) {
+    final double normalized = degrees % 360.0;
+    return normalized < 0.0 ? normalized + 360.0 : normalized;
+  }
+
+  static String _mapboxStyleUri(AppMapStyle style) {
+    final String name = style.name.toLowerCase();
+    if (name.contains('satellite')) return mb.MapboxStyles.STANDARD_SATELLITE;
+    return mb.MapboxStyles.STANDARD;
+  }
+
+  Widget _buildWebFallbackMap(BuildContext context) {
     return RepaintBoundary(
       child: fm.FlutterMap(
         mapController: widget.mapController,
@@ -971,35 +1758,89 @@ class _FullScreenLiveMapState extends State<_FullScreenLiveMap> {
             flags: fm.InteractiveFlag.all & ~fm.InteractiveFlag.rotate,
           ),
           onMapReady: widget.onMapReady,
+          onMapEvent: (fm.MapEvent event) {
+            if (event is fm.MapEventMoveStart &&
+                event.source != fm.MapEventSource.mapController &&
+                widget.followModeN.value != _MapFollowMode.freeView) {
+              widget.followModeN.value = _MapFollowMode.freeView;
+            }
+          },
         ),
         children: <Widget>[
           fm.TileLayer(
-            urlTemplate: _mapTileUrl(widget.settings.mapStyle),
+            urlTemplate: _webMapTileUrl(widget.settings.mapStyle),
             userAgentPackageName: 'com.trackpro.ai',
-            tileBuilder: _mapTileBuilder(widget.settings.mapStyle),
+            retinaMode: MediaQuery.devicePixelRatioOf(context) > 1.0,
+            maxNativeZoom: 19,
+            errorTileCallback: (
+              fm.TileImage tile,
+              Object error,
+              StackTrace? stackTrace,
+            ) {
+              debugPrint('Tracking web fallback tile error: $error');
+            },
           ),
-          ValueListenableBuilder<LatLng?>(
-            valueListenable: widget.posN,
-            builder: (_, __, ___) {
-              final List<LatLng> polyline = _smoothedPolyline();
-
-              if (polyline.length < 2) {
+          ValueListenableBuilder<_PlannedRoute?>(
+            valueListenable: widget.plannedRouteN,
+            builder: (_, _PlannedRoute? route, __) {
+              if (route == null || route.points.length < 2) {
                 return const SizedBox.shrink();
               }
 
               return fm.PolylineLayer(
                 polylines: <fm.Polyline>[
                   fm.Polyline(
-                    points: polyline,
-                    color: _kAmber.withValues(alpha: 0.30),
+                    points: route.points,
+                    color: Colors.white.withValues(alpha: 0.82),
                     strokeWidth: 10.0,
                     strokeCap: StrokeCap.round,
                     strokeJoin: StrokeJoin.round,
                   ),
                   fm.Polyline(
+                    points: route.points,
+                    color: _kBlue.withValues(alpha: 0.92),
+                    strokeWidth: 5.0,
+                    strokeCap: StrokeCap.round,
+                    strokeJoin: StrokeJoin.round,
+                  ),
+                ],
+              );
+            },
+          ),
+          ValueListenableBuilder<LatLng?>(
+            valueListenable: widget.posN,
+            builder: (_, __, ___) {
+              final List<LatLng> points = widget.gps.currentPoints
+                  .map((TripPoint point) => point.position)
+                  .where(_isValid)
+                  .toList(growable: false);
+
+              if (points.length < 2) return const SizedBox.shrink();
+
+              final List<LatLng> simplified = points.length > 900
+                  ? simplifyPolyline(points, epsilon: 0.00004)
+                  : points;
+              final List<LatLng> polyline = simplified.length > 2
+                  ? smoothPolyline(
+                      simplified,
+                      tension: 0.5,
+                      subdivisions: simplified.length > 500 ? 4 : 8,
+                    )
+                  : simplified;
+
+              return fm.PolylineLayer(
+                polylines: <fm.Polyline>[
+                  fm.Polyline(
                     points: polyline,
-                    color: _kAmberSoft,
-                    strokeWidth: 4.2,
+                    color: Colors.white.withValues(alpha: 0.96),
+                    strokeWidth: 12.0,
+                    strokeCap: StrokeCap.round,
+                    strokeJoin: StrokeJoin.round,
+                  ),
+                  fm.Polyline(
+                    points: polyline,
+                    color: const Color(0xFF2F22FF).withValues(alpha: 0.96),
+                    strokeWidth: 6.5,
                     strokeCap: StrokeCap.round,
                     strokeJoin: StrokeJoin.round,
                   ),
@@ -1018,10 +1859,26 @@ class _FullScreenLiveMapState extends State<_FullScreenLiveMap> {
                 markers: <fm.Marker>[
                   fm.Marker(
                     point: position,
-                    width: 70,
-                    height: 70,
+                    width: 74,
+                    height: 74,
                     alignment: Alignment.center,
-                    child: const _LiveMarker(),
+                    child: ValueListenableBuilder<double>(
+                      valueListenable: widget.headingN,
+                      builder: (_, double heading, __) {
+                        return ValueListenableBuilder<_MapFollowMode>(
+                          valueListenable: widget.followModeN,
+                          builder: (_, _MapFollowMode mode, __) {
+                            final double markerHeading =
+                                mode == _MapFollowMode.headingUp
+                                    ? 0.0
+                                    : heading;
+                            return _LocationPuckMarker(
+                              heading: markerHeading,
+                            );
+                          },
+                        );
+                      },
+                    ),
                   ),
                 ],
               );
@@ -1032,104 +1889,77 @@ class _FullScreenLiveMapState extends State<_FullScreenLiveMap> {
     );
   }
 
-  static String _mapTileUrl(AppMapStyle style) {
+  static String _webMapTileUrl(AppMapStyle style) {
     final String name = style.name.toLowerCase();
+    final String token = _kMapboxAccessToken;
 
-    // IMPORTANT:
-    // Do not use public volunteer map tile servers here because they may
-    // block production apps that do not follow their tile usage policy.
-    //
-    // For real Apple Maps on iOS, the app must use MapKit through a plugin such
-    // as apple_maps_flutter. flutter_map cannot legally render Apple Maps tiles
-    // by simply changing the URL.
-    if (name.contains('light')) {
+    if (token.isEmpty) {
+      if (name.contains('light')) {
+        return 'https://server.arcgisonline.com/ArcGIS/rest/services/'
+            'Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}';
+      }
+
+      if (name.contains('dark')) {
+        return 'https://server.arcgisonline.com/ArcGIS/rest/services/'
+            'Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}';
+      }
+
       return 'https://server.arcgisonline.com/ArcGIS/rest/services/'
-          'Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}';
+          'World_Imagery/MapServer/tile/{z}/{y}/{x}';
     }
 
-    if (name.contains('dark')) {
-      return 'https://server.arcgisonline.com/ArcGIS/rest/services/'
-          'Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}';
-    }
+    final String styleId = name.contains('satellite')
+        ? 'satellite-streets-v12'
+        : name.contains('light')
+            ? 'navigation-day-v1'
+            : 'navigation-night-v1';
 
-    // Satellite / default.
-    return 'https://server.arcgisonline.com/ArcGIS/rest/services/'
-        'World_Imagery/MapServer/tile/{z}/{y}/{x}';
+    return 'https://api.mapbox.com/styles/v1/mapbox/$styleId/'
+        'tiles/512/{z}/{x}/{y}@2x?access_token=$token';
   }
 
-  static Widget Function(BuildContext, Widget, fm.TileImage)? _mapTileBuilder(
-    AppMapStyle style,
-  ) {
-    final String name = style.name.toLowerCase();
+  @override
+  Widget build(BuildContext context) {
+    final _MapboxRuntimeMode runtimeMode = widget.runtimeModeN.value;
+    final bool useFallback = kIsWeb ||
+        runtimeMode == _MapboxRuntimeMode.webFallback ||
+        _kMapboxAccessToken.isEmpty;
 
-    if (name.contains('light')) {
-      return _lightTileBuilder;
+    if (useFallback) {
+      return _buildWebFallbackMap(context);
     }
 
-    if (name.contains('dark')) {
-      return _darkGrayTileBuilder;
-    }
+    final LatLng center = widget.posN.value ?? _kDefaultCenter;
+    final String styleUri = _mapboxStyleUri(widget.settings.mapStyle);
 
-    return _satelliteTileBuilder;
-  }
-
-  static Widget _lightTileBuilder(
-    BuildContext context,
-    Widget tile,
-    fm.TileImage tileImage,
-  ) {
-    return ColorFiltered(
-      colorFilter: ColorFilter.mode(
-        Colors.black.withValues(alpha: 0.04),
-        BlendMode.darken,
+    return RepaintBoundary(
+      child: mb.MapWidget(
+        key: ValueKey<String>('native-mapbox-$styleUri'),
+        styleUri: styleUri,
+        viewport: mb.CameraViewportState(
+          center: mb.Point(
+            coordinates: mb.Position(center.longitude, center.latitude),
+          ),
+          zoom: _kDefaultZoom,
+          pitch: 0.0,
+          bearing: 0.0,
+        ),
+        textureView: true,
+        onMapCreated: _onMapCreated,
+        onStyleLoadedListener: (_) {
+          _styleLoaded = true;
+          unawaited(_configureStandardStyle());
+          unawaited(_configureNativeLocationPuck());
+          unawaited(_rebuildPlannedRouteAnnotations(force: true));
+          unawaited(_rebuildRouteAnnotations(force: true));
+          unawaited(_moveCameraToLatest(force: true));
+        },
+        onScrollListener: (_) {
+          if (widget.followModeN.value != _MapFollowMode.freeView) {
+            widget.followModeN.value = _MapFollowMode.freeView;
+          }
+        },
       ),
-      child: tile,
-    );
-  }
-
-  static Widget _darkGrayTileBuilder(
-    BuildContext context,
-    Widget tile,
-    fm.TileImage tileImage,
-  ) {
-    return ColorFiltered(
-      colorFilter: ColorFilter.mode(
-        Colors.black.withValues(alpha: 0.02),
-        BlendMode.darken,
-      ),
-      child: tile,
-    );
-  }
-
-  static Widget _satelliteTileBuilder(
-    BuildContext context,
-    Widget tile,
-    fm.TileImage tileImage,
-  ) {
-    return ColorFiltered(
-      colorFilter: const ColorFilter.matrix(<double>[
-        0.50,
-        0,
-        0,
-        0,
-        -16,
-        0,
-        0.50,
-        0,
-        0,
-        -16,
-        0,
-        0,
-        0.50,
-        0,
-        -16,
-        0,
-        0,
-        0,
-        1,
-        0,
-      ]),
-      child: tile,
     );
   }
 }
@@ -1222,7 +2052,7 @@ class _MapFirstTopHud extends StatelessWidget {
               _GlassPanel(
                 radius: 26,
                 padding:
-                    const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                    const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
                 child: Row(
                   children: <Widget>[
                     _CompassWidget(headingN: compassN),
@@ -1505,82 +2335,81 @@ class _MapFirstSpeedHud extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final Size screen = MediaQuery.of(context).size;
-    final double side = math
-        .min(screen.width * 0.74, screen.height * 0.32)
-        .clamp(205.0, 290.0)
-        .toDouble();
+    final double bottomSafe = MediaQuery.of(context).padding.bottom;
 
     return Positioned(
-      left: 0,
-      right: 0,
-      top: screen.height * 0.255,
-      child: Center(
-        child: SizedBox(
-          width: side,
-          child: RepaintBoundary(
-            child: ValueListenableBuilder<bool>(
-              valueListenable: trackingN,
-              builder: (_, bool tracking, __) {
-                return ValueListenableBuilder<double>(
-                  valueListenable: speedN,
-                  builder: (_, double speed, __) {
-                    final bool isOver =
-                        tracking && speed > settings.speedAlertMph;
+      right: 14,
+      bottom: bottomSafe + 214,
+      child: RepaintBoundary(
+        child: ValueListenableBuilder<bool>(
+          valueListenable: trackingN,
+          builder: (_, bool tracking, __) {
+            return ValueListenableBuilder<double>(
+              valueListenable: speedN,
+              builder: (_, double speed, __) {
+                final bool isOver = tracking && speed > settings.speedAlertMph;
 
-                    return AnimatedContainer(
-                      duration: _kAnimMed,
-                      curve: Curves.easeOut,
-                      decoration: BoxDecoration(
-                        color: Colors.black.withValues(
-                          alpha: isOver ? 0.46 : 0.22,
-                        ),
-                        shape: BoxShape.circle,
-                        border: Border.all(
+                return AnimatedScale(
+                  duration: _kAnimMed,
+                  curve: Curves.easeOutCubic,
+                  scale: isOver ? 1.035 : 1.0,
+                  child: AnimatedContainer(
+                    duration: _kAnimMed,
+                    curve: Curves.easeOutCubic,
+                    width: 108,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 10,
+                    ),
+                    decoration: BoxDecoration(
+                      color: Colors.black.withValues(
+                        alpha: isOver ? 0.64 : 0.42,
+                      ),
+                      borderRadius: BorderRadius.circular(24),
+                      border: Border.all(
+                        color: isOver
+                            ? _kRed.withValues(alpha: 0.52)
+                            : Colors.white.withValues(alpha: 0.10),
+                        width: isOver ? 1.4 : 0.8,
+                      ),
+                      boxShadow: <BoxShadow>[
+                        BoxShadow(
                           color: isOver
-                              ? _kRed.withValues(alpha: 0.55)
-                              : Colors.white.withValues(alpha: 0.06),
-                          width: isOver ? 1.5 : 0.8,
+                              ? _kRed.withValues(alpha: 0.26)
+                              : Colors.black.withValues(alpha: 0.26),
+                          blurRadius: isOver ? 24 : 16,
+                          offset: const Offset(0, 8),
                         ),
-                        boxShadow: <BoxShadow>[
-                          BoxShadow(
-                            color: isOver
-                                ? _kRed.withValues(alpha: 0.24)
-                                : Colors.black.withValues(alpha: 0.20),
-                            blurRadius: isOver ? 30 : 18,
-                            offset: const Offset(0, 10),
-                          ),
-                        ],
-                      ),
-                      padding: const EdgeInsets.all(6),
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: <Widget>[
-                          SpeedometerWidget(
-                            speedMph: speed,
-                            isOverLimit: isOver,
-                          ),
-                          Transform.translate(
-                            offset: const Offset(0, -10),
-                            child: ValueListenableBuilder<bool>(
-                              valueListenable: autoPausedN,
-                              builder: (_, bool autoPaused, __) {
-                                return _ReadyTrackingLabel(
-                                  tracking: tracking,
-                                  autoPaused: autoPaused,
-                                  isOverLimit: isOver,
-                                );
-                              },
-                            ),
-                          ),
-                        ],
-                      ),
-                    );
-                  },
+                      ],
+                    ),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: <Widget>[
+                        SpeedometerWidget(
+                          speedMph: speed,
+                          isOverLimit: isOver,
+                          compact: true,
+                          showUnit: true,
+                          showOverLimitBadge: false,
+                        ),
+                        const SizedBox(height: 4),
+                        ValueListenableBuilder<bool>(
+                          valueListenable: autoPausedN,
+                          builder: (_, bool autoPaused, __) {
+                            return _ReadyTrackingLabel(
+                              tracking: tracking,
+                              autoPaused: autoPaused,
+                              isOverLimit: isOver,
+                            );
+                          },
+                        ),
+                      ],
+                    ),
+                  ),
                 );
               },
-            ),
-          ),
+            );
+          },
         ),
       ),
     );
@@ -1623,15 +2452,15 @@ class _ReadyTrackingLabel extends StatelessWidget {
         border: Border.all(color: color.withValues(alpha: 0.14)),
       ),
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
         child: _SafeText(
           label,
           maxLines: 1,
           style: TextStyle(
             color: color,
-            fontSize: 10,
+            fontSize: 8.5,
             fontWeight: FontWeight.w900,
-            letterSpacing: 0.8,
+            letterSpacing: 0.65,
           ),
         ),
       ),
@@ -1724,6 +2553,7 @@ class _MapFirstBottomDock extends StatelessWidget {
     required this.maxSpeedN,
     required this.autoPausedN,
     required this.autoPauseStoppedN,
+    required this.actionBusyN,
     required this.followModeN,
     required this.settings,
     required this.gps,
@@ -1731,6 +2561,7 @@ class _MapFirstBottomDock extends StatelessWidget {
     required this.onMapTap,
     required this.onAiTap,
     required this.onWeatherTap,
+    required this.onMapboxTap,
     required this.onFollowModeTap,
   });
 
@@ -1740,6 +2571,7 @@ class _MapFirstBottomDock extends StatelessWidget {
   final ValueNotifier<double> maxSpeedN;
   final ValueNotifier<bool> autoPausedN;
   final ValueNotifier<int> autoPauseStoppedN;
+  final ValueNotifier<bool> actionBusyN;
   final ValueNotifier<_MapFollowMode> followModeN;
   final SettingsService settings;
   final GpsService gps;
@@ -1747,6 +2579,7 @@ class _MapFirstBottomDock extends StatelessWidget {
   final VoidCallback onMapTap;
   final VoidCallback onAiTap;
   final VoidCallback onWeatherTap;
+  final VoidCallback onMapboxTap;
   final VoidCallback onFollowModeTap;
 
   @override
@@ -1778,13 +2611,22 @@ class _MapFirstBottomDock extends StatelessWidget {
             ),
             padding: EdgeInsets.fromLTRB(
               14,
-              8,
+              10,
               14,
-              bottomPad > 0 ? bottomPad + 8 : 14,
+              bottomPad > 0 ? bottomPad + 10 : 16,
             ),
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: <Widget>[
+                Container(
+                  width: 38,
+                  height: 3,
+                  margin: const EdgeInsets.only(bottom: 9),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.16),
+                    borderRadius: BorderRadius.circular(99),
+                  ),
+                ),
                 ValueListenableBuilder<int>(
                   valueListenable: tickN,
                   builder: (_, __, ___) {
@@ -1861,10 +2703,16 @@ class _MapFirstBottomDock extends StatelessWidget {
                       child: ValueListenableBuilder<bool>(
                         valueListenable: trackingN,
                         builder: (_, bool tracking, __) {
-                          return _PrimaryActionButton(
-                            isTracking: tracking,
-                            onTap: onAction,
-                            timerNotifier: elapsedN,
+                          return ValueListenableBuilder<bool>(
+                            valueListenable: actionBusyN,
+                            builder: (_, bool busy, __) {
+                              return _PrimaryActionButton(
+                                isTracking: tracking,
+                                isBusy: busy,
+                                onTap: onAction,
+                                timerNotifier: elapsedN,
+                              );
+                            },
                           );
                         },
                       ),
@@ -1889,6 +2737,16 @@ class _MapFirstBottomDock extends StatelessWidget {
                         label: 'FULL MAP',
                         onTap: onMapTap,
                         color: _kGreen,
+                        compact: true,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: _DockIconButton(
+                        icon: CupertinoIcons.location_north_line_fill,
+                        label: 'ROUTE',
+                        onTap: onMapboxTap,
+                        color: _kBlue,
                         compact: true,
                       ),
                     ),
@@ -2046,13 +2904,20 @@ class _DockIconButton extends StatelessWidget {
     return _PressableScale(
       onTap: onTap,
       child: Container(
-        height: compact ? 35 : 42,
+        height: compact ? 36 : 44,
         decoration: BoxDecoration(
-          color: Colors.white.withValues(alpha: 0.045),
-          borderRadius: BorderRadius.circular(16),
+          color: Colors.white.withValues(alpha: 0.055),
+          borderRadius: BorderRadius.circular(17),
           border: Border.all(
-            color: Colors.white.withValues(alpha: 0.08),
+            color: Colors.white.withValues(alpha: 0.09),
           ),
+          boxShadow: <BoxShadow>[
+            BoxShadow(
+              color: color.withValues(alpha: 0.045),
+              blurRadius: 10,
+              offset: const Offset(0, 4),
+            ),
+          ],
         ),
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
@@ -3664,31 +4529,9 @@ Widget _legacySatelliteDarkTileBuilder(
   Widget tile,
   fm.TileImage tileImage,
 ) {
-  return ColorFiltered(
-    colorFilter: const ColorFilter.matrix(<double>[
-      0.58,
-      0,
-      0,
-      0,
-      -8,
-      0,
-      0.58,
-      0,
-      0,
-      -8,
-      0,
-      0,
-      0.58,
-      0,
-      -8,
-      0,
-      0,
-      0,
-      1,
-      0,
-    ]),
-    child: tile,
-  );
+  // Legacy helper kept for compatibility, but satellite tiles should remain
+  // unfiltered so the map is no longer overly black/high-contrast.
+  return tile;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -3762,6 +4605,1573 @@ class _WeatherThumbnail extends StatelessWidget {
         ),
       ),
     );
+  }
+}
+
+class _MapboxControlsSheet extends StatefulWidget {
+  const _MapboxControlsSheet({
+    required this.posN,
+    required this.plannedRouteN,
+    required this.presetN,
+    required this.runtimeModeN,
+    required this.directionsLoadingN,
+    required this.settings,
+    required this.onPlanRoute,
+    required this.onClearRoute,
+  });
+
+  final ValueNotifier<LatLng?> posN;
+  final ValueNotifier<_PlannedRoute?> plannedRouteN;
+  final ValueNotifier<_MapboxStandardPreset> presetN;
+  final ValueNotifier<_MapboxRuntimeMode> runtimeModeN;
+  final ValueNotifier<bool> directionsLoadingN;
+  final SettingsService settings;
+  final Future<void> Function({
+    required double destinationLat,
+    required double destinationLng,
+    required _DirectionsProfile profile,
+  }) onPlanRoute;
+  final VoidCallback onClearRoute;
+
+  @override
+  State<_MapboxControlsSheet> createState() => _MapboxControlsSheetState();
+}
+
+class _MapboxControlsSheetState extends State<_MapboxControlsSheet> {
+  late final TextEditingController _searchCtrl;
+  late final FocusNode _searchFocus;
+  _DirectionsProfile _profile = _DirectionsProfile.drivingTraffic;
+  _MapboxPlaceResult? _selectedPlace;
+  List<_MapboxPlaceResult> _results = const <_MapboxPlaceResult>[];
+  bool _searching = false;
+  int _searchToken = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _searchCtrl = TextEditingController();
+    _searchFocus = FocusNode();
+  }
+
+  @override
+  void dispose() {
+    _searchToken++;
+    _searchCtrl.dispose();
+    _searchFocus.dispose();
+    super.dispose();
+  }
+
+  Future<void> _searchPlaces() async {
+    final String query = _searchCtrl.text.trim();
+
+    if (query.length < 2) {
+      _showSheetSnack('Type a place name first.');
+      return;
+    }
+
+    if (_kMapboxAccessToken.isEmpty) {
+      _showSheetSnack('Mapbox token is missing.');
+      return;
+    }
+
+    _searchFocus.unfocus();
+
+    final int token = ++_searchToken;
+    setState(() {
+      _searching = true;
+      _results = const <_MapboxPlaceResult>[];
+      _selectedPlace = null;
+    });
+
+    try {
+      LatLng? current = widget.posN.value;
+      if (current == null ||
+          !current.latitude.isFinite ||
+          !current.longitude.isFinite) {
+        try {
+          final Position position = await Geolocator.getCurrentPosition(
+            desiredAccuracy: LocationAccuracy.high,
+          ).timeout(const Duration(seconds: 8));
+          current = LatLng(position.latitude, position.longitude);
+        } catch (_) {
+          current = null;
+        }
+      }
+
+      final Map<String, String> params = <String, String>{
+        'access_token': _kMapboxAccessToken,
+        'limit': '6',
+        'types':
+            'country,region,postcode,district,place,locality,neighborhood,address,poi',
+        'language': 'en',
+        'autocomplete': 'true',
+        'fuzzyMatch': 'true',
+      };
+
+      if (current != null &&
+          current.latitude.isFinite &&
+          current.longitude.isFinite) {
+        params['proximity'] = '${current.longitude},${current.latitude}';
+      }
+
+      final Uri uri = Uri.parse(
+        'https://api.mapbox.com/geocoding/v5/mapbox.places/'
+        '${Uri.encodeComponent(query)}.json',
+      ).replace(queryParameters: params);
+
+      final http.Response response = await http.get(uri).timeout(
+            const Duration(seconds: 12),
+          );
+
+      if (!mounted || token != _searchToken) return;
+
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        debugPrint('Mapbox geocoding error ${response.statusCode}: '
+            '${response.body}');
+        _showSheetSnack(
+          'Location search failed (${response.statusCode}). Check Mapbox token.',
+        );
+        return;
+      }
+
+      final Object? decoded = jsonDecode(response.body);
+      if (decoded is! Map<String, dynamic>) {
+        _showSheetSnack('Location search response was invalid.');
+        return;
+      }
+
+      final List<dynamic> features =
+          decoded['features'] as List<dynamic>? ?? <dynamic>[];
+
+      final List<_MapboxPlaceResult> nextResults = <_MapboxPlaceResult>[];
+
+      for (final dynamic item in features) {
+        if (item is! Map<String, dynamic>) continue;
+
+        final String name =
+            (item['text'] ?? item['place_name'] ?? '').toString().trim();
+        final String address = (item['place_name'] ?? '').toString().trim();
+        final List<dynamic> center = item['center'] as List<dynamic>? ?? [];
+
+        if (name.isEmpty || center.length < 2) continue;
+
+        final double? lng = (center[0] as num?)?.toDouble();
+        final double? lat = (center[1] as num?)?.toDouble();
+        if (lat == null || lng == null) continue;
+
+        final LatLng position = LatLng(lat, lng);
+        if (!_TrackingScreenState._isValidLL(position)) continue;
+
+        nextResults.add(
+          _MapboxPlaceResult(
+            name: name,
+            address: address,
+            position: position,
+          ),
+        );
+      }
+
+      setState(() {
+        _results = List<_MapboxPlaceResult>.unmodifiable(nextResults);
+        if (nextResults.length == 1) {
+          _selectedPlace = nextResults.first;
+        }
+      });
+
+      if (nextResults.isEmpty) {
+        _showSheetSnack('No matching location found.');
+      }
+    } on TimeoutException {
+      if (mounted) _showSheetSnack('Location search timed out.');
+    } catch (error, stackTrace) {
+      debugPrint('Mapbox geocoding search error: $error\n$stackTrace');
+      if (mounted) _showSheetSnack('Location search failed.');
+    } finally {
+      if (mounted && token == _searchToken) {
+        setState(() => _searching = false);
+      }
+    }
+  }
+
+  Future<void> _submit() async {
+    final _MapboxPlaceResult? place = _selectedPlace;
+
+    if (place == null) {
+      if (_results.isNotEmpty) {
+        _showSheetSnack('Tap a search result first.');
+      } else {
+        _showSheetSnack('Search a location, then tap one result first.');
+      }
+      return;
+    }
+
+    await widget.onPlanRoute(
+      destinationLat: place.position.latitude,
+      destinationLng: place.position.longitude,
+      profile: _profile,
+    );
+  }
+
+  void _showSheetSnack(String message) {
+    if (!mounted) return;
+
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Text(message),
+          behavior: SnackBarBehavior.floating,
+          duration: const Duration(seconds: 2),
+        ),
+      );
+  }
+
+  void _quickSearch(String query) {
+    _searchCtrl.text = query;
+    unawaited(_searchPlaces());
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final double bottomInset = MediaQuery.viewInsetsOf(context).bottom;
+    final double maxHeight = MediaQuery.sizeOf(context).height * 0.92;
+
+    return AnimatedPadding(
+      duration: _kAnimMed,
+      curve: Curves.easeOutCubic,
+      padding: EdgeInsets.only(bottom: bottomInset),
+      child: Align(
+        alignment: Alignment.bottomCenter,
+        child: ConstrainedBox(
+          constraints: BoxConstraints(maxHeight: maxHeight),
+          child: ClipRRect(
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(34)),
+            child: BackdropFilter(
+              filter: ui.ImageFilter.blur(sigmaX: 22, sigmaY: 22),
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  color: _kSurface.withValues(alpha: 0.96),
+                  border: Border(
+                    top: BorderSide(
+                      color: Colors.white.withValues(alpha: 0.10),
+                    ),
+                  ),
+                ),
+                child: SafeArea(
+                  top: false,
+                  child: SingleChildScrollView(
+                    physics: const BouncingScrollPhysics(),
+                    keyboardDismissBehavior:
+                        ScrollViewKeyboardDismissBehavior.onDrag,
+                    padding: const EdgeInsets.fromLTRB(16, 10, 16, 24),
+                    child: Center(
+                      child: ConstrainedBox(
+                        constraints: const BoxConstraints(maxWidth: 560),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: <Widget>[
+                            Container(
+                              width: 46,
+                              height: 4,
+                              margin: const EdgeInsets.only(bottom: 14),
+                              decoration: BoxDecoration(
+                                color: Colors.white.withValues(alpha: 0.22),
+                                borderRadius: BorderRadius.circular(99),
+                              ),
+                            ),
+                            _RoutePlannerHeader(
+                              selectedPlace: _selectedPlace,
+                              onClear: _selectedPlace == null
+                                  ? null
+                                  : () => setState(() {
+                                        _selectedPlace = null;
+                                        _searchCtrl.clear();
+                                        _results = const <_MapboxPlaceResult>[];
+                                      }),
+                            ),
+                            const SizedBox(height: 14),
+                            _RoutePlannerSearchCard(
+                              controller: _searchCtrl,
+                              focusNode: _searchFocus,
+                              searching: _searching,
+                              selectedPlace: _selectedPlace,
+                              results: _results,
+                              onSearch: () => unawaited(_searchPlaces()),
+                              onSelect: (place) {
+                                HapticFeedback.selectionClick();
+                                setState(() => _selectedPlace = place);
+                              },
+                              onQuickSearch: _quickSearch,
+                            ),
+                            const SizedBox(height: 12),
+                            _RoutePlannerModeCard(
+                              selectedProfile: _profile,
+                              onChanged: (profile) {
+                                HapticFeedback.selectionClick();
+                                setState(() => _profile = profile);
+                              },
+                            ),
+                            const SizedBox(height: 12),
+                            Row(
+                              children: <Widget>[
+                                Expanded(
+                                  child: _RoutePlannerSelectCard(
+                                    title: 'Map style',
+                                    subtitle: 'Look of the map',
+                                    icon: CupertinoIcons.map_fill,
+                                    color: _kAmberSoft,
+                                    child: ValueListenableBuilder<
+                                        _MapboxStandardPreset>(
+                                      valueListenable: widget.presetN,
+                                      builder: (_, preset, __) {
+                                        return _RoutePlannerSelectButton(
+                                          label: preset.label,
+                                          icon: _presetIcon(preset),
+                                          color: _kAmberSoft,
+                                          onTap: () {
+                                            widget.presetN.value =
+                                                widget.presetN.value.next;
+                                          },
+                                        );
+                                      },
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(width: 10),
+                                Expanded(
+                                  child: _RoutePlannerSelectCard(
+                                    title: 'Runtime',
+                                    subtitle: 'Best map engine',
+                                    icon: CupertinoIcons.speedometer,
+                                    color: _kGreen,
+                                    child: ValueListenableBuilder<
+                                        _MapboxRuntimeMode>(
+                                      valueListenable: widget.runtimeModeN,
+                                      builder: (_, mode, __) {
+                                        return _RoutePlannerSelectButton(
+                                          label: mode.label,
+                                          icon:
+                                              CupertinoIcons.arrow_2_circlepath,
+                                          color: _kGreen,
+                                          onTap: () {
+                                            widget.runtimeModeN.value =
+                                                widget.runtimeModeN.value.next;
+                                          },
+                                        );
+                                      },
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 12),
+                            ValueListenableBuilder<_PlannedRoute?>(
+                              valueListenable: widget.plannedRouteN,
+                              builder: (_, route, __) {
+                                return _RoutePlannerSummaryCard(
+                                  route: route,
+                                  selectedPlace: _selectedPlace,
+                                  profile: _profile,
+                                  settings: widget.settings,
+                                  onClearRoute: route == null
+                                      ? null
+                                      : widget.onClearRoute,
+                                );
+                              },
+                            ),
+                            const SizedBox(height: 14),
+                            ValueListenableBuilder<bool>(
+                              valueListenable: widget.directionsLoadingN,
+                              builder: (_, bool loading, __) {
+                                final bool canPlan =
+                                    _selectedPlace != null && !loading;
+
+                                return _RoutePlannerPlanButton(
+                                  loading: loading,
+                                  enabled: canPlan,
+                                  onTap: canPlan
+                                      ? _submit
+                                      : () {
+                                          _showSheetSnack(
+                                            'Search and select a destination first.',
+                                          );
+                                        },
+                                );
+                              },
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  static IconData _presetIcon(_MapboxStandardPreset preset) {
+    switch (preset) {
+      case _MapboxStandardPreset.day:
+        return CupertinoIcons.sun_max_fill;
+      case _MapboxStandardPreset.dusk:
+        return CupertinoIcons.sunset_fill;
+      case _MapboxStandardPreset.dawn:
+        return CupertinoIcons.sunrise_fill;
+      case _MapboxStandardPreset.night:
+        return CupertinoIcons.moon_stars_fill;
+    }
+  }
+}
+
+class _RoutePlannerHeader extends StatelessWidget {
+  const _RoutePlannerHeader({
+    required this.selectedPlace,
+    required this.onClear,
+  });
+
+  final _MapboxPlaceResult? selectedPlace;
+  final VoidCallback? onClear;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: <Widget>[
+        Container(
+          width: 46,
+          height: 46,
+          decoration: BoxDecoration(
+            color: _kBlue.withValues(alpha: 0.14),
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(color: _kBlue.withValues(alpha: 0.22)),
+            boxShadow: <BoxShadow>[
+              BoxShadow(
+                color: _kBlue.withValues(alpha: 0.18),
+                blurRadius: 24,
+              ),
+            ],
+          ),
+          child: const Icon(
+            Icons.navigation_rounded,
+            color: _kBlue,
+            size: 25,
+          ),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[
+              const _SafeText(
+                'ROUTE PLANNER',
+                maxLines: 1,
+                style: TextStyle(
+                  color: _kTextPrimary,
+                  fontSize: 18,
+                  fontWeight: FontWeight.w900,
+                  letterSpacing: 1.0,
+                ),
+              ),
+              const SizedBox(height: 3),
+              _SafeText(
+                selectedPlace == null
+                    ? 'Search and plan your next route'
+                    : 'Destination selected',
+                maxLines: 1,
+                style: const TextStyle(
+                  color: _kTextMuted,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ],
+          ),
+        ),
+        if (onClear != null)
+          _RoutePlannerTinyButton(
+            icon: CupertinoIcons.xmark,
+            color: _kTextMuted,
+            onTap: onClear!,
+          ),
+      ],
+    );
+  }
+}
+
+class _RoutePlannerSearchCard extends StatelessWidget {
+  const _RoutePlannerSearchCard({
+    required this.controller,
+    required this.focusNode,
+    required this.searching,
+    required this.selectedPlace,
+    required this.results,
+    required this.onSearch,
+    required this.onSelect,
+    required this.onQuickSearch,
+  });
+
+  final TextEditingController controller;
+  final FocusNode focusNode;
+  final bool searching;
+  final _MapboxPlaceResult? selectedPlace;
+  final List<_MapboxPlaceResult> results;
+  final VoidCallback onSearch;
+  final ValueChanged<_MapboxPlaceResult> onSelect;
+  final ValueChanged<String> onQuickSearch;
+
+  @override
+  Widget build(BuildContext context) {
+    return _RoutePlannerGlassCard(
+      padding: const EdgeInsets.fromLTRB(14, 14, 14, 14),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: <Widget>[
+          Row(
+            children: <Widget>[
+              Container(
+                width: 26,
+                height: 26,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: _kBlue.withValues(alpha: 0.18),
+                ),
+                child: const Icon(
+                  CupertinoIcons.location_fill,
+                  color: _kBlue,
+                  size: 14,
+                ),
+              ),
+              const SizedBox(width: 8),
+              const _SafeText(
+                'From:',
+                maxLines: 1,
+                style: TextStyle(
+                  color: _kTextMuted,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+              const SizedBox(width: 5),
+              const Expanded(
+                child: _SafeText(
+                  'My Location',
+                  maxLines: 1,
+                  style: TextStyle(
+                    color: _kBlue,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+              ),
+              if (selectedPlace != null)
+                const Icon(
+                  CupertinoIcons.checkmark_circle_fill,
+                  color: _kGreen,
+                  size: 16,
+                ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Container(
+            height: 54,
+            decoration: BoxDecoration(
+              color: Colors.black.withValues(alpha: 0.36),
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+            ),
+            child: Row(
+              children: <Widget>[
+                const SizedBox(width: 14),
+                const Icon(CupertinoIcons.search, color: _kTextMuted, size: 20),
+                const SizedBox(width: 9),
+                Expanded(
+                  child: CupertinoTextField.borderless(
+                    controller: controller,
+                    focusNode: focusNode,
+                    placeholder: 'Search destination...',
+                    textInputAction: TextInputAction.search,
+                    onSubmitted: (_) => onSearch(),
+                    style: const TextStyle(
+                      color: _kTextPrimary,
+                      fontSize: 14,
+                      fontWeight: FontWeight.w800,
+                    ),
+                    placeholderStyle: const TextStyle(
+                      color: _kTextMuted,
+                      fontSize: 14,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 6),
+                SizedBox(
+                  width: 96,
+                  height: 44,
+                  child: _RoutePlannerGradientButton(
+                    label: searching ? '...' : 'SEARCH',
+                    icon: CupertinoIcons.search,
+                    color: _kBlue,
+                    onTap: searching ? () {} : onSearch,
+                    compact: true,
+                  ),
+                ),
+                const SizedBox(width: 5),
+              ],
+            ),
+          ),
+          if (searching) ...<Widget>[
+            const SizedBox(height: 10),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(99),
+              child: LinearProgressIndicator(
+                minHeight: 3,
+                backgroundColor: Colors.white.withValues(alpha: 0.05),
+                color: _kBlue,
+              ),
+            ),
+          ],
+          if (results.isEmpty && selectedPlace == null) ...<Widget>[
+            const SizedBox(height: 14),
+            const Align(
+              alignment: Alignment.centerLeft,
+              child: _SafeText(
+                'Recent & popular',
+                maxLines: 1,
+                style: TextStyle(
+                  color: _kTextPrimary,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
+            ),
+            const SizedBox(height: 10),
+            Row(
+              children: <Widget>[
+                Expanded(
+                  child: _RoutePlannerShortcutChip(
+                    icon: CupertinoIcons.house_fill,
+                    title: 'Home',
+                    subtitle: 'Search home',
+                    onTap: () => onQuickSearch('home'),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: _RoutePlannerShortcutChip(
+                    icon: CupertinoIcons.briefcase_fill,
+                    title: 'Work',
+                    subtitle: 'Search work',
+                    onTap: () => onQuickSearch('work'),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: _RoutePlannerShortcutChip(
+                    icon: CupertinoIcons.building_2_fill,
+                    title: 'Market',
+                    subtitle: 'Popular',
+                    onTap: () => onQuickSearch('Central Market Phnom Penh'),
+                  ),
+                ),
+              ],
+            ),
+          ],
+          if (results.isNotEmpty) ...<Widget>[
+            const SizedBox(height: 12),
+            ...results.map(
+              (place) => _RoutePlannerPlaceTile(
+                place: place,
+                selected: identical(place, selectedPlace),
+                onTap: () => onSelect(place),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _RoutePlannerShortcutChip extends StatelessWidget {
+  const _RoutePlannerShortcutChip({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return _PressableScale(
+      onTap: onTap,
+      child: Container(
+        height: 70,
+        padding: const EdgeInsets.symmetric(horizontal: 9),
+        decoration: BoxDecoration(
+          color: Colors.white.withValues(alpha: 0.045),
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+        ),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: <Widget>[
+            Icon(icon, color: _kBlue, size: 17),
+            const SizedBox(height: 6),
+            _SafeText(
+              title,
+              maxLines: 1,
+              style: const TextStyle(
+                color: _kTextPrimary,
+                fontSize: 11,
+                fontWeight: FontWeight.w900,
+              ),
+            ),
+            const SizedBox(height: 2),
+            _SafeText(
+              subtitle,
+              maxLines: 1,
+              style: const TextStyle(
+                color: _kTextMuted,
+                fontSize: 8,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _RoutePlannerModeCard extends StatelessWidget {
+  const _RoutePlannerModeCard({
+    required this.selectedProfile,
+    required this.onChanged,
+  });
+
+  final _DirectionsProfile selectedProfile;
+  final ValueChanged<_DirectionsProfile> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return _RoutePlannerGlassCard(
+      padding: const EdgeInsets.all(14),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          const _SafeText(
+            'Travel mode',
+            maxLines: 1,
+            style: TextStyle(
+              color: _kTextPrimary,
+              fontSize: 14,
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+          const SizedBox(height: 11),
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            physics: const BouncingScrollPhysics(),
+            child: Row(
+              children: _DirectionsProfile.values.map((profile) {
+                return Padding(
+                  padding: const EdgeInsets.only(right: 8),
+                  child: _RoutePlannerModeChip(
+                    profile: profile,
+                    selected: profile == selectedProfile,
+                    onTap: () => onChanged(profile),
+                  ),
+                );
+              }).toList(growable: false),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _RoutePlannerModeChip extends StatelessWidget {
+  const _RoutePlannerModeChip({
+    required this.profile,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final _DirectionsProfile profile;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final Color color = selected ? _kBlue : _kTextMuted;
+
+    return _PressableScale(
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: _kAnimFast,
+        height: 46,
+        padding: const EdgeInsets.symmetric(horizontal: 14),
+        decoration: BoxDecoration(
+          color: selected
+              ? _kBlue.withValues(alpha: 0.16)
+              : Colors.white.withValues(alpha: 0.045),
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(
+            color: selected
+                ? _kBlue.withValues(alpha: 0.46)
+                : Colors.white.withValues(alpha: 0.09),
+          ),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: <Widget>[
+            Icon(_profileIcon(profile), color: color, size: 16),
+            const SizedBox(width: 7),
+            _SafeText(
+              _profileShortLabel(profile),
+              maxLines: 1,
+              style: TextStyle(
+                color: color,
+                fontSize: 11,
+                fontWeight: FontWeight.w900,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  static IconData _profileIcon(_DirectionsProfile profile) {
+    switch (profile) {
+      case _DirectionsProfile.drivingTraffic:
+      case _DirectionsProfile.driving:
+        return CupertinoIcons.car_detailed;
+      case _DirectionsProfile.walking:
+        return CupertinoIcons.person_fill;
+      case _DirectionsProfile.cycling:
+        return Icons.directions_bike_rounded;
+    }
+  }
+
+  static String _profileShortLabel(_DirectionsProfile profile) {
+    switch (profile) {
+      case _DirectionsProfile.drivingTraffic:
+        return 'Drive+Traffic';
+      case _DirectionsProfile.driving:
+        return 'Driving';
+      case _DirectionsProfile.walking:
+        return 'Walking';
+      case _DirectionsProfile.cycling:
+        return 'Cycling';
+    }
+  }
+}
+
+class _RoutePlannerSelectCard extends StatelessWidget {
+  const _RoutePlannerSelectCard({
+    required this.title,
+    required this.subtitle,
+    required this.icon,
+    required this.color,
+    required this.child,
+  });
+
+  final String title;
+  final String subtitle;
+  final IconData icon;
+  final Color color;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return _RoutePlannerGlassCard(
+      padding: const EdgeInsets.all(13),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          Row(
+            children: <Widget>[
+              Expanded(
+                child: _SafeText(
+                  title,
+                  maxLines: 1,
+                  style: const TextStyle(
+                    color: _kTextPrimary,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+              ),
+              Icon(icon, color: color, size: 18),
+            ],
+          ),
+          const SizedBox(height: 3),
+          _SafeText(
+            subtitle,
+            maxLines: 1,
+            style: const TextStyle(
+              color: _kTextMuted,
+              fontSize: 9,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          const SizedBox(height: 10),
+          child,
+        ],
+      ),
+    );
+  }
+}
+
+class _RoutePlannerSelectButton extends StatelessWidget {
+  const _RoutePlannerSelectButton({
+    required this.label,
+    required this.icon,
+    required this.color,
+    required this.onTap,
+  });
+
+  final String label;
+  final IconData icon;
+  final Color color;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return _PressableScale(
+      onTap: onTap,
+      child: Container(
+        height: 40,
+        padding: const EdgeInsets.symmetric(horizontal: 11),
+        decoration: BoxDecoration(
+          color: color.withValues(alpha: 0.12),
+          borderRadius: BorderRadius.circular(15),
+          border: Border.all(color: color.withValues(alpha: 0.26)),
+        ),
+        child: Row(
+          children: <Widget>[
+            Icon(icon, color: color, size: 14),
+            const SizedBox(width: 7),
+            Expanded(
+              child: _SafeText(
+                label,
+                maxLines: 1,
+                style: TextStyle(
+                  color: color,
+                  fontSize: 11,
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
+            ),
+            Icon(CupertinoIcons.chevron_down, color: color, size: 12),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _RoutePlannerSummaryCard extends StatelessWidget {
+  const _RoutePlannerSummaryCard({
+    required this.route,
+    required this.selectedPlace,
+    required this.profile,
+    required this.settings,
+    required this.onClearRoute,
+  });
+
+  final _PlannedRoute? route;
+  final _MapboxPlaceResult? selectedPlace;
+  final _DirectionsProfile profile;
+  final SettingsService settings;
+  final VoidCallback? onClearRoute;
+
+  @override
+  Widget build(BuildContext context) {
+    final bool hasRoute = route != null;
+
+    return _RoutePlannerGlassCard(
+      padding: const EdgeInsets.all(14),
+      child: Column(
+        children: <Widget>[
+          Row(
+            children: <Widget>[
+              const Expanded(
+                child: _SafeText(
+                  'Route summary',
+                  maxLines: 1,
+                  style: TextStyle(
+                    color: _kTextPrimary,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
+                decoration: BoxDecoration(
+                  color: _kGreen.withValues(alpha: 0.10),
+                  borderRadius: BorderRadius.circular(99),
+                  border: Border.all(color: _kGreen.withValues(alpha: 0.18)),
+                ),
+                child: const Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: <Widget>[
+                    Icon(CupertinoIcons.circle_fill, color: _kGreen, size: 7),
+                    SizedBox(width: 5),
+                    _SafeText(
+                      'Live traffic',
+                      maxLines: 1,
+                      style: TextStyle(
+                        color: _kTextPrimary,
+                        fontSize: 10,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Container(
+            padding: const EdgeInsets.all(13),
+            decoration: BoxDecoration(
+              color: Colors.black.withValues(alpha: 0.26),
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(color: Colors.white.withValues(alpha: 0.07)),
+            ),
+            child: Column(
+              children: <Widget>[
+                Row(
+                  children: <Widget>[
+                    Container(
+                      width: 46,
+                      height: 46,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: _kBlue.withValues(alpha: 0.18),
+                        border: Border.all(
+                          color: _kBlue.withValues(alpha: 0.32),
+                        ),
+                      ),
+                      child: Icon(
+                        _RoutePlannerModeChip._profileIcon(profile),
+                        color: _kBlue,
+                        size: 22,
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: hasRoute
+                          ? Row(
+                              children: <Widget>[
+                                Expanded(
+                                  child: _RouteMetric(
+                                    value: route!.distanceLabel(settings),
+                                    label: 'Distance',
+                                  ),
+                                ),
+                                _MetricDivider(),
+                                Expanded(
+                                  child: _RouteMetric(
+                                    value: route!.durationLabel(),
+                                    label: 'Est. time',
+                                  ),
+                                ),
+                              ],
+                            )
+                          : _SafeText(
+                              selectedPlace == null
+                                  ? 'Select a destination to preview route.'
+                                  : 'Ready to calculate route to ${selectedPlace!.name}.',
+                              maxLines: 2,
+                              style: const TextStyle(
+                                color: _kTextMuted,
+                                fontSize: 12,
+                                height: 1.25,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                    ),
+                    if (hasRoute) ...<Widget>[
+                      _MetricDivider(),
+                      Expanded(
+                        child: _RouteMetric(
+                          value: _RoutePlannerModeChip._profileShortLabel(
+                            route!.profile,
+                          ),
+                          label: 'Mode',
+                          color: _kBlue,
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+                const SizedBox(height: 12),
+                SizedBox(
+                  height: 34,
+                  width: double.infinity,
+                  child: CustomPaint(
+                    painter: _RoutePreviewPainter(
+                      active: hasRoute,
+                      color: hasRoute ? _kBlue : _kTextMuted,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          if (hasRoute && onClearRoute != null) ...<Widget>[
+            const SizedBox(height: 10),
+            _RoutePlannerSecondaryButton(
+              label: 'CLEAR ROUTE',
+              icon: CupertinoIcons.trash,
+              onTap: onClearRoute!,
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _RouteMetric extends StatelessWidget {
+  const _RouteMetric({
+    required this.value,
+    required this.label,
+    this.color = _kTextPrimary,
+  });
+
+  final String value;
+  final String label;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        _SafeText(
+          value,
+          maxLines: 1,
+          style: TextStyle(
+            color: color,
+            fontSize: 15,
+            fontWeight: FontWeight.w900,
+          ),
+        ),
+        const SizedBox(height: 3),
+        _SafeText(
+          label,
+          maxLines: 1,
+          style: const TextStyle(
+            color: _kTextMuted,
+            fontSize: 9,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _MetricDivider extends StatelessWidget {
+  const _MetricDivider();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 1,
+      height: 34,
+      margin: const EdgeInsets.symmetric(horizontal: 9),
+      color: Colors.white.withValues(alpha: 0.08),
+    );
+  }
+}
+
+class _RoutePlannerPlanButton extends StatelessWidget {
+  const _RoutePlannerPlanButton({
+    required this.loading,
+    required this.enabled,
+    required this.onTap,
+  });
+
+  final bool loading;
+  final bool enabled;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final Color color = enabled ? _kGreen : _kTextMuted;
+
+    return _PressableScale(
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: _kAnimFast,
+        height: 56,
+        width: double.infinity,
+        decoration: BoxDecoration(
+          gradient: enabled
+              ? LinearGradient(
+                  colors: <Color>[
+                    _kGreen.withValues(alpha: 0.86),
+                    _kGreen.withValues(alpha: 0.56),
+                  ],
+                )
+              : null,
+          color: enabled ? null : Colors.white.withValues(alpha: 0.06),
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(
+            color: enabled
+                ? _kGreen.withValues(alpha: 0.40)
+                : Colors.white.withValues(alpha: 0.08),
+          ),
+          boxShadow: enabled
+              ? <BoxShadow>[
+                  BoxShadow(
+                    color: _kGreen.withValues(alpha: 0.24),
+                    blurRadius: 22,
+                    offset: const Offset(0, 10),
+                  ),
+                ]
+              : null,
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: <Widget>[
+            if (loading)
+              const CupertinoActivityIndicator(color: Colors.white, radius: 10)
+            else
+              const Icon(
+                CupertinoIcons.location_fill,
+                color: Colors.white,
+                size: 19,
+              ),
+            const SizedBox(width: 10),
+            _SafeText(
+              loading ? 'PLANNING ROUTE...' : 'PLAN ROUTE',
+              maxLines: 1,
+              style: TextStyle(
+                color: enabled ? Colors.white : color,
+                fontSize: 14,
+                fontWeight: FontWeight.w900,
+                letterSpacing: 1.2,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _RoutePlannerSecondaryButton extends StatelessWidget {
+  const _RoutePlannerSecondaryButton({
+    required this.label,
+    required this.icon,
+    required this.onTap,
+  });
+
+  final String label;
+  final IconData icon;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return _PressableScale(
+      onTap: onTap,
+      child: Container(
+        height: 42,
+        decoration: BoxDecoration(
+          color: Colors.white.withValues(alpha: 0.045),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: <Widget>[
+            Icon(icon, color: _kTextMuted, size: 15),
+            const SizedBox(width: 8),
+            _SafeText(
+              label,
+              maxLines: 1,
+              style: const TextStyle(
+                color: _kTextMuted,
+                fontSize: 11,
+                fontWeight: FontWeight.w900,
+                letterSpacing: 0.6,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _RoutePlannerGlassCard extends StatelessWidget {
+  const _RoutePlannerGlassCard({
+    required this.child,
+    this.padding = const EdgeInsets.all(14),
+  });
+
+  final Widget child;
+  final EdgeInsetsGeometry padding;
+
+  @override
+  Widget build(BuildContext context) {
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(24),
+      child: BackdropFilter(
+        filter: ui.ImageFilter.blur(sigmaX: 18, sigmaY: 18),
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            color: Colors.black.withValues(alpha: 0.56),
+            borderRadius: BorderRadius.circular(24),
+            border: Border.all(color: Colors.white.withValues(alpha: 0.09)),
+            boxShadow: <BoxShadow>[
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.24),
+                blurRadius: 18,
+                offset: const Offset(0, 10),
+              ),
+            ],
+          ),
+          child: Padding(
+            padding: padding,
+            child: child,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _RoutePlannerGradientButton extends StatelessWidget {
+  const _RoutePlannerGradientButton({
+    required this.label,
+    required this.icon,
+    required this.color,
+    required this.onTap,
+    this.compact = false,
+  });
+
+  final String label;
+  final IconData icon;
+  final Color color;
+  final VoidCallback onTap;
+  final bool compact;
+
+  @override
+  Widget build(BuildContext context) {
+    return _PressableScale(
+      onTap: onTap,
+      child: Container(
+        height: compact ? 44 : 48,
+        padding: EdgeInsets.symmetric(horizontal: compact ? 8 : 12),
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            colors: <Color>[
+              color.withValues(alpha: 0.85),
+              color.withValues(alpha: 0.42),
+            ],
+          ),
+          borderRadius: BorderRadius.circular(compact ? 17 : 18),
+          border: Border.all(color: color.withValues(alpha: 0.36)),
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: <Widget>[
+            Icon(icon, color: Colors.white, size: compact ? 13 : 15),
+            const SizedBox(width: 7),
+            Flexible(
+              child: _SafeText(
+                label,
+                maxLines: 1,
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: compact ? 10 : 12,
+                  fontWeight: FontWeight.w900,
+                  letterSpacing: 0.8,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _RoutePlannerTinyButton extends StatelessWidget {
+  const _RoutePlannerTinyButton({
+    required this.icon,
+    required this.color,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final Color color;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return _PressableScale(
+      onTap: onTap,
+      child: Container(
+        width: 38,
+        height: 38,
+        decoration: BoxDecoration(
+          color: Colors.white.withValues(alpha: 0.045),
+          shape: BoxShape.circle,
+          border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+        ),
+        child: Icon(icon, color: color, size: 16),
+      ),
+    );
+  }
+}
+
+class _RoutePlannerPlaceTile extends StatelessWidget {
+  const _RoutePlannerPlaceTile({
+    required this.place,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final _MapboxPlaceResult place;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final Color accent = selected ? _kGreen : _kBlue;
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 7),
+      child: _PressableScale(
+        onTap: onTap,
+        child: AnimatedContainer(
+          duration: _kAnimFast,
+          padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 10),
+          decoration: BoxDecoration(
+            color: accent.withValues(alpha: selected ? 0.16 : 0.08),
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(
+              color: accent.withValues(alpha: selected ? 0.34 : 0.16),
+            ),
+          ),
+          child: Row(
+            children: <Widget>[
+              Icon(
+                selected
+                    ? CupertinoIcons.checkmark_circle_fill
+                    : CupertinoIcons.location_solid,
+                color: accent,
+                size: 17,
+              ),
+              const SizedBox(width: 9),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    _SafeText(
+                      place.name,
+                      maxLines: 1,
+                      style: const TextStyle(
+                        color: _kTextPrimary,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                    const SizedBox(height: 3),
+                    _SafeText(
+                      place.address,
+                      maxLines: 2,
+                      style: const TextStyle(
+                        color: _kTextMuted,
+                        fontSize: 10,
+                        fontWeight: FontWeight.w700,
+                        height: 1.15,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _RoutePreviewPainter extends CustomPainter {
+  const _RoutePreviewPainter({
+    required this.active,
+    required this.color,
+  });
+
+  final bool active;
+  final Color color;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final Paint gridPaint = Paint()
+      ..color = Colors.white.withValues(alpha: 0.035)
+      ..strokeWidth = 1.0;
+
+    for (double x = 0; x < size.width; x += 38) {
+      canvas.drawLine(Offset(x, 0), Offset(x + 22, size.height), gridPaint);
+    }
+
+    final ui.Path path = ui.Path();
+    path.moveTo(12, size.height * 0.62);
+    path.cubicTo(
+      size.width * 0.28,
+      size.height * 0.10,
+      size.width * 0.38,
+      size.height * 0.92,
+      size.width * 0.58,
+      size.height * 0.42,
+    );
+    path.cubicTo(
+      size.width * 0.78,
+      -4,
+      size.width * 0.82,
+      size.height * 0.88,
+      size.width - 14,
+      size.height * 0.32,
+    );
+
+    final Paint routePaint = Paint()
+      ..color = color.withValues(alpha: active ? 0.82 : 0.28)
+      ..strokeWidth = 3.0
+      ..strokeCap = StrokeCap.round
+      ..style = PaintingStyle.stroke;
+
+    canvas.drawPath(path, routePaint);
+
+    final Paint dotPaint = Paint()
+      ..color = color.withValues(alpha: active ? 1.0 : 0.45);
+    canvas.drawCircle(Offset(12, size.height * 0.62), 5, dotPaint);
+    canvas.drawCircle(Offset(size.width - 14, size.height * 0.32), 6, dotPaint);
+  }
+
+  @override
+  bool shouldRepaint(covariant _RoutePreviewPainter oldDelegate) {
+    return oldDelegate.active != active || oldDelegate.color != color;
   }
 }
 
@@ -3915,6 +6325,7 @@ class _BottomDock extends StatelessWidget {
                 builder: (_, bool tracking, __) {
                   return _PrimaryActionButton(
                     isTracking: tracking,
+                    isBusy: false,
                     onTap: onAction,
                     timerNotifier: elapsedN,
                   );
@@ -4503,14 +6914,280 @@ class _LiveDotState extends State<_LiveDot>
   }
 }
 
-class _LiveMarker extends StatefulWidget {
+class _LocationPuckMarker extends StatefulWidget {
+  const _LocationPuckMarker({
+    required this.heading,
+  });
+
+  final double heading;
+
+  @override
+  State<_LocationPuckMarker> createState() => _LocationPuckMarkerState();
+}
+
+class _LocationPuckMarkerState extends State<_LocationPuckMarker>
+    with SingleTickerProviderStateMixin {
+  static const Color _blue = Color(0xFF2F80FF);
+  static const Color _blueDeep = Color(0xFF0B58D8);
+
+  late final AnimationController _controller;
+  double _displayHeading = 0.0;
+
+  @override
+  void initState() {
+    super.initState();
+
+    _displayHeading = _normalizeHeading(widget.heading);
+
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1600),
+    )..repeat();
+  }
+
+  @override
+  void didUpdateWidget(covariant _LocationPuckMarker oldWidget) {
+    super.didUpdateWidget(oldWidget);
+
+    final double next = _normalizeHeading(widget.heading);
+    double delta = next - _normalizeHeading(_displayHeading);
+
+    if (delta > 180.0) delta -= 360.0;
+    if (delta < -180.0) delta += 360.0;
+
+    // Ignore tiny GPS heading jitter so the puck stays stable when stopped.
+    if (delta.abs() < 1.0) return;
+
+    _displayHeading += delta;
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  static double _normalizeHeading(double value) {
+    if (!value.isFinite) return 0.0;
+    final double normalized = value % 360.0;
+    return normalized < 0.0 ? normalized + 360.0 : normalized;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return RepaintBoundary(
+      child: AnimatedBuilder(
+        animation: _controller,
+        builder: (_, __) {
+          final double t = _controller.value;
+          final double pulse = Curves.easeOutCubic.transform(t);
+          final double breathe = 0.5 + math.sin(t * math.pi * 2.0) * 0.5;
+
+          return SizedBox(
+            width: 74,
+            height: 74,
+            child: Stack(
+              alignment: Alignment.center,
+              children: <Widget>[
+                // Subtle expanding GPS pulse.
+                Opacity(
+                  opacity: (1.0 - pulse).clamp(0.0, 1.0) * 0.22,
+                  child: Container(
+                    width: 30 + pulse * 32,
+                    height: 30 + pulse * 32,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: _blue,
+                      border: Border.all(
+                        color: Colors.white.withValues(alpha: 0.18),
+                        width: 1,
+                      ),
+                    ),
+                  ),
+                ),
+
+                // Accuracy halo like modern map apps.
+                Container(
+                  width: 42 + breathe * 3,
+                  height: 42 + breathe * 3,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: _blue.withValues(alpha: 0.16),
+                    border: Border.all(
+                      color: _blue.withValues(alpha: 0.22),
+                      width: 1.2,
+                    ),
+                  ),
+                ),
+
+                // Soft ground shadow.
+                Transform.translate(
+                  offset: const Offset(0, 5),
+                  child: Container(
+                    width: 34,
+                    height: 16,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: Colors.black.withValues(alpha: 0.20),
+                      boxShadow: <BoxShadow>[
+                        BoxShadow(
+                          color: Colors.black.withValues(alpha: 0.22),
+                          blurRadius: 14,
+                          spreadRadius: 1,
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+
+                // Small heading nub, matching the reference puck.
+                AnimatedRotation(
+                  turns: _displayHeading / 360.0,
+                  duration: const Duration(milliseconds: 320),
+                  curve: Curves.easeOutCubic,
+                  child: Transform.translate(
+                    offset: const Offset(0, -18),
+                    child: Container(
+                      width: 8,
+                      height: 16,
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(99),
+                        boxShadow: <BoxShadow>[
+                          BoxShadow(
+                            color: _blue.withValues(alpha: 0.26),
+                            blurRadius: 8,
+                          ),
+                        ],
+                      ),
+                      alignment: Alignment.topCenter,
+                      child: Container(
+                        width: 4,
+                        height: 8,
+                        margin: const EdgeInsets.only(top: 2),
+                        decoration: BoxDecoration(
+                          color: _blue,
+                          borderRadius: BorderRadius.circular(99),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+
+                // White outer puck ring.
+                Container(
+                  width: 28,
+                  height: 28,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    gradient: const LinearGradient(
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                      colors: <Color>[
+                        Colors.white,
+                        Color(0xFFE9F1FF),
+                      ],
+                    ),
+                    boxShadow: <BoxShadow>[
+                      BoxShadow(
+                        color: Colors.black.withValues(alpha: 0.24),
+                        blurRadius: 10,
+                        offset: const Offset(0, 4),
+                      ),
+                      BoxShadow(
+                        color: _blue.withValues(alpha: 0.24),
+                        blurRadius: 16,
+                      ),
+                    ],
+                  ),
+                ),
+
+                // Blue center.
+                Container(
+                  width: 17,
+                  height: 17,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    gradient: const RadialGradient(
+                      center: Alignment(-0.25, -0.30),
+                      radius: 0.9,
+                      colors: <Color>[
+                        Color(0xFF6FB2FF),
+                        _blue,
+                        _blueDeep,
+                      ],
+                      stops: <double>[0.0, 0.58, 1.0],
+                    ),
+                    border: Border.all(
+                      color: Colors.white.withValues(alpha: 0.92),
+                      width: 1.4,
+                    ),
+                  ),
+                ),
+
+                // Gloss highlight.
+                Transform.translate(
+                  offset: const Offset(-4, -5),
+                  child: Container(
+                    width: 5,
+                    height: 5,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: Colors.white.withValues(alpha: 0.72),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          );
+        },
+      ),
+    );
+  }
+}
+
+/// Kept for source compatibility with earlier painter-based puck versions.
+class _LocationHeadingConePainter extends CustomPainter {
+  const _LocationHeadingConePainter({
+    required this.color,
+  });
+
+  final Color color;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    // No-op: the updated puck uses lightweight widgets instead of a cone painter.
+  }
+
+  @override
+  bool shouldRepaint(covariant _LocationHeadingConePainter oldDelegate) {
+    return oldDelegate.color != color;
+  }
+}
+
+/// Compatibility marker for older mini-map / thumbnail widgets that still
+/// reference _LiveMarker.
+class _LiveMarker extends StatelessWidget {
   const _LiveMarker();
 
   @override
-  State<_LiveMarker> createState() => _LiveMarkerState();
+  Widget build(BuildContext context) {
+    return const _LocationPuckMarker(heading: 0.0);
+  }
 }
 
-class _LiveMarkerState extends State<_LiveMarker>
+class _NavigationGeoMarker extends StatefulWidget {
+  const _NavigationGeoMarker({
+    required this.heading,
+  });
+
+  final double heading;
+
+  @override
+  State<_NavigationGeoMarker> createState() => _NavigationGeoMarkerState();
+}
+
+class _NavigationGeoMarkerState extends State<_NavigationGeoMarker>
     with SingleTickerProviderStateMixin {
   late final AnimationController _controller;
   late final Animation<double> _pulse;
@@ -4518,15 +7195,13 @@ class _LiveMarkerState extends State<_LiveMarker>
   @override
   void initState() {
     super.initState();
-
     _controller = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 1400),
+      duration: const Duration(milliseconds: 1500),
     )..repeat();
-
     _pulse = CurvedAnimation(
       parent: _controller,
-      curve: Curves.easeOut,
+      curve: Curves.easeOutCubic,
     );
   }
 
@@ -4538,45 +7213,77 @@ class _LiveMarkerState extends State<_LiveMarker>
 
   @override
   Widget build(BuildContext context) {
+    final double rad = widget.heading * math.pi / 180.0;
+
     return AnimatedBuilder(
       animation: _pulse,
       builder: (_, __) {
         return SizedBox(
-          width: 60,
-          height: 60,
+          width: 92,
+          height: 92,
           child: Stack(
             alignment: Alignment.center,
             children: <Widget>[
               Opacity(
-                opacity: (1.0 - _pulse.value).clamp(0.0, 1.0),
+                opacity: (1.0 - _pulse.value).clamp(0.0, 1.0) * 0.32,
                 child: Container(
-                  width: 20 + _pulse.value * 38,
-                  height: 20 + _pulse.value * 38,
+                  width: 30 + _pulse.value * 34,
+                  height: 30 + _pulse.value * 34,
                   decoration: BoxDecoration(
                     shape: BoxShape.circle,
+                    color: const Color(0xFF2A5BFF),
                     border: Border.all(
-                      color: _kGreen.withValues(alpha: 0.60),
+                      color: Colors.white.withValues(alpha: 0.30),
                       width: 2,
                     ),
                   ),
                 ),
               ),
               Container(
-                width: 20,
-                height: 20,
+                width: 62,
+                height: 62,
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
-                  color: _kGreen,
-                  border: Border.all(color: Colors.black, width: 3),
+                  color: Colors.white.withValues(alpha: 0.90),
                   boxShadow: <BoxShadow>[
                     BoxShadow(
-                      color: _kGreen.withValues(alpha: 0.60),
-                      blurRadius: 16,
+                      color: Colors.black.withValues(alpha: 0.14),
+                      blurRadius: 18,
+                      offset: const Offset(0, 8),
                     ),
-                    const BoxShadow(
-                      color: Colors.black54,
-                      blurRadius: 8,
-                      offset: Offset(0, 3),
+                  ],
+                ),
+              ),
+              Transform.rotate(
+                angle: rad,
+                child: Stack(
+                  alignment: Alignment.center,
+                  children: <Widget>[
+                    Positioned(
+                      top: 11,
+                      child: const CustomPaint(
+                        size: Size(34, 44),
+                        painter: _NavArrowPainter(
+                          fill: Color(0xFF2A5BFF),
+                          stroke: Colors.white,
+                          shadow: Color(0x442A5BFF),
+                        ),
+                      ),
+                    ),
+                    Positioned(
+                      bottom: 16,
+                      child: Container(
+                        width: 14,
+                        height: 14,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: Colors.white,
+                          border: Border.all(
+                            color: const Color(0xFFDEE5FF),
+                            width: 1.5,
+                          ),
+                        ),
+                      ),
                     ),
                   ],
                 ),
@@ -4586,6 +7293,50 @@ class _LiveMarkerState extends State<_LiveMarker>
         );
       },
     );
+  }
+}
+
+class _NavArrowPainter extends CustomPainter {
+  const _NavArrowPainter({
+    required this.fill,
+    required this.stroke,
+    required this.shadow,
+  });
+
+  final Color fill;
+  final Color stroke;
+  final Color shadow;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final ui.Path path = ui.Path()
+      ..moveTo(size.width * 0.5, 0)
+      ..lineTo(size.width, size.height * 0.70)
+      ..lineTo(size.width * 0.57, size.height * 0.62)
+      ..lineTo(size.width * 0.52, size.height)
+      ..lineTo(size.width * 0.48, size.height)
+      ..lineTo(size.width * 0.43, size.height * 0.62)
+      ..lineTo(0, size.height * 0.70)
+      ..close();
+
+    canvas.drawShadow(path, shadow, 8, false);
+
+    final Paint fillPaint = Paint()..color = fill;
+    final Paint strokePaint = Paint()
+      ..color = stroke
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2.0
+      ..strokeJoin = StrokeJoin.round;
+
+    canvas.drawPath(path, fillPaint);
+    canvas.drawPath(path, strokePaint);
+  }
+
+  @override
+  bool shouldRepaint(covariant _NavArrowPainter oldDelegate) {
+    return oldDelegate.fill != fill ||
+        oldDelegate.stroke != stroke ||
+        oldDelegate.shadow != shadow;
   }
 }
 
@@ -4672,11 +7423,13 @@ class _SecondaryButtonState extends State<_SecondaryButton> {
 class _PrimaryActionButton extends StatefulWidget {
   const _PrimaryActionButton({
     required this.isTracking,
+    required this.isBusy,
     required this.onTap,
     required this.timerNotifier,
   });
 
   final bool isTracking;
+  final bool isBusy;
   final VoidCallback onTap;
   final ValueNotifier<int> timerNotifier;
 
@@ -4700,7 +7453,7 @@ class _PrimaryActionButtonState extends State<_PrimaryActionButton> {
   }
 
   void _setPressed(bool value) {
-    if (!mounted || _pressed == value) return;
+    if (!mounted || widget.isBusy || _pressed == value) return;
     setState(() => _pressed = value);
   }
 
@@ -4715,114 +7468,146 @@ class _PrimaryActionButtonState extends State<_PrimaryActionButton> {
       onTapCancel: () => _setPressed(false),
       onTapUp: (_) {
         _setPressed(false);
-        widget.onTap();
+        if (!widget.isBusy) widget.onTap();
       },
-      child: AnimatedScale(
-        scale: _pressed ? 0.985 : 1.0,
+      child: AnimatedOpacity(
         duration: _kAnimFast,
-        curve: Curves.easeOut,
-        child: AnimatedContainer(
+        opacity: widget.isBusy ? 0.78 : 1.0,
+        child: AnimatedScale(
+          scale: _pressed ? 0.985 : 1.0,
           duration: _kAnimFast,
           curve: Curves.easeOut,
-          height: 50,
-          width: double.infinity,
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              colors: _pressed
-                  ? <Color>[
-                      main.withValues(alpha: 0.72),
-                      main.withValues(alpha: 0.55),
-                    ]
-                  : <Color>[
-                      main,
-                      main.withValues(alpha: 0.80),
-                    ],
-            ),
-            borderRadius: BorderRadius.circular(16),
-            boxShadow: <BoxShadow>[
-              BoxShadow(
-                color: main.withValues(alpha: _pressed ? 0.18 : 0.32),
-                blurRadius: _pressed ? 14 : 24,
-                offset: const Offset(0, 8),
+          child: AnimatedContainer(
+            duration: _kAnimFast,
+            curve: Curves.easeOut,
+            height: 48,
+            width: double.infinity,
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: _pressed
+                    ? <Color>[
+                        main.withValues(alpha: 0.72),
+                        main.withValues(alpha: 0.55),
+                      ]
+                    : <Color>[
+                        main,
+                        main.withValues(alpha: 0.82),
+                      ],
               ),
-            ],
-          ),
-          child: Center(
-            child: AnimatedSwitcher(
-              duration: _kAnimMed,
-              switchInCurve: Curves.easeOutBack,
-              switchOutCurve: Curves.easeIn,
-              transitionBuilder: (Widget child, Animation<double> animation) {
-                return FadeTransition(
-                  opacity: animation,
-                  child: ScaleTransition(
-                    scale:
-                        Tween<double>(begin: 0.88, end: 1.0).animate(animation),
-                    child: child,
-                  ),
-                );
-              },
-              child: widget.isTracking
-                  ? ValueListenableBuilder<int>(
-                      key: const ValueKey<String>('tracking'),
-                      valueListenable: widget.timerNotifier,
-                      builder: (_, int seconds, __) {
-                        return FittedBox(
-                          fit: BoxFit.scaleDown,
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: <Widget>[
-                              const Icon(
-                                CupertinoIcons.stop_fill,
-                                color: Colors.white,
-                                size: 19,
-                              ),
-                              const SizedBox(width: 8),
-                              _SafeText(
-                                _formatSeconds(seconds),
-                                maxLines: 1,
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontWeight: FontWeight.w900,
-                                  fontSize: 18,
-                                  letterSpacing: 1.0,
-                                  fontFeatures: <ui.FontFeature>[
-                                    ui.FontFeature.tabularFigures(),
-                                  ],
-                                ),
-                              ),
-                            ],
-                          ),
-                        );
-                      },
-                    )
-                  : FittedBox(
-                      key: const ValueKey<String>('stopped'),
-                      fit: BoxFit.scaleDown,
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
+              borderRadius: BorderRadius.circular(18),
+              border: Border.all(
+                color: Colors.white.withValues(alpha: 0.13),
+              ),
+              boxShadow: <BoxShadow>[
+                BoxShadow(
+                  color: main.withValues(alpha: _pressed ? 0.18 : 0.34),
+                  blurRadius: _pressed ? 14 : 24,
+                  offset: const Offset(0, 8),
+                ),
+              ],
+            ),
+            child: Center(
+              child: AnimatedSwitcher(
+                duration: _kAnimMed,
+                switchInCurve: Curves.easeOutBack,
+                switchOutCurve: Curves.easeIn,
+                transitionBuilder: (Widget child, Animation<double> animation) {
+                  return FadeTransition(
+                    opacity: animation,
+                    child: ScaleTransition(
+                      scale: Tween<double>(begin: 0.88, end: 1.0)
+                          .animate(animation),
+                      child: child,
+                    ),
+                  );
+                },
+                child: widget.isBusy
+                    ? Row(
+                        key: const ValueKey<String>('busy'),
                         mainAxisAlignment: MainAxisAlignment.center,
+                        mainAxisSize: MainAxisSize.min,
                         children: <Widget>[
-                          Icon(
-                            CupertinoIcons.play_fill,
+                          CupertinoActivityIndicator(
+                            radius: 8,
                             color: textColor,
-                            size: 15,
                           ),
-                          const SizedBox(width: 6),
+                          const SizedBox(width: 8),
                           _SafeText(
-                            'START',
+                            widget.isTracking ? 'SAVING' : 'STARTING',
                             maxLines: 1,
                             style: TextStyle(
                               color: textColor,
                               fontWeight: FontWeight.w900,
-                              letterSpacing: 0.8,
-                              fontSize: 13.5,
+                              letterSpacing: 0.7,
+                              fontSize: 12.5,
                             ),
                           ),
                         ],
-                      ),
-                    ),
+                      )
+                    : widget.isTracking
+                        ? ValueListenableBuilder<int>(
+                            key: const ValueKey<String>('tracking'),
+                            valueListenable: widget.timerNotifier,
+                            builder: (_, int seconds, __) {
+                              return FittedBox(
+                                fit: BoxFit.scaleDown,
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  children: <Widget>[
+                                    const Icon(
+                                      CupertinoIcons.stop_fill,
+                                      color: Colors.white,
+                                      size: 18,
+                                    ),
+                                    const SizedBox(width: 8),
+                                    _SafeText(
+                                      _formatSeconds(seconds),
+                                      maxLines: 1,
+                                      style: const TextStyle(
+                                        color: Colors.white,
+                                        fontWeight: FontWeight.w900,
+                                        fontSize: 17,
+                                        letterSpacing: 1.0,
+                                        fontFeatures: <ui.FontFeature>[
+                                          ui.FontFeature.tabularFigures(),
+                                        ],
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              );
+                            },
+                          )
+                        : FittedBox(
+                            key: const ValueKey<String>('stopped'),
+                            fit: BoxFit.scaleDown,
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: <Widget>[
+                                Icon(
+                                  CupertinoIcons.play_fill,
+                                  color: textColor,
+                                  size: 15,
+                                ),
+                                const SizedBox(width: 7),
+                                _SafeText(
+                                  'START',
+                                  maxLines: 1,
+                                  style: TextStyle(
+                                    color: textColor,
+                                    fontWeight: FontWeight.w900,
+                                    letterSpacing: 0.8,
+                                    fontSize: 13,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+              ),
             ),
           ),
         ),

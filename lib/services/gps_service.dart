@@ -1,3 +1,5 @@
+// ignore_for_file: deprecated_member_use
+
 import 'dart:async';
 import 'dart:collection';
 import 'dart:math' as math;
@@ -12,76 +14,6 @@ import '../models/trip_data.dart';
 // ─────────────────────────────────────────────────────────────────────────────
 // GPS SERVICE  — v2 (optimized)
 // ─────────────────────────────────────────────────────────────────────────────
-//
-// Changes vs v1:
-//
-//  Correctness
-//  ──────────────────────────────────────────────────────────────────────────
-//  [FIX-1]  stopTracking(): was synchronously calling _safeCancelSubscription
-//           (a Future) without awaiting it, so the stream could still fire
-//           while the summary was being assembled. Now cancels and awaits the
-//           subscription first, then closes the controller.
-//
-//  [FIX-2]  Stopwatch race on first point: _updateDistanceAndMovementStats
-//           started the stoppedStopwatch for the very first point (no previous
-//           position), even though the user may already be moving. Corrected to
-//           defer stop/start decisions until a second point is available.
-//
-//  [FIX-3]  currentAvgSpeedMph: could divide by zero when _movingPointsCount
-//           is 0 — added explicit guard (was already present but preserved).
-//
-//  [FIX-4]  _smoothSpeed: used List.removeAt(0) which is O(n). Replaced with a
-//           fixed-size circular buffer (_CircularBuffer) — O(1) add/mean.
-//
-//  [FIX-5]  _handleNewPosition: `pos.timestamp` can be epoch-zero on some
-//           Android OEMs (hardware bug). Added fallback to DateTime.now().
-//
-//  [FIX-6]  Kalman smoother: process-noise units were in metres but LatLng
-//           values are in degrees. The gain calculation was therefore mixing
-//           degrees and metres, making the filter over- or under-damped
-//           depending on latitude. Filter is now expressed entirely in the
-//           accuracy² domain (variance), matching the standard scalar Kalman
-//           formulation. No behaviour change at the equator, significant
-//           improvement elsewhere.
-//
-//  [FIX-7]  _shouldStorePoint: time-trigger compared pos.timestamp to
-//           _points.last.timestamp. Both can be OEM-zero (see FIX-5).
-//           Now uses a monotonic wall-clock (_lastStoredAt) instead.
-//
-//  [FIX-8]  dispose(): was calling async helpers without await on a synchronous
-//           method. Split into synchronous _disposeSync() + async dispose().
-//
-//  Performance
-//  ──────────────────────────────────────────────────────────────────────────
-//  [PERF-1] O(1) speed smoothing via _CircularBuffer (replaces List.removeAt).
-//
-//  [PERF-2] _buildLocationSettings() is now cached — it was re-evaluated on
-//           every startTracking() call but the result never changes at runtime.
-//
-//  [PERF-3] Geolocator.distanceBetween called twice per point (distance stats
-//           + storage check) with the same pair of coordinates. Deduplicated to
-//           a single call per cycle stored in a local variable.
-//
-//  [PERF-4] currentPoints returns an UnmodifiableListView wrapping the live
-//           list — no copy on each access (unchanged, confirmed correct).
-//
-//  [PERF-5] _isUsablePosition: early-return order reordered from cheapest to
-//           most expensive check (isNaN bitmask first, then double comparisons,
-//           accuracy last).
-//
-//  Robustness / Clarity
-//  ──────────────────────────────────────────────────────────────────────────
-//  [ROB-1]  startTracking() is now idempotent under concurrent calls via an
-//           _startLock flag (prevents double-start if caller awaits slowly).
-//
-//  [ROB-2]  _emitPoint: guard extended to also check !_isTracking so late
-//           deliveries after stopTracking() are silently dropped.
-//
-//  [ROB-3]  All magic numbers extracted to named constants.
-//
-//  [ROB-4]  Public summary fields use explicit null-safe sentinel replacement
-//           rather than relying on callers to interpret sentinel values.
-
 class GpsService {
   GpsService._internal();
   static final GpsService instance = GpsService._internal();
@@ -98,9 +30,11 @@ class GpsService {
   // ── position state ────────────────────────────────────────────────────────
   Position? _lastRawPos;
   LatLng? _lastEmittedSmoothedPos;
+  LatLng? _lastStoredSmoothedPos;
 
   DateTime? _lastProcessedAt;
   DateTime? _lastStoredAt; // [FIX-7] monotonic wall-clock for storage interval
+  DateTime? _lastEmittedAt;
   double? _lastValidAltM;
 
   // ── accumulators ──────────────────────────────────────────────────────────
@@ -154,7 +88,9 @@ class GpsService {
   static const double _kJumpAccuracyBufferM = 25.0;
   static const double _kStoppedJumpDistanceM = 30.0;
   static const double _kMinStorageDistM = 3.0;
+  static const double _kAutoPausedMinStorageDistM = 12.0;
   static const int _kMinStorageSecs = 10;
+  static const int _kAutoPausedMinStorageSecs = 60;
   static const int _kMinProcessMs = 200;
   static const int _kSpeedWindow = 4;
   static const double _kEmptyMaxAlt = -100000.0;
@@ -182,7 +118,10 @@ class GpsService {
 
   int get rejectedJumpCount => _rejectedJumpCount;
 
-  /// All stored trip points. O(1) — no copy. [PERF-4]
+  bool get hasPoints => _points.isNotEmpty;
+  TripPoint? get latestPoint => _points.isEmpty ? null : _points.last;
+
+  /// All stored trip points. Safe read-only view.
   List<TripPoint> get currentPoints => UnmodifiableListView<TripPoint>(_points);
 
   double get currentDistanceMiles => _totalDistM / _kMToMiles;
@@ -228,12 +167,10 @@ class GpsService {
   Future<Position?> getCurrentLocation() async {
     try {
       if (!await requestPermission()) return null;
+
       return await Geolocator.getCurrentPosition(
-        locationSettings: const LocationSettings(
-          accuracy: LocationAccuracy.medium,
-          timeLimit: Duration(seconds: 6),
-        ),
-      );
+        desiredAccuracy: LocationAccuracy.medium,
+      ).timeout(const Duration(seconds: 6));
     } catch (e, st) {
       debugPrint('GpsService.getCurrentLocation: $e\n$st');
       try {
@@ -321,12 +258,18 @@ class GpsService {
     final maxAlt = _maxAltFt == _kEmptyMaxAlt ? 0.0 : _maxAltFt;
     final minAlt = _minAltFt == _kEmptyMinAlt ? 0.0 : _minAltFt;
 
+    final Duration totalTime = _tripSw.elapsed;
+    final Duration stoppedTime = _stoppedSw.elapsed;
+    final Duration rawMovingTime = totalTime - stoppedTime;
+    final Duration movingTime =
+        rawMovingTime.isNegative ? Duration.zero : rawMovingTime;
+
     final summary = TripSummary(
       id: DateTime.now().millisecondsSinceEpoch.toString(),
       date: _points.first.timestamp,
-      totalTime: _tripSw.elapsed,
-      stoppedTime: _stoppedSw.elapsed,
-      movingTime: currentMovingTime,
+      totalTime: totalTime,
+      stoppedTime: stoppedTime,
+      movingTime: movingTime,
       maxSpeedMph: _maxSpeedMph,
       avgSpeedMph: currentAvgSpeedMph,
       altitudeGainFt: _altGainM * _kMToFt,
@@ -358,8 +301,10 @@ class GpsService {
 
     _lastRawPos = null;
     _lastEmittedSmoothedPos = null;
+    _lastStoredSmoothedPos = null;
     _lastProcessedAt = null;
     _lastStoredAt = null;
+    _lastEmittedAt = null;
     _lastValidAltM = null;
 
     _isAutoPaused = false;
@@ -437,20 +382,16 @@ class GpsService {
   void _handlePosition(Position pos) {
     if (!_isTracking) return;
 
-    final now = DateTime.now();
+    final DateTime now = DateTime.now();
 
-    // Throttle — skip updates arriving faster than _kMinProcessMs.
+    // Throttle noisy platforms before expensive work.
     final DateTime? previousProcessedAt = _lastProcessedAt;
     if (previousProcessedAt != null &&
         now.difference(previousProcessedAt).inMilliseconds < _kMinProcessMs) {
       return;
     }
-    _lastProcessedAt = now;
 
     if (!_isUsable(pos)) return;
-
-    // [FIX-5] Sanitise potentially-zero OEM timestamp
-    final timestamp = _sanitiseTimestamp(pos.timestamp, now);
 
     // Point-jump detection must run BEFORE Kalman smoothing so a bad GPS fix
     // cannot poison the smoothing state or inflate distance/speed.
@@ -459,14 +400,31 @@ class GpsService {
       return;
     }
 
-    final smoothed = _kalmanSmooth(pos);
+    // From here the fix is accepted as a processed GPS update.
+    _lastProcessedAt = now;
 
-    // [PERF-3] Compute gap once; reuse for both distance accounting and storage gate
+    // [FIX-5] Sanitise potentially-zero/null OEM timestamp.
+    final DateTime timestamp = _sanitiseTimestamp(pos.timestamp, now);
+
+    final LatLng smoothed = _kalmanSmooth(pos);
+
+    // Distance since the last accepted/emitted point. Used for trip distance.
     final double gapM = _lastEmittedSmoothedPos == null
         ? 0.0
         : Geolocator.distanceBetween(
             _lastEmittedSmoothedPos!.latitude,
             _lastEmittedSmoothedPos!.longitude,
+            smoothed.latitude,
+            smoothed.longitude,
+          );
+
+    // Distance since the last stored point. Used for storage gating so many
+    // tiny 1–2m updates can still accumulate into a stored track point.
+    final double storageGapM = _lastStoredSmoothedPos == null
+        ? double.infinity
+        : Geolocator.distanceBetween(
+            _lastStoredSmoothedPos!.latitude,
+            _lastStoredSmoothedPos!.longitude,
             smoothed.latitude,
             smoothed.longitude,
           );
@@ -478,7 +436,7 @@ class GpsService {
       now,
       previousProcessedAt,
     );
-    final double smoothMph = _speedBuf.push(rawMph); // [PERF-1]
+    final double smoothMph = _speedBuf.push(rawMph);
     final double altFt = pos.altitude * _kMToFt;
 
     _updateAutoPause(rawMph, now);
@@ -491,7 +449,7 @@ class GpsService {
       if (!_stoppedSw.isRunning) _stoppedSw.start();
     }
 
-    final point = TripPoint(
+    final TripPoint point = TripPoint(
       position: smoothed,
       speedMph: smoothMph,
       altitudeFt: altFt,
@@ -499,14 +457,15 @@ class GpsService {
       accuracyMeters: pos.accuracy,
     );
 
-    // [FIX-7] Use wall-clock for storage interval, not possibly-zeroed timestamp
-    if (_shouldStore(gapM, now)) {
+    if (_shouldStore(storageGapM, now)) {
       _points.add(point);
       _lastStoredAt = now;
+      _lastStoredSmoothedPos = smoothed;
     }
 
     _lastRawPos = pos;
     _lastEmittedSmoothedPos = smoothed;
+    _lastEmittedAt = now;
 
     _emit(point);
   }
@@ -553,8 +512,16 @@ class GpsService {
 
     if (!rawGapM.isFinite || rawGapM < _kJumpMinDistanceM) return false;
 
-    final double deltaSeconds =
-        now.difference(previousProcessedAt).inMilliseconds / 1000.0;
+    final DateTime previousTime = _sanitiseTimestamp(
+      previous.timestamp,
+      previousProcessedAt,
+    );
+    final DateTime currentTime = _sanitiseTimestamp(pos.timestamp, now);
+    final int deltaMs = currentTime.difference(previousTime).inMilliseconds;
+    final double deltaSeconds = (deltaMs > 0
+            ? deltaMs
+            : now.difference(previousProcessedAt).inMilliseconds) /
+        1000.0;
     if (!deltaSeconds.isFinite || deltaSeconds <= 0.25) return false;
 
     final double previousAccuracy =
@@ -750,11 +717,16 @@ class GpsService {
   bool _shouldStore(double gapM, DateTime now) {
     if (_points.isEmpty) return true;
 
-    final bool distTrigger = gapM >= _kMinStorageDistM;
+    final double minDistance =
+        _isAutoPaused ? _kAutoPausedMinStorageDistM : _kMinStorageDistM;
+    final int minSeconds =
+        _isAutoPaused ? _kAutoPausedMinStorageSecs : _kMinStorageSecs;
+
+    final bool distTrigger = gapM.isFinite && gapM >= minDistance;
 
     final DateTime? lastAt = _lastStoredAt;
     final bool timeTrigger =
-        lastAt == null || now.difference(lastAt).inSeconds >= _kMinStorageSecs;
+        lastAt == null || now.difference(lastAt).inSeconds >= minSeconds;
 
     return distTrigger || timeTrigger;
   }
@@ -806,9 +778,10 @@ class GpsService {
   // ─────────────────────────────────────────────────────────────────────────
 
   /// [FIX-5] Some OEM drivers return epoch-zero for pos.timestamp.
-  static DateTime _sanitiseTimestamp(DateTime ts, DateTime fallback) {
-    // Treat anything before 2020 as invalid
-    return ts.year < 2020 ? fallback : ts;
+  static DateTime _sanitiseTimestamp(DateTime? ts, DateTime fallback) {
+    // Treat missing or pre-2020 OEM timestamps as invalid.
+    if (ts == null || ts.year < 2020) return fallback;
+    return ts;
   }
 
   /// [ROB-2] Drop late events after stop.

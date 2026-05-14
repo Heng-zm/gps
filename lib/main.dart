@@ -3,14 +3,18 @@ import 'dart:math' as math;
 import 'dart:ui' as ui;
 
 import 'package:flutter/cupertino.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart' as mb;
 
 import 'screens/history_screen.dart';
 import 'screens/settings_screen.dart';
 import 'screens/tracking_screen.dart';
 import 'services/settings_service.dart';
+import 'config/mapbox_config.dart';
+import 'services/offline_sync_queue.dart';
 import 'widgets/app_console_widget.dart';
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -63,7 +67,59 @@ const String _kSupabaseUrl = 'https://uozzhvzewdsxpxmxsntr.supabase.co';
 const String _kSupabaseAnonKey =
     'sb_publishable_nrR6DFCgBKlgRnyINe5z0w_XDGmIsN2';
 
-const String _kAppVersion = '1.5.0';
+const String _kAppVersion = '1.5.1';
+const Duration _kOfflineSyncBootDelay = Duration(seconds: 2);
+
+DateTime? _lastKeyboardAssertionLogAt;
+int _suppressedKeyboardAssertionCount = 0;
+
+bool _isBenignHardwareKeyboardAssertion(Object error) {
+  final String message = error.toString();
+
+  if (!message.contains('hardware_keyboard.dart')) return false;
+  if (!message.contains('physicalKey')) return false;
+
+  final bool isDuplicateKeyDown =
+      message.contains('!_pressedKeys.containsKey(event.physicalKey)') &&
+          message.contains('KeyDownEvent is dispatched') &&
+          message.contains('physical key is already pressed');
+
+  final bool isDuplicateKeyUp =
+      message.contains('_pressedKeys.containsKey(event.physicalKey)') &&
+          message.contains('KeyUpEvent is dispatched') &&
+          message.contains('physical key is not pressed');
+
+  // Flutter Web/hotbuilder can emit duplicated synthesized keyboard events for
+  // any key while typing in text fields, not only Ctrl/Meta keys. These are
+  // framework-level web keyboard-state assertions and should not break the app.
+  return isDuplicateKeyDown || isDuplicateKeyUp;
+}
+
+void _logIgnoredKeyboardAssertion(Object error) {
+  _suppressedKeyboardAssertionCount++;
+
+  final DateTime now = DateTime.now();
+  final DateTime? last = _lastKeyboardAssertionLogAt;
+
+  // Prevent App Console spam when Flutter web/hotbuilder sends many duplicate
+  // synthesized Control key-up events in the same second.
+  if (last != null && now.difference(last) < const Duration(seconds: 10)) {
+    return;
+  }
+
+  _lastKeyboardAssertionLogAt = now;
+
+  AppConsole.warn(
+    'Suppressed Flutter web duplicate keyboard assertion',
+    tag: 'KEYBOARD',
+    data: <String, Object?>{
+      'count': _suppressedKeyboardAssertionCount,
+      'reason': 'benign Flutter/HotBuilder hardware keyboard state mismatch',
+    },
+  );
+
+  _suppressedKeyboardAssertionCount = 0;
+}
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // ENTRY POINT
@@ -74,7 +130,28 @@ Future<void> main() async {
     () async {
       WidgetsFlutterBinding.ensureInitialized();
 
+      AppConsole.installDebugPrintCapture();
+
+      // mapbox_maps_flutter is a native Android/iOS SDK.
+      // Do not initialize it on Flutter Web/hotbuilder.
+      if (!kIsWeb) {
+        mb.MapboxOptions.setAccessToken(MapboxConfig.accessToken);
+      } else {
+        AppConsole.warn(
+          'Native Mapbox SDK disabled on Web',
+          tag: 'MAPBOX',
+          data: <String, Object?>{
+            'reason': 'mapbox_maps_flutter supports native platform views only',
+          },
+        );
+      }
+
       FlutterError.onError = (FlutterErrorDetails details) {
+        if (_isBenignHardwareKeyboardAssertion(details.exception)) {
+          _logIgnoredKeyboardAssertion(details.exception);
+          return;
+        }
+
         FlutterError.presentError(details);
         debugPrint('Flutter error: ${details.exceptionAsString()}');
         if (details.stack != null) {
@@ -88,6 +165,11 @@ Future<void> main() async {
         Object error,
         StackTrace stackTrace,
       ) {
+        if (_isBenignHardwareKeyboardAssertion(error)) {
+          _logIgnoredKeyboardAssertion(error);
+          return true;
+        }
+
         debugPrint('Platform error: $error\n$stackTrace');
         AppConsole.error(
           'Platform error',
@@ -103,8 +185,13 @@ Future<void> main() async {
         tag: 'APP',
         data: <String, Object?>{
           'version': _kAppVersion,
+          'mapboxConfigured': MapboxConfig.accessToken.isNotEmpty,
         },
       );
+
+      if (!kIsWeb) {
+        AppConsole.success('Native Mapbox token configured', tag: 'MAPBOX');
+      }
 
       await _configureSystemUi();
       await _bootstrapServices();
@@ -112,6 +199,11 @@ Future<void> main() async {
       runApp(const TrackProAI());
     },
     (Object error, StackTrace stackTrace) {
+      if (_isBenignHardwareKeyboardAssertion(error)) {
+        _logIgnoredKeyboardAssertion(error);
+        return;
+      }
+
       debugPrint('Uncaught zone error: $error\n$stackTrace');
       AppConsole.error(
         'Uncaught zone error',
@@ -146,9 +238,39 @@ Future<void> _configureSystemUi() async {
 
 Future<void> _bootstrapServices() async {
   AppConsole.log('Bootstrapping services', tag: 'APP');
-  await _initSupabase();
-  await _initSettings();
+
+  await Future.wait<void>(
+    <Future<void>>[
+      _initSupabase(),
+      _initSettings(),
+      _initOfflineSyncQueue(),
+    ],
+    eagerError: false,
+  );
+
   AppConsole.success('Bootstrap completed', tag: 'APP');
+}
+
+Future<void> _initOfflineSyncQueue() async {
+  try {
+    await OfflineSyncQueue.instance.loadStatus();
+
+    AppConsole.success(
+      'Offline sync queue loaded',
+      tag: 'SYNC',
+      data: <String, Object?>{
+        'pending': OfflineSyncQueue.instance.pendingCount.value,
+      },
+    );
+  } catch (e, st) {
+    debugPrint('Offline sync queue load error: $e\n$st');
+    AppConsole.error(
+      'Offline sync queue load failed',
+      tag: 'SYNC',
+      error: e,
+      stackTrace: st,
+    );
+  }
 }
 
 Future<void> _initSupabase() async {
@@ -233,6 +355,7 @@ class TrackProAI extends StatelessWidget {
 
     return MaterialApp(
       title: 'TrackPro AI',
+      restorationScopeId: 'trackpro_ai',
       debugShowCheckedModeBanner: false,
       themeMode: ThemeMode.dark,
       theme: theme,
@@ -377,7 +500,40 @@ class _AppShellState extends State<AppShell>
     AppConsole.log('App shell initialized', tag: 'APP');
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) _applySystemUiStyle();
+      if (!mounted) return;
+      _applySystemUiStyle();
+      _scheduleOfflineQueueSync();
+    });
+  }
+
+  void _scheduleOfflineQueueSync() {
+    Future<void>.delayed(_kOfflineSyncBootDelay, () async {
+      if (!mounted) return;
+
+      final int pending = OfflineSyncQueue.instance.pendingCount.value;
+      if (pending <= 0) return;
+
+      AppConsole.log(
+        'Boot offline sync started',
+        tag: 'SYNC',
+        data: <String, Object?>{'pending': pending},
+      );
+
+      final OfflineSyncResult result =
+          await OfflineSyncQueue.instance.syncNow();
+
+      AppConsole.log(
+        result.hasPending
+            ? 'Boot offline sync still pending'
+            : 'Boot offline sync complete',
+        tag: 'SYNC',
+        data: <String, Object?>{
+          'attempted': result.attempted,
+          'succeeded': result.succeeded,
+          'failed': result.failed,
+          'pending': result.pending,
+        },
+      );
     });
   }
 
@@ -403,6 +559,7 @@ class _AppShellState extends State<AppShell>
 
     if (state == AppLifecycleState.resumed) {
       _applySystemUiStyle();
+      _scheduleOfflineQueueSync();
     }
   }
 
@@ -439,8 +596,6 @@ class _AppShellState extends State<AppShell>
 
   @override
   Widget build(BuildContext context) {
-    _applySystemUiStyle();
-
     final MediaQueryData mq = MediaQuery.of(context);
     final double bottomPad = mq.padding.bottom;
     final double barOffset =

@@ -24,6 +24,9 @@ dependencies:
   supabase_flutter: ^2.0.0
   flutter_compass: ^0.8.1
   battery_plus: ^7.0.0
+  share_plus: ^10.1.4
+  path_provider: ^2.1.5
+  mapbox_maps_flutter: ^2.23.1
 
 dev_dependencies:
   flutter_test:
@@ -33,8 +36,4 @@ dev_dependencies:
   flutter_lints: ^5.0.0
 
 flutter:
-<<<<<<< HEAD
   uses-material-design: true
-=======
-  uses-material-design: true
->>>>>>> 985cd4ae80ced52263feb6db488ae19e6b416fee

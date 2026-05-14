@@ -1,6 +1,7 @@
 // ignore_for_file: unused_element
 
 import 'dart:async';
+import 'dart:convert';
 import 'dart:math' as math;
 import 'dart:ui' as ui;
 
@@ -12,10 +13,13 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_map/flutter_map.dart' as fm;
+import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
+import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart' as mb;
 
 import '../models/trip_data.dart';
 import '../utils/smooth_polyline.dart';
+import '../config/mapbox_config.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // EXTENSIONS
@@ -59,6 +63,10 @@ const double _kMaxZoom = 19.0;
 const double _kCameraMoveMinMeters = 2.0;
 const Duration _kCameraMoveThrottle = Duration(milliseconds: 450);
 const Duration _kAnimMoveDuration = Duration(milliseconds: 520);
+const String _kMapboxAccessToken = String.fromEnvironment(
+  'MAPBOX_ACCESS_TOKEN',
+  defaultValue: MapboxConfig.accessToken,
+);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // MAP STYLE ENUM
@@ -92,17 +100,36 @@ enum MapStyle {
   }
 
   String get tileUrlTemplate {
-    switch (this) {
-      case MapStyle.dark:
-        return 'https://server.arcgisonline.com/ArcGIS/rest/services/'
-            'Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}';
-      case MapStyle.light:
-        return 'https://server.arcgisonline.com/ArcGIS/rest/services/'
-            'Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}';
-      case MapStyle.satellite:
-        return 'https://server.arcgisonline.com/ArcGIS/rest/services/'
-            'World_Imagery/MapServer/tile/{z}/{y}/{x}';
+    final String token = _kMapboxAccessToken;
+
+    // Mapbox needs an access token. Run with:
+    // flutter run --dart-define=MAPBOX_ACCESS_TOKEN=pk.your_token_here
+    if (token.isEmpty) {
+      debugPrint(
+        'MAPBOX_ACCESS_TOKEN is empty. Falling back to ArcGIS tiles.',
+      );
+
+      switch (this) {
+        case MapStyle.dark:
+          return 'https://server.arcgisonline.com/ArcGIS/rest/services/'
+              'Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}';
+        case MapStyle.light:
+          return 'https://server.arcgisonline.com/ArcGIS/rest/services/'
+              'Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}';
+        case MapStyle.satellite:
+          return 'https://server.arcgisonline.com/ArcGIS/rest/services/'
+              'World_Imagery/MapServer/tile/{z}/{y}/{x}';
+      }
     }
+
+    final String styleId = switch (this) {
+      MapStyle.dark => 'navigation-night-v1',
+      MapStyle.light => 'navigation-day-v1',
+      MapStyle.satellite => 'satellite-streets-v12',
+    };
+
+    return 'https://api.mapbox.com/styles/v1/mapbox/$styleId/'
+        'tiles/512/{z}/{x}/{y}@2x?access_token=$token';
   }
 
   List<String> get subdomains => const <String>[];
@@ -136,6 +163,174 @@ enum MapStyle {
       case MapStyle.satellite:
         return MapStyle.dark;
     }
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MAPBOX FEATURE MODELS
+// ─────────────────────────────────────────────────────────────────────────────
+
+enum _MapboxRuntimeMode {
+  auto,
+  native,
+  webFallback,
+}
+
+extension _MapboxRuntimeModeUi on _MapboxRuntimeMode {
+  String get label {
+    switch (this) {
+      case _MapboxRuntimeMode.auto:
+        return 'AUTO';
+      case _MapboxRuntimeMode.native:
+        return 'NATIVE';
+      case _MapboxRuntimeMode.webFallback:
+        return 'WEB';
+    }
+  }
+
+  String get description {
+    switch (this) {
+      case _MapboxRuntimeMode.auto:
+        return 'Native on Android, Apple Maps on iOS, fallback on Web';
+      case _MapboxRuntimeMode.native:
+        return 'Force native Mapbox where supported';
+      case _MapboxRuntimeMode.webFallback:
+        return 'Force flutter_map fallback';
+    }
+  }
+
+  _MapboxRuntimeMode get next {
+    switch (this) {
+      case _MapboxRuntimeMode.auto:
+        return _MapboxRuntimeMode.native;
+      case _MapboxRuntimeMode.native:
+        return _MapboxRuntimeMode.webFallback;
+      case _MapboxRuntimeMode.webFallback:
+        return _MapboxRuntimeMode.auto;
+    }
+  }
+}
+
+enum _MapboxStandardPreset {
+  day,
+  dusk,
+  dawn,
+  night,
+}
+
+extension _MapboxStandardPresetUi on _MapboxStandardPreset {
+  String get label {
+    switch (this) {
+      case _MapboxStandardPreset.day:
+        return 'DAY';
+      case _MapboxStandardPreset.dusk:
+        return 'DUSK';
+      case _MapboxStandardPreset.dawn:
+        return 'DAWN';
+      case _MapboxStandardPreset.night:
+        return 'NIGHT';
+    }
+  }
+
+  String get mapboxValue {
+    switch (this) {
+      case _MapboxStandardPreset.day:
+        return 'day';
+      case _MapboxStandardPreset.dusk:
+        return 'dusk';
+      case _MapboxStandardPreset.dawn:
+        return 'dawn';
+      case _MapboxStandardPreset.night:
+        return 'night';
+    }
+  }
+
+  _MapboxStandardPreset get next {
+    switch (this) {
+      case _MapboxStandardPreset.day:
+        return _MapboxStandardPreset.dusk;
+      case _MapboxStandardPreset.dusk:
+        return _MapboxStandardPreset.dawn;
+      case _MapboxStandardPreset.dawn:
+        return _MapboxStandardPreset.night;
+      case _MapboxStandardPreset.night:
+        return _MapboxStandardPreset.day;
+    }
+  }
+}
+
+enum _DirectionsProfile {
+  drivingTraffic,
+  driving,
+  walking,
+  cycling,
+}
+
+extension _DirectionsProfileUi on _DirectionsProfile {
+  String get label {
+    switch (this) {
+      case _DirectionsProfile.drivingTraffic:
+        return 'DRIVE+TRAFFIC';
+      case _DirectionsProfile.driving:
+        return 'DRIVING';
+      case _DirectionsProfile.walking:
+        return 'WALKING';
+      case _DirectionsProfile.cycling:
+        return 'CYCLING';
+    }
+  }
+
+  String get apiProfile {
+    switch (this) {
+      case _DirectionsProfile.drivingTraffic:
+        return 'mapbox/driving-traffic';
+      case _DirectionsProfile.driving:
+        return 'mapbox/driving';
+      case _DirectionsProfile.walking:
+        return 'mapbox/walking';
+      case _DirectionsProfile.cycling:
+        return 'mapbox/cycling';
+    }
+  }
+
+  _DirectionsProfile get next {
+    switch (this) {
+      case _DirectionsProfile.drivingTraffic:
+        return _DirectionsProfile.driving;
+      case _DirectionsProfile.driving:
+        return _DirectionsProfile.walking;
+      case _DirectionsProfile.walking:
+        return _DirectionsProfile.cycling;
+      case _DirectionsProfile.cycling:
+        return _DirectionsProfile.drivingTraffic;
+    }
+  }
+}
+
+class _PlannedRoute {
+  const _PlannedRoute({
+    required this.points,
+    required this.distanceMeters,
+    required this.durationSeconds,
+    required this.profile,
+  });
+
+  final List<LatLng> points;
+  final double distanceMeters;
+  final double durationSeconds;
+  final _DirectionsProfile profile;
+
+  String get distanceLabel {
+    final double km = distanceMeters / 1000.0;
+    return _formatDistance(km);
+  }
+
+  String durationLabel() {
+    final int total = durationSeconds.round().clamp(0, 1 << 31);
+    final int h = total ~/ 3600;
+    final int m = (total % 3600) ~/ 60;
+    if (h > 0) return '${h}h ${m.toString().padLeft(2, '0')}m';
+    return '${m}m';
   }
 }
 
@@ -364,6 +559,11 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
   bool _mapReady = false;
   bool _replayPlaying = false;
 
+  _MapboxRuntimeMode _mapboxRuntimeMode = _MapboxRuntimeMode.auto;
+  _MapboxStandardPreset _mapboxPreset = _MapboxStandardPreset.day;
+  _PlannedRoute? _plannedRoute;
+  bool _directionsLoading = false;
+
   int _replayIndex = 0;
   double _replaySpeed = 1.0;
   Timer? _replayTimer;
@@ -419,9 +619,8 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
         ? 0
         : (widget.isLive ? _route.validPoints.length - 1 : 0);
     _replayIndexNotifier.value = _replayIndex;
-    _hudSpeed.value = widget.isLive
-        ? _route.lastSpeedKmh
-        : _speedAtReplayIndex(_replayIndex);
+    _hudSpeed.value =
+        widget.isLive ? _route.lastSpeedKmh : _speedAtReplayIndex(_replayIndex);
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted || _route.rawPoints.isEmpty) return;
@@ -490,6 +689,21 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
     super.dispose();
   }
 
+  bool get _shouldUseNativeMapbox {
+    if (kIsWeb || _isNativeIOS) return false;
+    if (_mapboxRuntimeMode == _MapboxRuntimeMode.webFallback) return false;
+    return _mapboxRuntimeMode == _MapboxRuntimeMode.auto ||
+        _mapboxRuntimeMode == _MapboxRuntimeMode.native;
+  }
+
+  LatLng? get _routePlanningStart {
+    if (_route.rawPoints.isNotEmpty) {
+      if (widget.isLive) return _route.rawPoints.last;
+      return _positionAtReplayIndex(_replayIndex) ?? _route.rawPoints.first;
+    }
+    return null;
+  }
+
   // ───────────────────────────────────────────────────────────────────────────
   // CAMERA
   // ───────────────────────────────────────────────────────────────────────────
@@ -506,6 +720,10 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
 
     if (_isNativeIOS) {
       _appleMapController.animateTo(destination, zoom: safeZoom);
+      return;
+    }
+
+    if (_shouldUseNativeMapbox) {
       return;
     }
 
@@ -585,6 +803,11 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
 
     if (_isNativeIOS) {
       _appleMapController.fitPoints(_route.rawPoints);
+      if (mounted) setState(() => _followMode = false);
+      return;
+    }
+
+    if (_shouldUseNativeMapbox) {
       if (mounted) setState(() => _followMode = false);
       return;
     }
@@ -720,7 +943,7 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
 
     // FIX: Guard _mapController access with _mapReady flag.
     double base = _currentZoom;
-    if (_mapReady && !_isNativeIOS) {
+    if (_mapReady && !_isNativeIOS && !_shouldUseNativeMapbox) {
       try {
         base = _mapController.camera.zoom;
       } catch (_) {}
@@ -735,6 +958,10 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
       if (_route.rawPoints.isNotEmpty) {
         _appleMapController.animateTo(_route.rawPoints.last, zoom: nextZoom);
       }
+      return;
+    }
+
+    if (_shouldUseNativeMapbox) {
       return;
     }
 
@@ -766,6 +993,158 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
     }
   }
 
+  void _openMapboxControls() {
+    HapticFeedback.lightImpact();
+
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      useSafeArea: true,
+      builder: (_) => _MapboxControlsSheet(
+        mapboxRuntimeMode: _mapboxRuntimeMode,
+        mapboxPreset: _mapboxPreset,
+        plannedRoute: _plannedRoute,
+        directionsLoading: _directionsLoading,
+        onRuntimeChanged: (mode) {
+          if (!mounted) return;
+          setState(() => _mapboxRuntimeMode = mode);
+        },
+        onPresetChanged: (preset) {
+          if (!mounted) return;
+          setState(() => _mapboxPreset = preset);
+        },
+        onPlanRoute: _planDirectionsRoute,
+        onClearRoute: () {
+          if (!mounted) return;
+          setState(() => _plannedRoute = null);
+          Navigator.of(context).maybePop();
+        },
+      ),
+    );
+  }
+
+  Future<void> _planDirectionsRoute({
+    required double destinationLat,
+    required double destinationLng,
+    required _DirectionsProfile profile,
+  }) async {
+    final LatLng? start = _routePlanningStart;
+    if (start == null || !_isValidLatLng(start)) {
+      _showSnack('Start position is not ready.');
+      return;
+    }
+
+    final LatLng destination = LatLng(destinationLat, destinationLng);
+    if (!_isValidLatLng(destination)) {
+      _showSnack('Destination coordinate is invalid.');
+      return;
+    }
+
+    if (_kMapboxAccessToken.isEmpty) {
+      _showSnack('Mapbox token is missing.');
+      return;
+    }
+
+    setState(() => _directionsLoading = true);
+
+    try {
+      final Uri uri = Uri.https(
+        'api.mapbox.com',
+        '/directions/v5/${profile.apiProfile}/'
+            '${start.longitude},${start.latitude};'
+            '${destination.longitude},${destination.latitude}',
+        <String, String>{
+          'alternatives': 'false',
+          'geometries': 'geojson',
+          'overview': 'full',
+          'steps': 'false',
+          'access_token': _kMapboxAccessToken,
+        },
+      );
+
+      final http.Response response = await http.get(uri).timeout(
+            const Duration(seconds: 15),
+          );
+
+      if (!mounted) return;
+
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        debugPrint('Mapbox Directions error ${response.statusCode}: '
+            '${response.body}');
+        _showSnack('Route planning failed (${response.statusCode}).');
+        return;
+      }
+
+      final Object? decoded = jsonDecode(response.body);
+      if (decoded is! Map<String, dynamic>) {
+        _showSnack('Route response is invalid.');
+        return;
+      }
+
+      final List<dynamic> routes = decoded['routes'] as List<dynamic>? ?? [];
+      if (routes.isEmpty || routes.first is! Map<String, dynamic>) {
+        _showSnack('No route found.');
+        return;
+      }
+
+      final Map<String, dynamic> route = routes.first as Map<String, dynamic>;
+      final Map<String, dynamic>? geometry =
+          route['geometry'] as Map<String, dynamic>?;
+      final List<dynamic> coordinates =
+          geometry?['coordinates'] as List<dynamic>? ?? [];
+
+      final List<LatLng> points = <LatLng>[];
+      for (final dynamic coordinate in coordinates) {
+        if (coordinate is! List || coordinate.length < 2) continue;
+        final double? lng = (coordinate[0] as num?)?.toDouble();
+        final double? lat = (coordinate[1] as num?)?.toDouble();
+        if (lat == null || lng == null) continue;
+
+        final LatLng point = LatLng(lat, lng);
+        if (_isValidLatLng(point)) points.add(point);
+      }
+
+      if (points.length < 2) {
+        _showSnack('Route has no usable geometry.');
+        return;
+      }
+
+      setState(() {
+        _plannedRoute = _PlannedRoute(
+          points: List<LatLng>.unmodifiable(points),
+          distanceMeters: (route['distance'] as num?)?.toDouble() ?? 0.0,
+          durationSeconds: (route['duration'] as num?)?.toDouble() ?? 0.0,
+          profile: profile,
+        );
+      });
+
+      Navigator.of(context).maybePop();
+      _showSnack('Route planned.');
+    } on TimeoutException {
+      if (mounted) _showSnack('Route request timed out.');
+    } catch (error, stackTrace) {
+      debugPrint('Directions planning error: $error\n$stackTrace');
+      if (mounted) _showSnack('Route planning failed.');
+    } finally {
+      if (mounted) setState(() => _directionsLoading = false);
+    }
+  }
+
+  void _showSnack(String message) {
+    if (!mounted) return;
+
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Text(message),
+          behavior: SnackBarBehavior.floating,
+          duration: const Duration(seconds: 2),
+        ),
+      );
+  }
+
   // ───────────────────────────────────────────────────────────────────────────
   // MARKERS
   // ───────────────────────────────────────────────────────────────────────────
@@ -779,7 +1158,8 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
 
     if (!widget.isLive && _route.validPoints.length > 1) {
       markers.add(_endMarker(_route.validPoints.last.position));
-      final int safeReplayIndex = _replayIndex.clamp(0, _route.validPoints.length - 1);
+      final int safeReplayIndex =
+          _replayIndex.clamp(0, _route.validPoints.length - 1);
       markers.add(_replayMarker(_route.validPoints[safeReplayIndex].position));
     } else if (widget.isLive) {
       markers.add(_liveMarker(_route.validPoints.last.position));
@@ -807,7 +1187,7 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
       point: position,
       width: 36,
       height: 36,
-      child: _RouteMarkerDot(
+      child: const _RouteMarkerDot(
         color: _kTeal,
         icon: CupertinoIcons.flag_fill,
         glowColor: _kTeal,
@@ -818,64 +1198,31 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
   fm.Marker _endMarker(LatLng position) {
     return fm.Marker(
       point: position,
-      width: 36,
-      height: 36,
-      child: _RouteMarkerDot(
-        color: _kRed,
-        icon: CupertinoIcons.checkmark_alt,
-        glowColor: _kRed,
-      ),
+      width: 42,
+      height: 42,
+      alignment: Alignment.center,
+      child: const _WhiteRouteNode(),
     );
   }
 
   fm.Marker _replayMarker(LatLng position) {
+    final int safeIndex = _replayIndex.clamp(0, _route.validPoints.length - 1);
+    final double bearing = safeIndex > 0
+        ? _bearingOrZero(
+            _route.validPoints[safeIndex - 1].position,
+            _route.validPoints[safeIndex].position,
+          )
+        : _route.currentBearing;
+
     return fm.Marker(
       point: position,
-      width: 62,
-      height: 62,
-      child: AnimatedBuilder(
-        animation: _markerPulseController,
-        builder: (_, __) {
-          final double pulse = math.sin(_markerPulseController.value * math.pi)
-              .clamp(0.0, 1.0);
-          return Stack(
-            alignment: Alignment.center,
-            children: <Widget>[
-              Container(
-                width: 46 + pulse * 10,
-                height: 46 + pulse * 10,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: _kGold.withValues(alpha: 0.10),
-                  border: Border.all(
-                    color: _kGoldSoft.withValues(alpha: 0.55),
-                    width: 1.4,
-                  ),
-                ),
-              ),
-              Container(
-                width: 25,
-                height: 25,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: _kGoldSoft,
-                  border: Border.all(color: Colors.black, width: 3),
-                  boxShadow: <BoxShadow>[
-                    BoxShadow(
-                      color: _kGoldSoft.withValues(alpha: 0.55),
-                      blurRadius: 14,
-                    ),
-                  ],
-                ),
-                child: const Icon(
-                  CupertinoIcons.play_fill,
-                  color: Colors.black,
-                  size: 11,
-                ),
-              ),
-            ],
-          );
-        },
+      width: 96,
+      height: 96,
+      alignment: Alignment.center,
+      child: _MapVehicleMarker(
+        bearing: bearing,
+        kind: _MapVehicleKind.car,
+        pulseController: _markerPulseController,
       ),
     );
   }
@@ -883,64 +1230,12 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
   fm.Marker _liveMarker(LatLng position) {
     return fm.Marker(
       point: position,
-      width: 88,
-      height: 88,
-      // FIX: RepaintBoundary is OUTSIDE AnimatedBuilder — it only isolates the
-      // repaint boundary from siblings, not from the AnimatedBuilder itself.
-      // The correct fix is to keep RepaintBoundary as close to the leaf that
-      // changes as possible, wrapping the pulsing ring only.
-      child: AnimatedBuilder(
-        animation: _markerPulseController,
-        builder: (_, __) {
-          final double scale = _markerPulseController.value;
-          final double opacity = (1.0 - scale).clamp(0.0, 1.0);
-
-          return Stack(
-            alignment: Alignment.center,
-            children: <Widget>[
-              // Pulsing ring — this changes every frame, isolated.
-              RepaintBoundary(
-                child: Container(
-                  width: 66 * scale,
-                  height: 66 * scale,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: _kRed.withValues(alpha: opacity * 0.3),
-                    border: Border.all(
-                      color: _kRed.withValues(alpha: opacity * 0.6),
-                      width: 1.2,
-                    ),
-                  ),
-                ),
-              ),
-              // Bearing arrow — only changes when bearing changes.
-              Transform.rotate(
-                angle: _route.currentBearing * math.pi / 180.0,
-                child: CustomPaint(
-                  size: const Size(40, 40),
-                  painter: _BearingArrowPainter(color: _kRed),
-                ),
-              ),
-              // Inner dot — static.
-              Container(
-                width: 18,
-                height: 18,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: Colors.white,
-                  border: Border.all(color: _kRed, width: 3),
-                  boxShadow: <BoxShadow>[
-                    BoxShadow(
-                      color: _kRed.withValues(alpha: 0.7),
-                      blurRadius: 12,
-                      spreadRadius: 2,
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          );
-        },
+      width: 96,
+      height: 96,
+      alignment: Alignment.center,
+      child: _MapLocationPuck(
+        bearing: _route.currentBearing,
+        pulseController: _markerPulseController,
       ),
     );
   }
@@ -1025,11 +1320,28 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
           children: <Widget>[
             // ── MAP ──────────────────────────────────────────────────────────
             if (_route.isEmpty)
-              const _EmptyMapState()
+              _EmptyMapState(
+                mapStyle: _mapStyle,
+                isLive: widget.isLive,
+              )
+            else if (_shouldUseNativeMapbox)
+              _NativeMapboxLayer(
+                route: _route,
+                plannedRoute: _plannedRoute,
+                mapStyle: _mapStyle,
+                mapboxPreset: _mapboxPreset,
+                followMode: _followMode,
+                isLive: widget.isLive,
+                replayIndex: _replayIndex,
+                onUserDrag: () {
+                  if (_followMode) setState(() => _followMode = false);
+                },
+              )
             else if (_isNativeIOS)
               _AppleMapLayer(
                 controller: _appleMapController,
                 route: _route,
+                plannedRoute: _plannedRoute,
                 showSpeedGradient: _showSpeedGradient,
                 followMode: _followMode,
                 isLive: widget.isLive,
@@ -1044,6 +1356,7 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
               _FlutterMapLayer(
                 mapController: _mapController,
                 route: _route,
+                plannedRoute: _plannedRoute,
                 allMarkers: allMarkers,
                 showSpeedGradient: _showSpeedGradient,
                 mapStyle: _mapStyle,
@@ -1237,6 +1550,16 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
                   icon: CupertinoIcons.graph_square,
                   size: 38,
                   active: _showChart,
+                  activeColor: _kBlue,
+                ),
+              ),
+              const SizedBox(width: 7),
+              _PressableButton(
+                onTap: _openMapboxControls,
+                child: _GlassIconBox(
+                  icon: CupertinoIcons.location_north_line_fill,
+                  size: 38,
+                  active: _plannedRoute != null,
                   activeColor: _kBlue,
                 ),
               ),
@@ -1629,6 +1952,10 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
                                 ],
                                 const SizedBox(height: 14),
                                 _buildCompactRouteSummaryCard(),
+                                if (_plannedRoute != null) ...<Widget>[
+                                  const SizedBox(height: 10),
+                                  _buildPlannedRouteSummaryCard(),
+                                ],
                                 if (!widget.isLive &&
                                     _route.validPoints.length > 1) ...<Widget>[
                                   const SizedBox(height: 12),
@@ -1649,7 +1976,6 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
       ),
     );
   }
-
 
   Widget _buildCompactRouteSummaryCard() {
     return Container(
@@ -1682,6 +2008,51 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
               label: 'AVG SPEED',
               value: '${_route.avgSpeedKmh.toStringAsFixed(0)} km/h',
               color: _kGreen,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildPlannedRouteSummaryCard() {
+    final _PlannedRoute? route = _plannedRoute;
+    if (route == null) return const SizedBox.shrink();
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
+      decoration: BoxDecoration(
+        color: _kBlue.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: _kBlue.withValues(alpha: 0.18)),
+      ),
+      child: Row(
+        children: <Widget>[
+          const Icon(
+            CupertinoIcons.location_north_line_fill,
+            color: _kBlue,
+            size: 17,
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              '${route.distanceLabel} · ${route.durationLabel()} · ${route.profile.label}',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 12,
+                fontWeight: FontWeight.w900,
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          _PressableButton(
+            onTap: () => setState(() => _plannedRoute = null),
+            child: const Icon(
+              CupertinoIcons.xmark_circle_fill,
+              color: Colors.white54,
+              size: 18,
             ),
           ),
         ],
@@ -1805,7 +2176,7 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
         Expanded(
           child: _PressableButton(
             onTap: _fitRoute,
-            child: _ActionTile(
+            child: const _ActionTile(
               icon: CupertinoIcons.arrow_down_right_arrow_up_left,
               label: 'FIT ROUTE',
               isActive: false,
@@ -1822,6 +2193,17 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
                   : CupertinoIcons.location,
               label: _followMode ? 'FOLLOWING' : 'FOLLOW',
               isActive: _followMode,
+            ),
+          ),
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: _PressableButton(
+            onTap: _openMapboxControls,
+            child: _ActionTile(
+              icon: CupertinoIcons.location_north_line_fill,
+              label: _plannedRoute == null ? 'ROUTE' : 'PLANNED',
+              isActive: _plannedRoute != null,
             ),
           ),
         ),
@@ -2235,6 +2617,304 @@ class _MiniChartPainter extends CustomPainter {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// NATIVE MAPBOX LAYER — Android/mobile only. Web uses flutter_map fallback.
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _NativeMapboxLayer extends StatefulWidget {
+  const _NativeMapboxLayer({
+    required this.route,
+    required this.plannedRoute,
+    required this.mapStyle,
+    required this.mapboxPreset,
+    required this.followMode,
+    required this.isLive,
+    required this.replayIndex,
+    required this.onUserDrag,
+  });
+
+  final _RouteData route;
+  final _PlannedRoute? plannedRoute;
+  final MapStyle mapStyle;
+  final _MapboxStandardPreset mapboxPreset;
+  final bool followMode;
+  final bool isLive;
+  final int replayIndex;
+  final VoidCallback onUserDrag;
+
+  @override
+  State<_NativeMapboxLayer> createState() => _NativeMapboxLayerState();
+}
+
+class _NativeMapboxLayerState extends State<_NativeMapboxLayer> {
+  mb.MapboxMap? _map;
+  mb.PolylineAnnotationManager? _routeOuterManager;
+  mb.PolylineAnnotationManager? _routeCoreManager;
+  mb.PolylineAnnotationManager? _plannedOuterManager;
+  mb.PolylineAnnotationManager? _plannedCoreManager;
+  bool _styleLoaded = false;
+
+  @override
+  void didUpdateWidget(covariant _NativeMapboxLayer oldWidget) {
+    super.didUpdateWidget(oldWidget);
+
+    if (oldWidget.mapStyle != widget.mapStyle) {
+      unawaited(_loadStyle());
+      return;
+    }
+
+    if (oldWidget.mapboxPreset != widget.mapboxPreset) {
+      unawaited(_configureStandardStyle());
+    }
+
+    if (!identical(oldWidget.route, widget.route) ||
+        oldWidget.replayIndex != widget.replayIndex ||
+        oldWidget.plannedRoute != widget.plannedRoute) {
+      unawaited(_rebuildRoutes());
+      unawaited(_moveCamera());
+    }
+  }
+
+  void _onMapCreated(mb.MapboxMap map) {
+    _map = map;
+    unawaited(_configureMap());
+  }
+
+  Future<void> _configureMap() async {
+    final mb.MapboxMap? map = _map;
+    if (map == null) return;
+
+    try {
+      await map.scaleBar.updateSettings(mb.ScaleBarSettings(enabled: false));
+      await map.compass.updateSettings(mb.CompassSettings(enabled: false));
+      await map.logo.updateSettings(mb.LogoSettings(enabled: true));
+      await map.attribution
+          .updateSettings(mb.AttributionSettings(enabled: true));
+      await map.location.updateSettings(
+        mb.LocationComponentSettings(
+          enabled: widget.isLive,
+          puckBearingEnabled: true,
+          puckBearing: mb.PuckBearing.HEADING,
+          pulsingEnabled: widget.isLive,
+          pulsingColor: _kBlue.toARGB32(),
+          pulsingMaxRadius: 46,
+          showAccuracyRing: widget.isLive,
+          accuracyRingColor: _kBlue.withValues(alpha: 0.18).toARGB32(),
+          accuracyRingBorderColor: _kBlue.withValues(alpha: 0.42).toARGB32(),
+        ),
+      );
+    } catch (error) {
+      debugPrint('Native Mapbox map config error: $error');
+    }
+
+    await _loadStyle();
+  }
+
+  Future<void> _loadStyle() async {
+    final mb.MapboxMap? map = _map;
+    if (map == null) return;
+
+    _styleLoaded = false;
+    try {
+      await map.loadStyleURI(_styleUri(widget.mapStyle));
+      _styleLoaded = true;
+      _routeOuterManager = null;
+      _routeCoreManager = null;
+      _plannedOuterManager = null;
+      _plannedCoreManager = null;
+      await _configureStandardStyle();
+      await _rebuildRoutes();
+      await _moveCamera(force: true);
+    } catch (error, stackTrace) {
+      debugPrint('Native Mapbox style error: $error\n$stackTrace');
+    }
+  }
+
+  Future<void> _configureStandardStyle() async {
+    final mb.MapboxMap? map = _map;
+    if (map == null) return;
+
+    try {
+      await map.style.setStyleImportConfigProperty(
+        'basemap',
+        'lightPreset',
+        widget.mapboxPreset.mapboxValue,
+      );
+      await map.style.setStyleImportConfigProperty(
+        'basemap',
+        'showPointOfInterestLabels',
+        false,
+      );
+      await map.style.setStyleImportConfigProperty(
+        'basemap',
+        'showTransitLabels',
+        false,
+      );
+      await map.style.setStyleImportConfigProperty(
+        'basemap',
+        'show3dObjects',
+        true,
+      );
+    } catch (error) {
+      debugPrint('Native Mapbox Standard config skipped: $error');
+    }
+  }
+
+  Future<void> _rebuildRoutes() async {
+    final mb.MapboxMap? map = _map;
+    if (map == null || !_styleLoaded) return;
+
+    try {
+      _plannedOuterManager ??=
+          await map.annotations.createPolylineAnnotationManager();
+      _plannedCoreManager ??=
+          await map.annotations.createPolylineAnnotationManager();
+      _routeOuterManager ??=
+          await map.annotations.createPolylineAnnotationManager();
+      _routeCoreManager ??=
+          await map.annotations.createPolylineAnnotationManager();
+
+      await _plannedOuterManager?.deleteAll();
+      await _plannedCoreManager?.deleteAll();
+      await _routeOuterManager?.deleteAll();
+      await _routeCoreManager?.deleteAll();
+
+      final _PlannedRoute? planned = widget.plannedRoute;
+      if (planned != null && planned.points.length > 1) {
+        await _drawLine(
+          outer: _plannedOuterManager,
+          core: _plannedCoreManager,
+          points: planned.points,
+          color: _kBlue,
+          outerWidth: 11,
+          coreWidth: 5.2,
+        );
+      }
+
+      if (widget.route.smoothedPoints.length > 1) {
+        await _drawLine(
+          outer: _routeOuterManager,
+          core: _routeCoreManager,
+          points: widget.route.smoothedPoints,
+          color: const Color(0xFF3B22FF),
+          outerWidth: 13,
+          coreWidth: 6.5,
+        );
+      }
+    } catch (error, stackTrace) {
+      debugPrint('Native Mapbox route draw error: $error\n$stackTrace');
+    }
+  }
+
+  Future<void> _drawLine({
+    required mb.PolylineAnnotationManager? outer,
+    required mb.PolylineAnnotationManager? core,
+    required List<LatLng> points,
+    required Color color,
+    required double outerWidth,
+    required double coreWidth,
+  }) async {
+    final List<mb.Position> coords = points
+        .where(_isValidLatLng)
+        .map((LatLng p) => mb.Position(p.longitude, p.latitude))
+        .toList(growable: false);
+
+    if (coords.length < 2) return;
+
+    final mb.LineString line = mb.LineString(coordinates: coords);
+
+    await outer?.create(
+      mb.PolylineAnnotationOptions(
+        geometry: line,
+        lineColor: Colors.white.toARGB32(),
+        lineWidth: outerWidth,
+        lineOpacity: 0.86,
+        lineBorderColor: Colors.black.toARGB32(),
+        lineBorderWidth: 2.0,
+        lineJoin: mb.LineJoin.ROUND,
+      ),
+    );
+
+    await core?.create(
+      mb.PolylineAnnotationOptions(
+        geometry: line,
+        lineColor: color.toARGB32(),
+        lineWidth: coreWidth,
+        lineOpacity: 0.96,
+        lineJoin: mb.LineJoin.ROUND,
+      ),
+    );
+  }
+
+  Future<void> _moveCamera({bool force = false}) async {
+    final mb.MapboxMap? map = _map;
+    if (map == null || widget.route.rawPoints.isEmpty) return;
+
+    final LatLng? target = widget.isLive
+        ? widget.route.rawPoints.last
+        : _positionAtReplayIndex(widget.replayIndex);
+    if (target == null || !_isValidLatLng(target)) return;
+
+    try {
+      await map.easeTo(
+        mb.CameraOptions(
+          center: mb.Point(
+            coordinates: mb.Position(target.longitude, target.latitude),
+          ),
+          zoom: _kDefaultZoom,
+          pitch: widget.followMode ? 48 : 0,
+          bearing: widget.followMode ? -widget.route.currentBearing : 0,
+        ),
+        mb.MapAnimationOptions(duration: force ? 650 : 420, startDelay: 0),
+      );
+    } catch (error) {
+      debugPrint('Native Mapbox camera error: $error');
+    }
+  }
+
+  LatLng? _positionAtReplayIndex(int index) {
+    if (widget.route.validPoints.isEmpty) return null;
+    final int safeIndex = index.clamp(0, widget.route.validPoints.length - 1);
+    return widget.route.validPoints[safeIndex].position;
+  }
+
+  static String _styleUri(MapStyle style) {
+    if (style == MapStyle.satellite) return mb.MapboxStyles.STANDARD_SATELLITE;
+    return mb.MapboxStyles.STANDARD;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final LatLng center = widget.route.rawPoints.isNotEmpty
+        ? widget.route.rawPoints.last
+        : const LatLng(11.5564, 104.9282);
+
+    return mb.MapWidget(
+      key: ValueKey<String>(
+        'mapbox-${widget.mapStyle.name}-${widget.mapboxPreset.name}',
+      ),
+      styleUri: _styleUri(widget.mapStyle),
+      viewport: mb.CameraViewportState(
+        center: mb.Point(
+          coordinates: mb.Position(center.longitude, center.latitude),
+        ),
+        zoom: _kDefaultZoom,
+        pitch: 0,
+        bearing: 0,
+      ),
+      textureView: true,
+      onMapCreated: _onMapCreated,
+      onStyleLoadedListener: (_) {
+        _styleLoaded = true;
+        unawaited(_configureStandardStyle());
+        unawaited(_rebuildRoutes());
+        unawaited(_moveCamera(force: true));
+      },
+      onScrollListener: (_) => widget.onUserDrag(),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // FLUTTER MAP LAYER
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -2242,6 +2922,7 @@ class _FlutterMapLayer extends StatelessWidget {
   const _FlutterMapLayer({
     required this.mapController,
     required this.route,
+    required this.plannedRoute,
     required this.allMarkers,
     required this.showSpeedGradient,
     required this.mapStyle,
@@ -2253,6 +2934,7 @@ class _FlutterMapLayer extends StatelessWidget {
 
   final fm.MapController mapController;
   final _RouteData route;
+  final _PlannedRoute? plannedRoute;
   final List<fm.Marker> allMarkers;
   final bool showSpeedGradient;
   final MapStyle mapStyle;
@@ -2261,29 +2943,60 @@ class _FlutterMapLayer extends StatelessWidget {
   final ValueChanged<double> onZoomChanged;
   final VoidCallback onUserDrag;
 
-  Widget _buildSmoothPolylineLayer() {
-    final Color color = mapStyle.routeColor;
+  Widget _buildPlannedRouteLayer() {
+    final _PlannedRoute? route = plannedRoute;
+    if (route == null || route.points.length < 2) {
+      return const SizedBox.shrink();
+    }
 
     return fm.PolylineLayer(
       polylines: <fm.Polyline>[
         fm.Polyline(
+          points: route.points,
+          color: Colors.white.withValues(alpha: 0.82),
+          strokeWidth: 11.0,
+          strokeCap: StrokeCap.round,
+          strokeJoin: StrokeJoin.round,
+        ),
+        fm.Polyline(
+          points: route.points,
+          color: _kBlue.withValues(alpha: 0.94),
+          strokeWidth: 5.4,
+          strokeCap: StrokeCap.round,
+          strokeJoin: StrokeJoin.round,
+        ),
+      ],
+    );
+  }
+
+  Widget _buildSmoothPolylineLayer() {
+    return fm.PolylineLayer(
+      polylines: <fm.Polyline>[
+        fm.Polyline(
           points: route.smoothedPoints,
-          color: color.withValues(alpha: _kRouteGlowOpacity),
-          strokeWidth: 16,
+          color: Colors.black.withValues(alpha: 0.72),
+          strokeWidth: 15.5,
           strokeCap: StrokeCap.round,
           strokeJoin: StrokeJoin.round,
         ),
         fm.Polyline(
           points: route.smoothedPoints,
-          color: color.withValues(alpha: 0.4),
-          strokeWidth: 7,
+          color: Colors.white.withValues(alpha: 0.96),
+          strokeWidth: 13.0,
           strokeCap: StrokeCap.round,
           strokeJoin: StrokeJoin.round,
         ),
         fm.Polyline(
           points: route.smoothedPoints,
-          color: color,
-          strokeWidth: 3.5,
+          color: const Color(0xFF3B22FF).withValues(alpha: 0.94),
+          strokeWidth: 8.8,
+          strokeCap: StrokeCap.round,
+          strokeJoin: StrokeJoin.round,
+        ),
+        fm.Polyline(
+          points: route.smoothedPoints,
+          color: const Color(0xFF1600B8).withValues(alpha: 0.95),
+          strokeWidth: 5.8,
           strokeCap: StrokeCap.round,
           strokeJoin: StrokeJoin.round,
         ),
@@ -2354,12 +3067,485 @@ class _FlutterMapLayer extends StatelessWidget {
           userAgentPackageName: 'com.trackpro.ai',
           retinaMode: retina,
         ),
+        _buildPlannedRouteLayer(),
         if (route.smoothedPoints.length > 1)
           showSpeedGradient
               ? _buildSpeedGradientLayer()
               : _buildSmoothPolylineLayer(),
         if (allMarkers.isNotEmpty) fm.MarkerLayer(markers: allMarkers),
       ],
+    );
+  }
+}
+
+class _MapLocationPuck extends StatelessWidget {
+  const _MapLocationPuck({
+    required this.bearing,
+    required this.pulseController,
+  });
+
+  final double bearing;
+  final Animation<double> pulseController;
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: pulseController,
+      builder: (_, __) {
+        final double pulse = pulseController.value;
+        final double pulseOpacity = (1.0 - pulse).clamp(0.0, 1.0);
+
+        return SizedBox(
+          width: 92,
+          height: 92,
+          child: Stack(
+            alignment: Alignment.center,
+            children: <Widget>[
+              Container(
+                width: 68,
+                height: 68,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: const Color(0xFF1A73FF).withValues(alpha: 0.10),
+                  border: Border.all(
+                    color: const Color(0xFF1A73FF).withValues(alpha: 0.18),
+                    width: 1.2,
+                  ),
+                ),
+              ),
+              Opacity(
+                opacity: pulseOpacity * 0.34,
+                child: Container(
+                  width: 24 + pulse * 44,
+                  height: 24 + pulse * 44,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: const Color(0xFF1A73FF),
+                    border: Border.all(
+                      color: Colors.white.withValues(alpha: 0.40),
+                      width: 1.4,
+                    ),
+                  ),
+                ),
+              ),
+              Transform.rotate(
+                angle: bearing * math.pi / 180.0,
+                child: CustomPaint(
+                  size: const Size(74, 74),
+                  painter: _MapLocationConePainter(
+                    color: const Color(0xFF1A73FF),
+                  ),
+                ),
+              ),
+              Container(
+                width: 34,
+                height: 34,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: Colors.white,
+                  boxShadow: <BoxShadow>[
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.22),
+                      blurRadius: 10,
+                      offset: const Offset(0, 4),
+                    ),
+                  ],
+                ),
+              ),
+              Container(
+                width: 23,
+                height: 23,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: const Color(0xFF1A73FF),
+                  border: Border.all(
+                    color: Colors.white,
+                    width: 3.2,
+                  ),
+                  boxShadow: <BoxShadow>[
+                    BoxShadow(
+                      color: const Color(0xFF1A73FF).withValues(alpha: 0.45),
+                      blurRadius: 12,
+                    ),
+                  ],
+                ),
+              ),
+              Transform.rotate(
+                angle: bearing * math.pi / 180.0,
+                child: const Padding(
+                  padding: EdgeInsets.only(bottom: 42),
+                  child: Icon(
+                    CupertinoIcons.location_fill,
+                    color: Colors.white,
+                    size: 12,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _MapLocationConePainter extends CustomPainter {
+  const _MapLocationConePainter({
+    required this.color,
+  });
+
+  final Color color;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final Offset center = Offset(size.width / 2.0, size.height / 2.0);
+    final double radius = size.width * 0.42;
+
+    final ui.Path cone = ui.Path()
+      ..moveTo(center.dx, center.dy - radius)
+      ..cubicTo(
+        center.dx - radius * 0.35,
+        center.dy - radius * 0.28,
+        center.dx - radius * 0.22,
+        center.dy - radius * 0.04,
+        center.dx,
+        center.dy,
+      )
+      ..cubicTo(
+        center.dx + radius * 0.22,
+        center.dy - radius * 0.04,
+        center.dx + radius * 0.35,
+        center.dy - radius * 0.28,
+        center.dx,
+        center.dy - radius,
+      )
+      ..close();
+
+    final Paint paint = Paint()
+      ..shader = ui.Gradient.radial(
+        center,
+        radius,
+        <Color>[
+          color.withValues(alpha: 0.30),
+          color.withValues(alpha: 0.00),
+        ],
+        <double>[0.0, 1.0],
+      );
+
+    canvas.drawPath(cone, paint);
+  }
+
+  @override
+  bool shouldRepaint(covariant _MapLocationConePainter oldDelegate) {
+    return oldDelegate.color != color;
+  }
+}
+
+enum _MapVehicleKind {
+  car,
+  motorbike,
+}
+
+class _MapVehicleMarker extends StatelessWidget {
+  const _MapVehicleMarker({
+    required this.bearing,
+    required this.kind,
+    required this.pulseController,
+  });
+
+  final double bearing;
+  final _MapVehicleKind kind;
+  final Animation<double> pulseController;
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: pulseController,
+      builder: (_, __) {
+        final double pulse = pulseController.value;
+        final double opacity = (1.0 - pulse).clamp(0.0, 1.0);
+        return SizedBox(
+          width: 96,
+          height: 96,
+          child: Stack(
+            alignment: Alignment.center,
+            children: <Widget>[
+              RepaintBoundary(
+                child: Container(
+                  width: 32 + pulse * 28,
+                  height: 32 + pulse * 28,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: const Color(0xFF2A5BFF)
+                        .withValues(alpha: opacity * 0.18),
+                    border: Border.all(
+                      color: const Color(0xFF2A5BFF)
+                          .withValues(alpha: opacity * 0.34),
+                      width: 1.4,
+                    ),
+                  ),
+                ),
+              ),
+              Positioned(
+                bottom: 12,
+                child: Container(
+                  width: 54,
+                  height: 54,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: Colors.white.withValues(alpha: 0.92),
+                    boxShadow: <BoxShadow>[
+                      BoxShadow(
+                        color: Colors.black.withValues(alpha: 0.18),
+                        blurRadius: 16,
+                        offset: const Offset(0, 8),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              Transform.rotate(
+                angle: bearing * math.pi / 180.0,
+                child: Transform.translate(
+                  offset: const Offset(0, -10),
+                  child: kind == _MapVehicleKind.motorbike
+                      ? const _MapMiniMotorbike()
+                      : const _MapMiniCar(),
+                ),
+              ),
+              Positioned(
+                bottom: 18,
+                child: Container(
+                  width: 13,
+                  height: 13,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: Colors.white,
+                    border: Border.all(color: Colors.black, width: 2.5),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _MapMiniCar extends StatelessWidget {
+  const _MapMiniCar();
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: 54,
+      height: 68,
+      child: Stack(
+        alignment: Alignment.center,
+        children: <Widget>[
+          Positioned(
+            bottom: 4,
+            child: Container(
+              width: 38,
+              height: 16,
+              decoration: BoxDecoration(
+                color: Colors.black.withValues(alpha: 0.18),
+                borderRadius: BorderRadius.circular(999),
+              ),
+            ),
+          ),
+          Positioned(
+            bottom: 13,
+            child: Container(
+              width: 38,
+              height: 43,
+              decoration: BoxDecoration(
+                gradient: const LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: <Color>[Colors.white, Color(0xFFE8EDF6)],
+                ),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: Color(0xFFCAD3DF), width: 1.2),
+                boxShadow: <BoxShadow>[
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.20),
+                    blurRadius: 9,
+                    offset: const Offset(0, 5),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          Positioned(
+            top: 16,
+            child: Container(
+              width: 25,
+              height: 14,
+              decoration: BoxDecoration(
+                gradient: const LinearGradient(
+                  colors: <Color>[Color(0xFF88C7F5), Color(0xFF2E6A99)],
+                ),
+                borderRadius: BorderRadius.circular(5),
+                border: Border.all(color: Colors.white, width: 1.0),
+              ),
+            ),
+          ),
+          const Positioned(bottom: 20, left: 5, child: _MapVehicleWheel()),
+          const Positioned(bottom: 20, right: 5, child: _MapVehicleWheel()),
+          const Positioned(bottom: 13, left: 7, child: _MapTailLight()),
+          const Positioned(bottom: 13, right: 7, child: _MapTailLight()),
+        ],
+      ),
+    );
+  }
+}
+
+class _MapMiniMotorbike extends StatelessWidget {
+  const _MapMiniMotorbike();
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: 58,
+      height: 76,
+      child: Stack(
+        alignment: Alignment.center,
+        children: <Widget>[
+          Positioned(
+            bottom: 2,
+            child: Container(
+              width: 40,
+              height: 15,
+              decoration: BoxDecoration(
+                color: Colors.black.withValues(alpha: 0.18),
+                borderRadius: BorderRadius.circular(999),
+              ),
+            ),
+          ),
+          const Positioned(bottom: 10, child: _MapBikeWheel(size: 20)),
+          const Positioned(top: 23, child: _MapBikeWheel(size: 18)),
+          Positioned(
+            top: 31,
+            child: Container(
+              width: 24,
+              height: 30,
+              decoration: BoxDecoration(
+                color: const Color(0xFF1F2329),
+                borderRadius: BorderRadius.circular(8),
+                boxShadow: <BoxShadow>[
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.22),
+                    blurRadius: 8,
+                    offset: const Offset(0, 5),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          Positioned(
+            top: 25,
+            child: Container(
+              width: 32,
+              height: 13,
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(999),
+                border: Border.all(color: const Color(0xFFD8DEE8)),
+              ),
+            ),
+          ),
+          Positioned(
+            top: 11,
+            child: Container(
+              width: 17,
+              height: 17,
+              decoration: const BoxDecoration(
+                color: Colors.white,
+                shape: BoxShape.circle,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _MapVehicleWheel extends StatelessWidget {
+  const _MapVehicleWheel();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 8,
+      height: 14,
+      decoration: BoxDecoration(
+        color: const Color(0xFF1B1E23),
+        borderRadius: BorderRadius.circular(999),
+      ),
+    );
+  }
+}
+
+class _MapTailLight extends StatelessWidget {
+  const _MapTailLight();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 6,
+      height: 5,
+      decoration: BoxDecoration(
+        color: const Color(0xFFFF3B30),
+        borderRadius: BorderRadius.circular(999),
+      ),
+    );
+  }
+}
+
+class _MapBikeWheel extends StatelessWidget {
+  const _MapBikeWheel({
+    required this.size,
+  });
+
+  final double size;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: size,
+      height: size,
+      decoration: BoxDecoration(
+        color: const Color(0xFF15171B),
+        shape: BoxShape.circle,
+        border: Border.all(color: const Color(0xFF40464F), width: 3),
+      ),
+    );
+  }
+}
+
+class _WhiteRouteNode extends StatelessWidget {
+  const _WhiteRouteNode();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 31,
+      height: 31,
+      decoration: BoxDecoration(
+        color: Colors.white,
+        shape: BoxShape.circle,
+        border: Border.all(color: Colors.black, width: 3.2),
+        boxShadow: <BoxShadow>[
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.18),
+            blurRadius: 8,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -2505,6 +3691,7 @@ class _AppleMapLayer extends StatefulWidget {
   const _AppleMapLayer({
     required this.controller,
     required this.route,
+    required this.plannedRoute,
     required this.showSpeedGradient,
     required this.followMode,
     required this.isLive,
@@ -2516,6 +3703,7 @@ class _AppleMapLayer extends StatefulWidget {
 
   final _AppleMapController controller;
   final _RouteData route;
+  final _PlannedRoute? plannedRoute;
   final bool showSpeedGradient;
   final bool followMode;
   final bool isLive;
@@ -2696,7 +3884,8 @@ class _AppleMapLayerState extends State<_AppleMapLayer> {
           replayPoint.position.longitude,
         ),
         infoWindow: mk.InfoWindow(
-          title: 'Replay ${safeReplayIndex + 1}/${widget.route.validPoints.length}',
+          title:
+              'Replay ${safeReplayIndex + 1}/${widget.route.validPoints.length}',
         ),
         icon: mk.BitmapDescriptor.defaultAnnotationWithHue(
           mk.BitmapDescriptor.hueYellow,
@@ -2967,7 +4156,6 @@ class _PulseDot extends StatelessWidget {
     );
   }
 }
-
 
 class _SummaryMiniStat extends StatelessWidget {
   const _SummaryMiniStat({
@@ -3282,8 +4470,412 @@ class _ZoomBox extends StatelessWidget {
   }
 }
 
+class _MapboxControlsSheet extends StatefulWidget {
+  const _MapboxControlsSheet({
+    required this.mapboxRuntimeMode,
+    required this.mapboxPreset,
+    required this.plannedRoute,
+    required this.directionsLoading,
+    required this.onRuntimeChanged,
+    required this.onPresetChanged,
+    required this.onPlanRoute,
+    required this.onClearRoute,
+  });
+
+  final _MapboxRuntimeMode mapboxRuntimeMode;
+  final _MapboxStandardPreset mapboxPreset;
+  final _PlannedRoute? plannedRoute;
+  final bool directionsLoading;
+  final ValueChanged<_MapboxRuntimeMode> onRuntimeChanged;
+  final ValueChanged<_MapboxStandardPreset> onPresetChanged;
+  final Future<void> Function({
+    required double destinationLat,
+    required double destinationLng,
+    required _DirectionsProfile profile,
+  }) onPlanRoute;
+  final VoidCallback onClearRoute;
+
+  @override
+  State<_MapboxControlsSheet> createState() => _MapboxControlsSheetState();
+}
+
+class _MapboxControlsSheetState extends State<_MapboxControlsSheet> {
+  late final TextEditingController _latCtrl;
+  late final TextEditingController _lngCtrl;
+  _DirectionsProfile _profile = _DirectionsProfile.drivingTraffic;
+
+  @override
+  void initState() {
+    super.initState();
+    _latCtrl = TextEditingController();
+    _lngCtrl = TextEditingController();
+  }
+
+  @override
+  void dispose() {
+    _latCtrl.dispose();
+    _lngCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    final double? lat = double.tryParse(_latCtrl.text.trim());
+    final double? lng = double.tryParse(_lngCtrl.text.trim());
+
+    if (lat == null || lng == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Enter destination latitude and longitude.'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
+
+    await widget.onPlanRoute(
+      destinationLat: lat,
+      destinationLng: lng,
+      profile: _profile,
+    );
+  }
+
+  void _useDemoPoint() {
+    _latCtrl.text = '11.5621';
+    _lngCtrl.text = '104.8885';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.only(top: 54),
+      decoration: const BoxDecoration(
+        color: _kSurface,
+        borderRadius: BorderRadius.vertical(top: Radius.circular(32)),
+      ),
+      child: SafeArea(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.fromLTRB(18, 12, 18, 28),
+          child: Center(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 520),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: <Widget>[
+                  Container(
+                    width: 44,
+                    height: 4,
+                    margin: const EdgeInsets.only(bottom: 16),
+                    decoration: BoxDecoration(
+                      color: Colors.white24,
+                      borderRadius: BorderRadius.circular(99),
+                    ),
+                  ),
+                  const Row(
+                    children: <Widget>[
+                      Icon(
+                        CupertinoIcons.location_north_line_fill,
+                        color: _kBlue,
+                        size: 18,
+                      ),
+                      SizedBox(width: 8),
+                      Text(
+                        'MAPBOX CONTROLS',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 16,
+                          fontWeight: FontWeight.w900,
+                          letterSpacing: 1,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 14),
+                  _MapboxControlCard(
+                    title: 'Standard preset',
+                    subtitle: 'Day, dusk, dawn, night',
+                    child: _MapboxInlineButton(
+                      label: widget.mapboxPreset.label,
+                      icon: CupertinoIcons.sparkles,
+                      color: _kGoldSoft,
+                      onTap: () =>
+                          widget.onPresetChanged(widget.mapboxPreset.next),
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  _MapboxControlCard(
+                    title: 'Native / Web fallback',
+                    subtitle: widget.mapboxRuntimeMode.description,
+                    child: _MapboxInlineButton(
+                      label: widget.mapboxRuntimeMode.label,
+                      icon: CupertinoIcons.arrow_2_circlepath,
+                      color: _kGreen,
+                      onTap: () => widget
+                          .onRuntimeChanged(widget.mapboxRuntimeMode.next),
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  _MapboxControlCard(
+                    title: 'Directions API route planning',
+                    subtitle: 'Plan from replay/current point to destination',
+                    child: Column(
+                      children: <Widget>[
+                        Row(
+                          children: <Widget>[
+                            Expanded(
+                              child: _CoordinateField(
+                                controller: _latCtrl,
+                                placeholder: 'Lat',
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: _CoordinateField(
+                                controller: _lngCtrl,
+                                placeholder: 'Lng',
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 8),
+                        Row(
+                          children: <Widget>[
+                            Expanded(
+                              child: _MapboxInlineButton(
+                                label: _profile.label,
+                                icon: CupertinoIcons.car_detailed,
+                                color: _kBlue,
+                                onTap: () {
+                                  setState(() => _profile = _profile.next);
+                                },
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            SizedBox(
+                              width: 92,
+                              child: _MapboxInlineButton(
+                                label: 'DEMO',
+                                icon: CupertinoIcons.map_pin_ellipse,
+                                color: _kGoldSoft,
+                                onTap: _useDemoPoint,
+                                fullWidth: false,
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 8),
+                        _MapboxInlineButton(
+                          label: widget.directionsLoading
+                              ? 'PLANNING...'
+                              : 'PLAN ROUTE',
+                          icon: widget.directionsLoading
+                              ? CupertinoIcons.hourglass
+                              : CupertinoIcons.location_fill,
+                          color: _kGreen,
+                          onTap: widget.directionsLoading ? () {} : _submit,
+                        ),
+                      ],
+                    ),
+                  ),
+                  if (widget.plannedRoute != null) ...<Widget>[
+                    const SizedBox(height: 10),
+                    _MapboxControlCard(
+                      title: 'Planned route',
+                      subtitle:
+                          '${widget.plannedRoute!.distanceLabel} · ${widget.plannedRoute!.durationLabel()} · ${widget.plannedRoute!.profile.label}',
+                      child: _MapboxInlineButton(
+                        label: 'CLEAR ROUTE',
+                        icon: CupertinoIcons.xmark_circle_fill,
+                        color: _kRed,
+                        onTap: widget.onClearRoute,
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _MapboxControlCard extends StatelessWidget {
+  const _MapboxControlCard({
+    required this.title,
+    required this.subtitle,
+    required this.child,
+  });
+
+  final String title;
+  final String subtitle;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: double.infinity,
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: Colors.white.withValues(alpha: 0.045),
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            Text(
+              title,
+              maxLines: 1,
+              overflow: TextOverflow.clip,
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 13,
+                fontWeight: FontWeight.w900,
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              subtitle,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                color: Colors.white54,
+                fontSize: 10,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+            const SizedBox(height: 10),
+            SizedBox(
+              width: double.infinity,
+              child: child,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _CoordinateField extends StatelessWidget {
+  const _CoordinateField({
+    required this.controller,
+    required this.placeholder,
+  });
+
+  final TextEditingController controller;
+  final String placeholder;
+
+  @override
+  Widget build(BuildContext context) {
+    return CupertinoTextField(
+      controller: controller,
+      placeholder: placeholder,
+      keyboardType: const TextInputType.numberWithOptions(
+        signed: true,
+        decimal: true,
+      ),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      style: const TextStyle(
+        color: Colors.white,
+        fontSize: 13,
+        fontWeight: FontWeight.w800,
+      ),
+      placeholderStyle: const TextStyle(
+        color: Colors.white38,
+        fontSize: 12,
+        fontWeight: FontWeight.w800,
+      ),
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.38),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+      ),
+    );
+  }
+}
+
+class _MapboxInlineButton extends StatelessWidget {
+  const _MapboxInlineButton({
+    required this.label,
+    required this.icon,
+    required this.color,
+    required this.onTap,
+    this.fullWidth = true,
+  });
+
+  final String label;
+  final IconData icon;
+  final Color color;
+  final VoidCallback onTap;
+  final bool fullWidth;
+
+  @override
+  Widget build(BuildContext context) {
+    final Widget content = _PressableButton(
+      onTap: onTap,
+      child: Container(
+        height: 42,
+        width: fullWidth ? double.infinity : null,
+        constraints: fullWidth
+            ? const BoxConstraints.expand(height: 42)
+            : const BoxConstraints(
+                minWidth: 74,
+                maxWidth: 150,
+                minHeight: 42,
+                maxHeight: 42,
+              ),
+        padding: const EdgeInsets.symmetric(horizontal: 10),
+        decoration: BoxDecoration(
+          color: color.withValues(alpha: 0.13),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: color.withValues(alpha: 0.22)),
+        ),
+        child: Row(
+          mainAxisSize: fullWidth ? MainAxisSize.max : MainAxisSize.min,
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: <Widget>[
+            Icon(icon, color: color, size: 14),
+            const SizedBox(width: 7),
+            Flexible(
+              fit: FlexFit.loose,
+              child: Text(
+                label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                softWrap: false,
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: color,
+                  fontSize: 10,
+                  fontWeight: FontWeight.w900,
+                  letterSpacing: 0.7,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    if (fullWidth) {
+      return SizedBox(width: double.infinity, height: 42, child: content);
+    }
+
+    return SizedBox(height: 42, child: content);
+  }
+}
+
 class _EmptyMapState extends StatefulWidget {
-  const _EmptyMapState();
+  const _EmptyMapState({
+    required this.mapStyle,
+    required this.isLive,
+  });
+
+  final MapStyle mapStyle;
+  final bool isLive;
 
   @override
   State<_EmptyMapState> createState() => _EmptyMapStateState();
@@ -3291,100 +4883,212 @@ class _EmptyMapState extends StatefulWidget {
 
 class _EmptyMapStateState extends State<_EmptyMapState>
     with SingleTickerProviderStateMixin {
+  static const LatLng _fallbackCenter = LatLng(11.5564, 104.9282);
+
   late final AnimationController _ctrl = AnimationController(
     vsync: this,
     duration: const Duration(seconds: 3),
   )..repeat();
 
+  final fm.MapController _emptyMapController = fm.MapController();
+
   @override
   void dispose() {
     _ctrl.dispose();
+    try {
+      _emptyMapController.dispose();
+    } catch (_) {}
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      color: _kBg,
-      alignment: Alignment.center,
-      padding: const EdgeInsets.symmetric(horizontal: 32),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: <Widget>[
-          // Animated scanning ring
-          SizedBox(
-            width: 100,
-            height: 100,
-            child: Stack(
-              alignment: Alignment.center,
+    final bool retina = MediaQuery.devicePixelRatioOf(context) > 1.0;
+    final String title =
+        widget.isLive ? 'Waiting for GPS Route' : 'No Saved Route Points';
+    final String subtitle = widget.isLive
+        ? 'Start tracking and move a short distance\nto draw your live route here.'
+        : 'This trip has no saved GPS points.\nSave a trip with route points to replay it.';
+
+    return Stack(
+      children: <Widget>[
+        Positioned.fill(
+          child: fm.FlutterMap(
+            mapController: _emptyMapController,
+            options: const fm.MapOptions(
+              initialCenter: _fallbackCenter,
+              initialZoom: 14.5,
+              interactionOptions: fm.InteractionOptions(
+                flags: fm.InteractiveFlag.drag |
+                    fm.InteractiveFlag.pinchZoom |
+                    fm.InteractiveFlag.doubleTapZoom,
+              ),
+            ),
+            children: <Widget>[
+              fm.TileLayer(
+                key: ValueKey<MapStyle>(widget.mapStyle),
+                urlTemplate: widget.mapStyle.tileUrlTemplate,
+                subdomains: widget.mapStyle.subdomains,
+                maxZoom: _kMaxZoom,
+                minZoom: _kMinZoom,
+                retinaMode: retina,
+                userAgentPackageName: 'com.trackpro.ai',
+                tileBuilder: (_, Widget tile, __) {
+                  if (widget.mapStyle == MapStyle.dark) {
+                    return ColorFiltered(
+                      colorFilter: ColorFilter.mode(
+                        Colors.black.withValues(alpha: 0.18),
+                        BlendMode.darken,
+                      ),
+                      child: tile,
+                    );
+                  }
+                  return tile;
+                },
+                errorTileCallback: (
+                  fm.TileImage tile,
+                  Object error,
+                  StackTrace? stackTrace,
+                ) {
+                  debugPrint('EmptyMap tile error: $error');
+                },
+              ),
+            ],
+          ),
+        ),
+        Positioned.fill(
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              gradient: RadialGradient(
+                center: Alignment.center,
+                radius: 1.2,
+                colors: <Color>[
+                  Colors.black.withValues(alpha: 0.12),
+                  Colors.black.withValues(alpha: 0.72),
+                  _kBg.withValues(alpha: 0.94),
+                ],
+                stops: const <double>[0.0, 0.58, 1.0],
+              ),
+            ),
+          ),
+        ),
+        Center(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 32),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
               children: <Widget>[
-                AnimatedBuilder(
-                  animation: _ctrl,
-                  builder: (_, __) {
-                    return Transform.rotate(
-                      angle: _ctrl.value * 2 * math.pi,
-                      child: Container(
-                        width: 90,
-                        height: 90,
+                SizedBox(
+                  width: 104,
+                  height: 104,
+                  child: Stack(
+                    alignment: Alignment.center,
+                    children: <Widget>[
+                      AnimatedBuilder(
+                        animation: _ctrl,
+                        builder: (_, __) {
+                          final double value = _ctrl.value;
+                          return Container(
+                            width: 54 + value * 38,
+                            height: 54 + value * 38,
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              color: _kGold.withValues(
+                                alpha: (1.0 - value) * 0.12,
+                              ),
+                              border: Border.all(
+                                color: _kGold.withValues(
+                                  alpha: (1.0 - value) * 0.24,
+                                ),
+                                width: 1.4,
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+                      Container(
+                        width: 62,
+                        height: 62,
                         decoration: BoxDecoration(
                           shape: BoxShape.circle,
-                          border: Border.all(
-                            color: Colors.transparent,
-                          ),
-                          gradient: SweepGradient(
+                          gradient: RadialGradient(
                             colors: <Color>[
-                              _kGold.withValues(alpha: 0.0),
-                              _kGold.withValues(alpha: 0.5),
-                              _kGold.withValues(alpha: 0.0),
+                              _kGoldSoft.withValues(alpha: 0.35),
+                              _kGold.withValues(alpha: 0.16),
+                              Colors.black.withValues(alpha: 0.36),
                             ],
                           ),
+                          border: Border.all(
+                            color: _kGold.withValues(alpha: 0.24),
+                          ),
+                          boxShadow: <BoxShadow>[
+                            BoxShadow(
+                              color: _kGold.withValues(alpha: 0.18),
+                              blurRadius: 22,
+                            ),
+                          ],
+                        ),
+                        child: const Icon(
+                          CupertinoIcons.map,
+                          color: _kGoldSoft,
+                          size: 28,
                         ),
                       ),
-                    );
-                  },
+                    ],
+                  ),
                 ),
+                const SizedBox(height: 18),
+                Text(
+                  title,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 19,
+                    fontWeight: FontWeight.w900,
+                    letterSpacing: 0.4,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  subtitle,
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: Colors.white.withValues(alpha: 0.52),
+                    height: 1.48,
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: 18),
                 Container(
-                  width: 70,
-                  height: 70,
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 8,
+                  ),
                   decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: _kGold.withValues(alpha: 0.07),
+                    color: Colors.white.withValues(alpha: 0.045),
+                    borderRadius: BorderRadius.circular(999),
                     border: Border.all(
-                      color: _kGold.withValues(alpha: 0.2),
+                      color: Colors.white.withValues(alpha: 0.07),
                     ),
                   ),
-                  child: const Icon(
-                    CupertinoIcons.map,
-                    color: _kGoldSoft,
-                    size: 30,
+                  child: Text(
+                    widget.isLive
+                        ? 'Need at least 2 GPS points'
+                        : '0 saved route points',
+                    style: TextStyle(
+                      color: Colors.white.withValues(alpha: 0.44),
+                      fontSize: 10,
+                      fontWeight: FontWeight.w900,
+                      letterSpacing: 0.6,
+                    ),
                   ),
                 ),
               ],
             ),
           ),
-          const SizedBox(height: 22),
-          const Text(
-            'No Route Data',
-            style: TextStyle(
-              color: Colors.white,
-              fontSize: 22,
-              fontWeight: FontWeight.w900,
-              letterSpacing: 0.5,
-            ),
-          ),
-          const SizedBox(height: 8),
-          Text(
-            'Start tracking to see your route,\nspeed graph, and live map here.',
-            textAlign: TextAlign.center,
-            style: TextStyle(
-              color: Colors.white.withValues(alpha: 0.45),
-              height: 1.55,
-              fontSize: 13,
-              fontWeight: FontWeight.w500,
-            ),
-          ),
-        ],
-      ),
+        ),
+      ],
     );
   }
 }

@@ -279,17 +279,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
     required String message,
     required Color color,
   }) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(message),
-        backgroundColor: color,
-        behavior: SnackBarBehavior.floating,
-        margin: const EdgeInsets.all(16),
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(14),
+    if (!mounted) return;
+
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Text(message),
+          backgroundColor: color,
+          behavior: SnackBarBehavior.floating,
+          margin: const EdgeInsets.all(16),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(14),
+          ),
         ),
-      ),
-    );
+      );
   }
 
   bool get _hasLocationAccess {
@@ -336,6 +340,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ),
               slivers: <Widget>[
                 CupertinoSliverNavigationBar(
+                  heroTag: 'settings_screen_nav_bar',
+                  transitionBetweenRoutes: false,
                   largeTitle: const Text(
                     'Settings',
                     style: TextStyle(

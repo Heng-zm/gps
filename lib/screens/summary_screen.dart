@@ -11,6 +11,8 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../models/trip_data.dart';
 import '../services/settings_service.dart';
+import '../services/trip_export_service.dart';
+import '../services/offline_sync_queue.dart';
 import '../widgets/ai_analysis_card.dart';
 import '../widgets/ai_chat_sheet.dart';
 import 'map_screen.dart';
@@ -156,6 +158,7 @@ class _SummaryScreenState extends State<SummaryScreen> {
     _settings.addListener(_onSettingsChanged);
     _validPoints = _validatedPoints(widget.summary.points);
     _routeQuality = _RouteQualitySnapshot.fromPoints(_validPoints);
+    OfflineSyncQueue.instance.loadStatus();
     _checkSavedState();
   }
 
@@ -222,26 +225,34 @@ class _SummaryScreenState extends State<SummaryScreen> {
     HapticFeedback.mediumImpact();
 
     try {
-      final bool success = await _saveSummaryToHistory(widget.summary);
+      final _SaveTripResult result =
+          await _saveSummaryToHistory(widget.summary);
 
       if (!mounted) return;
 
       setState(() {
         _isSaving = false;
-        _isSaved = success;
+        _isSaved = result.savedLocally;
       });
 
-      if (success) {
+      if (result.syncedToCloud) {
         HapticFeedback.lightImpact();
         _showSnack(
-          message: 'Trip saved to history.',
+          message: 'Trip saved to cloud history.',
           color: _kTeal,
+          darkText: true,
+        );
+      } else if (result.savedLocally) {
+        HapticFeedback.lightImpact();
+        _showSnack(
+          message: 'Saved offline. Will sync when internet returns.',
+          color: _kGold,
           darkText: true,
         );
       } else {
         HapticFeedback.heavyImpact();
         _showSnack(
-          message: 'Save failed. Check history storage.',
+          message: 'Save failed. Please try again.',
           color: _kRed,
         );
       }
@@ -259,7 +270,7 @@ class _SummaryScreenState extends State<SummaryScreen> {
     }
   }
 
-  Future<bool> _saveSummaryToHistory(TripSummary summary) async {
+  Future<_SaveTripResult> _saveSummaryToHistory(TripSummary summary) async {
     final Map<String, dynamic> payload = _summaryToJson(summary);
 
     try {
@@ -268,24 +279,52 @@ class _SummaryScreenState extends State<SummaryScreen> {
           .upsert(payload, onConflict: 'id');
 
       await _saveLocalMirror(payload);
+      await OfflineSyncQueue.instance.remove(summary.id);
 
-      return true;
+      return const _SaveTripResult(
+        savedLocally: true,
+        syncedToCloud: true,
+      );
     } catch (error, stackTrace) {
       debugPrint('SummaryScreen Supabase save error: $error\n$stackTrace');
 
-      // Do not silently mark as saved when cloud save fails. Keep a local mirror
-      // only as a recovery/cache copy.
+      bool localSaved = false;
+
       try {
         await _saveLocalMirror(payload);
+        await OfflineSyncQueue.instance.enqueueTrip(payload, error: error);
+        localSaved = true;
       } catch (localError, localStackTrace) {
         debugPrint(
-          'SummaryScreen local fallback save failed: '
+          'SummaryScreen offline queue save failed: '
           '$localError\n$localStackTrace',
         );
       }
 
-      return false;
+      return _SaveTripResult(
+        savedLocally: localSaved,
+        syncedToCloud: false,
+      );
     }
+  }
+
+  Future<void> _syncOfflineQueue() async {
+    HapticFeedback.selectionClick();
+
+    _showSnack(
+      message: 'Syncing offline trips...',
+      color: _kBlue,
+    );
+
+    final OfflineSyncResult result = await OfflineSyncQueue.instance.syncNow();
+
+    if (!mounted) return;
+
+    _showSnack(
+      message: result.message,
+      color: result.hasPending ? _kGold : _kGreen,
+      darkText: true,
+    );
   }
 
   Future<void> _saveLocalMirror(Map<String, dynamic> payload) async {
@@ -364,89 +403,37 @@ class _SummaryScreenState extends State<SummaryScreen> {
     );
   }
 
-  Future<void> _exportGpx() async {
+  Future<void> _exportTripFiles() async {
     HapticFeedback.selectionClick();
 
     if (_validPoints.length < 2) {
       _showSnack(
-        message: 'Not enough route points to export GPX.',
+        message: 'Not enough route points to export files.',
         color: _kGold,
         darkText: true,
       );
       return;
     }
 
-    final String gpx = _buildGpxText();
+    _showSnack(
+      message: 'Preparing GPX, CSV and KML files...',
+      color: _kBlue,
+      darkText: false,
+    );
 
-    await Clipboard.setData(ClipboardData(text: gpx));
+    final TripExportResult result = await TripExportService.shareTripFiles(
+      tripId: widget.summary.id,
+      date: widget.summary.date,
+      points: _validPoints,
+    );
 
     if (!mounted) return;
 
     _showSnack(
-      message: 'GPX copied. Paste it into a .gpx file.',
-      color: _kTeal,
-      darkText: true,
+      message: result.message,
+      color: result.success ? _kGreen : _kGold,
+      darkText: result.success,
     );
-  }
-
-  String _buildGpxText() {
-    final String name = 'TrackPro AI Trip ${widget.summary.id}';
-    final String time = widget.summary.date.toUtc().toIso8601String();
-
-    final StringBuffer buffer = StringBuffer()
-      ..writeln('<?xml version="1.0" encoding="UTF-8"?>')
-      ..writeln(
-        '<gpx version="1.1" creator="TrackPro AI" '
-        'xmlns="http://www.topografix.com/GPX/1/1" '
-        'xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" '
-        'xsi:schemaLocation="http://www.topografix.com/GPX/1/1 '
-        'http://www.topografix.com/GPX/1/1/gpx.xsd">',
-      )
-      ..writeln('  <metadata>')
-      ..writeln('    <name>${_xmlEscape(name)}</name>')
-      ..writeln('    <time>$time</time>')
-      ..writeln('  </metadata>')
-      ..writeln('  <trk>')
-      ..writeln('    <name>${_xmlEscape(name)}</name>')
-      ..writeln('    <trkseg>');
-
-    for (final TripPoint point in _validPoints) {
-      final double lat = point.position.latitude;
-      final double lng = point.position.longitude;
-      final double ele = _safeDouble(point.altitudeFt) * 0.3048;
-
-      buffer
-        ..write('      <trkpt lat="${lat.toStringAsFixed(7)}" ')
-        ..writeln('lon="${lng.toStringAsFixed(7)}">')
-        ..writeln('        <ele>${ele.toStringAsFixed(2)}</ele>')
-        ..writeln(
-            '        <time>${point.timestamp.toUtc().toIso8601String()}</time>')
-        ..writeln('        <extensions>')
-        ..writeln(
-          '          <speed_mph>${_safeDouble(point.speedMph).toStringAsFixed(2)}</speed_mph>',
-        )
-        ..writeln(
-          '          <accuracy_m>${_safeDouble(point.accuracyMeters).toStringAsFixed(1)}</accuracy_m>',
-        )
-        ..writeln('        </extensions>')
-        ..writeln('      </trkpt>');
-    }
-
-    buffer
-      ..writeln('    </trkseg>')
-      ..writeln('  </trk>')
-      ..writeln('</gpx>');
-
-    return buffer.toString();
-  }
-
-  static String _xmlEscape(String value) {
-    return value
-        .replaceAll('&', '&amp;')
-        .replaceAll('<', '&lt;')
-        .replaceAll('>', '&gt;')
-        .replaceAll('"', '&quot;')
-        .replaceAll("'", '&apos;');
   }
 
   void _showSnack({
@@ -622,12 +609,18 @@ Date: ${widget.summary.date}
                             _QuickActionsRow(
                               onMap: _openMap,
                               onCopy: _copySummary,
-                              onExportGpx: _exportGpx,
+                              onExportFiles: _exportTripFiles,
                               onToggleCharts: () {
                                 HapticFeedback.selectionClick();
                                 setState(() => _showCharts = !_showCharts);
                               },
                               chartsVisible: _showCharts,
+                            ),
+                            const SizedBox(height: 14),
+                            _OfflineSyncCard(
+                              pendingCount:
+                                  OfflineSyncQueue.instance.pendingCount,
+                              onSync: _syncOfflineQueue,
                             ),
                             const SizedBox(height: 14),
                             AiAnalysisCard(summary: summary),
@@ -1216,18 +1209,142 @@ class _MiniMetric extends StatelessWidget {
   }
 }
 
+class _SaveTripResult {
+  const _SaveTripResult({
+    required this.savedLocally,
+    required this.syncedToCloud,
+  });
+
+  final bool savedLocally;
+  final bool syncedToCloud;
+}
+
+class _OfflineSyncCard extends StatelessWidget {
+  const _OfflineSyncCard({
+    required this.pendingCount,
+    required this.onSync,
+  });
+
+  final ValueNotifier<int> pendingCount;
+  final VoidCallback onSync;
+
+  @override
+  Widget build(BuildContext context) {
+    return ValueListenableBuilder<int>(
+      valueListenable: pendingCount,
+      builder: (_, int count, __) {
+        if (count <= 0) return const SizedBox.shrink();
+
+        return _GlassCard(
+          radius: 20,
+          padding: const EdgeInsets.all(14),
+          child: Row(
+            children: <Widget>[
+              Container(
+                width: 38,
+                height: 38,
+                decoration: BoxDecoration(
+                  color: _kGold.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(
+                    color: _kGold.withValues(alpha: 0.18),
+                  ),
+                ),
+                child: const Icon(
+                  CupertinoIcons.arrow_2_circlepath,
+                  color: _kGold,
+                  size: 18,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    const _SafeText(
+                      'OFFLINE SYNC QUEUE',
+                      maxLines: 1,
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w900,
+                        letterSpacing: 0.8,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    _SafeText(
+                      '$count trip${count == 1 ? '' : 's'} waiting for cloud sync',
+                      maxLines: 2,
+                      softWrap: true,
+                      style: const TextStyle(
+                        color: Colors.white54,
+                        fontSize: 11,
+                        height: 1.22,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 10),
+              _MiniSyncButton(onTap: onSync),
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _MiniSyncButton extends StatelessWidget {
+  const _MiniSyncButton({
+    required this.onTap,
+  });
+
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return CupertinoButton(
+      padding: EdgeInsets.zero,
+      minSize: 0,
+      onPressed: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 8),
+        decoration: BoxDecoration(
+          color: _kGold.withValues(alpha: 0.12),
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(
+            color: _kGold.withValues(alpha: 0.18),
+          ),
+        ),
+        child: const _SafeText(
+          'SYNC',
+          maxLines: 1,
+          style: TextStyle(
+            color: _kGold,
+            fontSize: 10,
+            fontWeight: FontWeight.w900,
+            letterSpacing: 0.7,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _QuickActionsRow extends StatelessWidget {
   const _QuickActionsRow({
     required this.onMap,
     required this.onCopy,
-    required this.onExportGpx,
+    required this.onExportFiles,
     required this.onToggleCharts,
     required this.chartsVisible,
   });
 
   final VoidCallback onMap;
   final VoidCallback onCopy;
-  final VoidCallback onExportGpx;
+  final VoidCallback onExportFiles;
   final VoidCallback onToggleCharts;
   final bool chartsVisible;
 
@@ -1262,9 +1379,9 @@ class _QuickActionsRow extends StatelessWidget {
             Expanded(
               child: _ActionChipButton(
                 icon: CupertinoIcons.arrow_down_doc_fill,
-                label: 'EXPORT GPX',
+                label: 'EXPORT FILES',
                 color: _kGreen,
-                onTap: onExportGpx,
+                onTap: onExportFiles,
               ),
             ),
             const SizedBox(width: 10),

@@ -43,6 +43,12 @@ import 'package:latlong2/latlong.dart';
 ///   distances.
 /// - `interpolatePointAtDistance` – interpolates an exact `LatLng` at a given
 ///   cumulative distance along a route.
+/// - `optimizePolylineForZoom` – chooses simplification automatically from map
+///   zoom and device pixel ratio.
+/// - `optimizeLiveRoutePolyline` – tuned helper for live tracking maps.
+/// - `removeGpsJumps` – filters impossible GPS jumps before smoothing.
+/// - `bearingAtDistance` – gets heading at a cumulative route distance.
+/// - `resamplePolylineByDistance` – creates evenly-spaced route points.
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -342,6 +348,209 @@ List<LatLng> optimizePolylineAdaptive(
   );
 }
 
+/// Optimizes a route for a map zoom level.
+///
+/// Lower zooms get stronger simplification. High zooms preserve more detail.
+/// [devicePixelRatio] allows high-density displays to retain slightly more
+/// detail without overproducing render points.
+List<LatLng> optimizePolylineForZoom(
+  List<LatLng> points, {
+  required double zoom,
+  double devicePixelRatio = 1.0,
+  int maxOutputPoints = _kDefaultMaxOutputPoints,
+  double duplicateTolerance = _kDefaultDuplicateTolerance,
+  bool preserveClosedLoop = false,
+}) {
+  final double safeZoom =
+      zoom.isFinite ? zoom.clamp(3.0, 22.0).toDouble() : 16.0;
+  final double dpr = devicePixelRatio.isFinite
+      ? devicePixelRatio.clamp(1.0, 4.0).toDouble()
+      : 1.0;
+
+  // Degree epsilon roughly maps to metres. We tune for visual route rendering,
+  // not survey accuracy.
+  final double epsilon = safeZoom >= 18
+      ? 0.000018 / dpr
+      : safeZoom >= 16
+          ? 0.000030 / dpr
+          : safeZoom >= 14
+              ? 0.000055 / dpr
+              : safeZoom >= 12
+                  ? 0.000090 / dpr
+                  : 0.000140 / dpr;
+
+  final int subdivisions = safeZoom >= 17
+      ? 8
+      : safeZoom >= 15
+          ? 6
+          : safeZoom >= 13
+              ? 4
+              : 2;
+
+  return optimizePolylineForMap(
+    points,
+    epsilon: epsilon,
+    tension: 0.5,
+    subdivisions: subdivisions,
+    maxOutputPoints: maxOutputPoints,
+    duplicateTolerance: duplicateTolerance,
+    preserveClosedLoop: preserveClosedLoop,
+  );
+}
+
+/// Fast helper tuned for live GPS rendering.
+///
+/// It removes impossible jumps, simplifies the path, and smooths the route
+/// without generating too many points for Flutter/Mapbox render layers.
+List<LatLng> optimizeLiveRoutePolyline(
+  List<LatLng> points, {
+  double maxJumpMeters = 160.0,
+  int maxOutputPoints = _kDefaultMaxOutputPoints,
+  bool preserveClosedLoop = false,
+}) {
+  final List<LatLng> filtered = removeGpsJumps(
+    points,
+    maxJumpMeters: maxJumpMeters,
+  );
+
+  return optimizePolylineAdaptive(
+    filtered,
+    maxOutputPoints: maxOutputPoints.clamp(2, 5000).toInt(),
+    preserveClosedLoop: preserveClosedLoop,
+  );
+}
+
+/// Removes isolated GPS jumps.
+///
+/// This uses distance-only filtering because this utility does not receive
+/// timestamps. It is intentionally conservative: it keeps the first point and
+/// only drops a point when the jump from the previous kept point is too large.
+List<LatLng> removeGpsJumps(
+  List<LatLng> points, {
+  double maxJumpMeters = 160.0,
+  double duplicateTolerance = _kDefaultDuplicateTolerance,
+}) {
+  final List<LatLng> cleaned = _cleanPoints(
+    points,
+    duplicateTolerance: duplicateTolerance,
+  );
+
+  if (cleaned.length <= 2) return List<LatLng>.unmodifiable(cleaned);
+
+  final double safeMaxJump =
+      maxJumpMeters.isFinite && maxJumpMeters > 0.0 ? maxJumpMeters : 160.0;
+
+  final List<LatLng> result = <LatLng>[cleaned.first];
+
+  for (int i = 1; i < cleaned.length; i++) {
+    final LatLng previous = result.last;
+    final LatLng current = cleaned[i];
+
+    final double distance = calculateDistanceMeters(previous, current);
+
+    if (distance <= safeMaxJump || i == cleaned.length - 1) {
+      result.add(current);
+    }
+  }
+
+  return List<LatLng>.unmodifiable(result);
+}
+
+/// Resamples a route into roughly equal-distance points.
+///
+/// Useful for replay markers, animated route previews, and progress tracking.
+List<LatLng> resamplePolylineByDistance(
+  List<LatLng> points, {
+  double spacingMeters = 10.0,
+  int maxPoints = 2500,
+}) {
+  final List<LatLng> cleaned = _cleanPoints(points);
+
+  if (cleaned.length < 2) return List<LatLng>.unmodifiable(cleaned);
+
+  final double safeSpacing =
+      spacingMeters.isFinite && spacingMeters > 0.1 ? spacingMeters : 10.0;
+  final int safeMax = maxPoints.clamp(2, 10000).toInt();
+
+  final double total = calculatePolylineDistanceMeters(cleaned);
+  if (total <= 0.0) return List<LatLng>.unmodifiable(cleaned);
+
+  final int targetCount =
+      math.min((total / safeSpacing).ceil() + 1, safeMax).toInt();
+  final List<LatLng> result = <LatLng>[];
+
+  for (int i = 0; i < targetCount; i++) {
+    final double distance = i == targetCount - 1
+        ? total
+        : (i * safeSpacing).clamp(0.0, total).toDouble();
+
+    final LatLng? point = interpolatePointAtDistance(cleaned, distance);
+    if (point != null) {
+      _addIfDifferent(result, point, _kDefaultDuplicateTolerance);
+    }
+  }
+
+  if (result.isEmpty || !_nearlySame(result.last, cleaned.last, 0.0)) {
+    _addIfDifferent(result, cleaned.last, _kDefaultDuplicateTolerance);
+  }
+
+  return List<LatLng>.unmodifiable(result);
+}
+
+/// Returns route bearing at a cumulative distance.
+///
+/// Useful for replay vehicle heading or navigation puck orientation.
+double? bearingAtDistance(
+  List<LatLng> points,
+  double distanceMeters, {
+  double lookAheadMeters = 8.0,
+}) {
+  if (!distanceMeters.isFinite || distanceMeters < 0.0) return null;
+
+  final List<LatLng> cleaned = _cleanPoints(points);
+  if (cleaned.length < 2) return null;
+
+  final double safeLookAhead =
+      lookAheadMeters.isFinite && lookAheadMeters > 0.0 ? lookAheadMeters : 8.0;
+
+  final LatLng? a = interpolatePointAtDistance(cleaned, distanceMeters);
+  final LatLng? b = interpolatePointAtDistance(
+    cleaned,
+    distanceMeters + safeLookAhead,
+  );
+
+  if (a == null || b == null) return null;
+  return calculateBearingDegrees(a, b);
+}
+
+/// Returns cumulative distance at the nearest point on a route.
+///
+/// This is useful for progress bars or snapping a live GPS point to a route.
+double? cumulativeDistanceAtClosestPoint(
+  List<LatLng> polyline,
+  LatLng query,
+) {
+  final List<LatLng> cleaned = _cleanPoints(polyline, removeDuplicates: false);
+  final ClosestPointResult? closest = closestPointOnPolyline(cleaned, query);
+
+  if (closest == null) return null;
+
+  double total = 0.0;
+
+  for (int i = 1; i <= closest.segmentIndex; i++) {
+    total += calculateDistanceMeters(cleaned[i - 1], cleaned[i]);
+  }
+
+  if (closest.segmentIndex < cleaned.length - 1) {
+    total += calculateDistanceMeters(
+      cleaned[closest.segmentIndex],
+      closest.point,
+    );
+  }
+
+  return total.isFinite ? total : null;
+}
+
 // ---------------------------------------------------------------------------
 // Downsampling
 // ---------------------------------------------------------------------------
@@ -578,9 +787,7 @@ ClosestPointResult? closestPointOnPolyline(
     final LatLng end = cleaned[i + 1];
 
     final LatLng projected = _projectPointOnSegment(query, start, end);
-    final double dx = query.longitude - projected.longitude;
-    final double dy = query.latitude - projected.latitude;
-    final double distSq = dx * dx + dy * dy;
+    final double distSq = _getSqSegDist(query, start, end);
 
     if (distSq < bestDistSq) {
       bestDistSq = distSq;
@@ -660,7 +867,7 @@ SplitPolylineResult? splitPolylineAtDistance(
       final double t =
           segLen > 0.0 ? (distanceMeters - cumulative) / segLen : 0.0;
       final LatLng split =
-          _lerpLatLng(cleaned[i - 1], cleaned[i], t.clamp(0.0, 1.0));
+          _lerpLatLng(cleaned[i - 1], cleaned[i], t.clamp(0.0, 1.0).toDouble());
 
       final List<LatLng> before = [
         ...cleaned.sublist(0, i),
@@ -741,7 +948,8 @@ LatLng? interpolatePointAtDistance(
     if (next >= distanceMeters) {
       final double t =
           segLen > 0.0 ? (distanceMeters - cumulative) / segLen : 0.0;
-      return _lerpLatLng(cleaned[i - 1], cleaned[i], t.clamp(0.0, 1.0));
+      return _lerpLatLng(
+          cleaned[i - 1], cleaned[i], t.clamp(0.0, 1.0).toDouble());
     }
 
     cumulative = next;
@@ -756,27 +964,35 @@ LatLng? interpolatePointAtDistance(
 
 /// Squared perpendicular distance from [point] to segment [start]–[end].
 ///
-/// Uses longitude as x and latitude as y. Avoids sqrt for performance.
-///
-/// Performance: early-exit for zero-length segments.
+/// Uses a cheap local equirectangular projection instead of raw degree-space.
+/// This keeps simplification more consistent at different latitudes while still
+/// avoiding expensive haversine calls inside Douglas-Peucker.
 double _getSqSegDist(LatLng point, LatLng start, LatLng end) {
-  double x = start.longitude;
+  final double meanLat = _degToRad(
+    (point.latitude + start.latitude + end.latitude) / 3.0,
+  );
+  final double lngScale = math.cos(meanLat).abs().clamp(0.01, 1.0).toDouble();
+
+  double x = start.longitude * lngScale;
   double y = start.latitude;
 
-  final double dx = end.longitude - x;
-  final double dy = end.latitude - y;
+  final double endX = end.longitude * lngScale;
+  final double endY = end.latitude;
+  final double pointX = point.longitude * lngScale;
+  final double pointY = point.latitude;
+
+  final double dx = endX - x;
+  final double dy = endY - y;
 
   if (dx != 0.0 || dy != 0.0) {
     final double denominator = dx * dx + dy * dy;
 
     if (denominator > 0.0) {
-      final double t =
-          ((point.longitude - x) * dx + (point.latitude - y) * dy) /
-              denominator;
+      final double t = ((pointX - x) * dx + (pointY - y) * dy) / denominator;
 
       if (t >= 1.0) {
-        x = end.longitude;
-        y = end.latitude;
+        x = endX;
+        y = endY;
       } else if (t > 0.0) {
         x += dx * t;
         y += dy * t;
@@ -784,30 +1000,40 @@ double _getSqSegDist(LatLng point, LatLng start, LatLng end) {
     }
   }
 
-  final double ex = point.longitude - x;
-  final double ey = point.latitude - y;
+  final double ex = pointX - x;
+  final double ey = pointY - y;
 
   return ex * ex + ey * ey;
 }
 
 /// Projects [query] onto segment [start]–[end] and returns the nearest point.
 LatLng _projectPointOnSegment(LatLng query, LatLng start, LatLng end) {
-  final double dx = end.longitude - start.longitude;
-  final double dy = end.latitude - start.latitude;
+  final double meanLat = _degToRad(
+    (query.latitude + start.latitude + end.latitude) / 3.0,
+  );
+  final double lngScale = math.cos(meanLat).abs().clamp(0.01, 1.0).toDouble();
 
+  final double startX = start.longitude * lngScale;
+  final double startY = start.latitude;
+  final double endX = end.longitude * lngScale;
+  final double endY = end.latitude;
+  final double queryX = query.longitude * lngScale;
+  final double queryY = query.latitude;
+
+  final double dx = endX - startX;
+  final double dy = endY - startY;
   final double denominator = dx * dx + dy * dy;
 
   if (denominator == 0.0) return start;
 
-  final double t = ((query.longitude - start.longitude) * dx +
-          (query.latitude - start.latitude) * dy) /
-      denominator;
+  final double t =
+      ((queryX - startX) * dx + (queryY - startY) * dy) / denominator;
 
-  final double clamped = t.clamp(0.0, 1.0);
+  final double clamped = t.clamp(0.0, 1.0).toDouble();
 
   return LatLng(
-    start.latitude + dy * clamped,
-    start.longitude + dx * clamped,
+    start.latitude + (end.latitude - start.latitude) * clamped,
+    start.longitude + (end.longitude - start.longitude) * clamped,
   );
 }
 
@@ -836,9 +1062,7 @@ LatLng _catmullRom(
   final double b1 = (2.0 - tension) * t3 + (tension - 3.0) * t2 + 1.0;
   final double b2 =
       (tension - 2.0) * t3 + (3.0 - 2.0 * tension) * t2 + tension * t;
-  final double b3 = tension * t3 -
-      tension *
-          t2; // FIX: was (tension*t3 - tension*t2) — sign was correct but b1 had wrong sign previously causing drift
+  final double b3 = tension * t3 - tension * t2;
 
   return LatLng(
     b0 * p0.latitude + b1 * p1.latitude + b2 * p2.latitude + b3 * p3.latitude,
@@ -856,7 +1080,8 @@ List<LatLng> _linearSubdivide(
   int subdivisions, {
   required int maxOutputPoints,
 }) {
-  final int count = math.min(subdivisions.clamp(1, 24) + 1, maxOutputPoints);
+  final int count =
+      math.min(subdivisions.clamp(1, 24) + 1, maxOutputPoints).toInt();
 
   if (count <= 2) return <LatLng>[a, b];
 
@@ -944,8 +1169,9 @@ List<LatLng> _cleanPoints(
           ? duplicateTolerance
           : _kDefaultDuplicateTolerance;
 
-  // Pre-allocate to avoid repeated reallocation.
-  final List<LatLng> cleaned = <LatLng>[]..length = 0;
+  // Dart lists do not expose capacity control. Keeping this growable list
+  // local and returning an unmodifiable view keeps allocation predictable.
+  final List<LatLng> cleaned = <LatLng>[];
 
   for (final LatLng point in points) {
     if (!_isValidLatLng(point)) continue;
@@ -1139,14 +1365,20 @@ class LatLngBoundsLite {
 
     return LatLngBoundsLite(
       southWest: LatLng(
-        (southWest.latitude - safeLatPad).clamp(_kMinLatitude, _kMaxLatitude),
+        (southWest.latitude - safeLatPad)
+            .clamp(_kMinLatitude, _kMaxLatitude)
+            .toDouble(),
         (southWest.longitude - safeLngPad)
-            .clamp(_kMinLongitude, _kMaxLongitude),
+            .clamp(_kMinLongitude, _kMaxLongitude)
+            .toDouble(),
       ),
       northEast: LatLng(
-        (northEast.latitude + safeLatPad).clamp(_kMinLatitude, _kMaxLatitude),
+        (northEast.latitude + safeLatPad)
+            .clamp(_kMinLatitude, _kMaxLatitude)
+            .toDouble(),
         (northEast.longitude + safeLngPad)
-            .clamp(_kMinLongitude, _kMaxLongitude),
+            .clamp(_kMinLongitude, _kMaxLongitude)
+            .toDouble(),
       ),
     );
   }
