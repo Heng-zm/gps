@@ -1,0 +1,189 @@
+name: Windows-exe-build
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    name: 🎉 Windows Release Build
+    runs-on: windows-latest
+
+    env:
+      APP_NAME: GPS-Tracker
+      APP_VERSION: 1.1.${{ github.run_number }}
+      ZIP_NAME: GPS-Tracker-Windows-v1.1.${{ github.run_number }}.zip
+      RELEASE_TAG: windows-v1.1.${{ github.run_number }}
+
+    steps:
+      - name: 📥 Checkout repository
+        uses: actions/checkout@v4
+
+      - name: 🛠️ Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.27.4'
+          channel: 'stable'
+          cache: true
+
+      - name: 🪟 Enable Windows desktop
+        shell: pwsh
+        run: |
+          flutter config --enable-windows-desktop
+          flutter doctor -v
+
+      - name: 🧹 Clean Flutter build
+        shell: pwsh
+        run: |
+          flutter clean
+          if (Test-Path "build") {
+            Remove-Item -Recurse -Force "build" -ErrorAction SilentlyContinue
+          }
+
+      - name: 📦 Install pub dependencies
+        shell: pwsh
+        run: flutter pub get
+
+      - name: 🔧 Generate missing Windows platform files if needed
+        shell: pwsh
+        run: |
+          if (!(Test-Path "windows")) {
+            flutter create --platforms=windows .
+          }
+
+      - name: 🏗️ Build Windows EXE release
+        shell: pwsh
+        run: |
+          flutter build windows --release `
+            --build-number=${{ github.run_number }} `
+            --build-name=${{ env.APP_VERSION }}
+
+      - name: 📁 Verify build output
+        id: verify
+        shell: pwsh
+        run: |
+          $OutputDir = "build\windows\x64\runner\Release"
+
+          if (!(Test-Path $OutputDir)) {
+            Write-Host "❌ Release output folder not found."
+            Get-ChildItem -Recurse "build\windows" -ErrorAction SilentlyContinue
+            exit 1
+          }
+
+          $Exe = Get-ChildItem $OutputDir -Filter "*.exe" | Select-Object -First 1
+
+          if ($null -eq $Exe) {
+            Write-Host "❌ EXE not found in $OutputDir"
+            Get-ChildItem -Recurse $OutputDir
+            exit 1
+          }
+
+          Write-Host "✅ Found EXE: $($Exe.FullName)"
+          "exe_name=$($Exe.Name)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "output_dir=$OutputDir" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: 📦 Package Windows release ZIP
+        id: package
+        shell: pwsh
+        run: |
+          $ZipName = "${{ env.ZIP_NAME }}"
+          $OutputDir = "${{ steps.verify.outputs.output_dir }}"
+
+          if ([string]::IsNullOrWhiteSpace($ZipName)) {
+            Write-Host "❌ ZIP_NAME is empty."
+            exit 1
+          }
+
+          if (!(Test-Path $OutputDir)) {
+            Write-Host "❌ Output folder missing: $OutputDir"
+            exit 1
+          }
+
+          if (Test-Path $ZipName) {
+            Remove-Item -Force $ZipName
+          }
+
+          Compress-Archive -Path "$OutputDir\*" -DestinationPath $ZipName -Force
+
+          if (!(Test-Path $ZipName)) {
+            Write-Host "❌ ZIP was not created."
+            exit 1
+          }
+
+          $Size = [Math]::Round((Get-Item $ZipName).Length / 1MB, 2)
+          Write-Host "✅ ZIP created: $ZipName"
+          Write-Host "✅ ZIP size: $Size MB"
+
+          "zip_name=$ZipName" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "zip_path=$ZipName" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: 📝 Generate install notes
+        shell: pwsh
+        run: |
+          @"
+          # GPS Tracker Windows ${{ env.APP_VERSION }}
+
+          ## Install
+          1. Download `${{ steps.package.outputs.zip_name }}`.
+          2. Extract it.
+          3. Run `${{ steps.verify.outputs.exe_name }}` inside the extracted folder.
+
+          ## Notes
+          - Keep all `.dll` files beside the `.exe`.
+          - Do not move only the `.exe` out of the folder.
+          - Windows Defender may scan the app on first launch.
+
+          ## Build
+          - Flutter: 3.27.4 stable
+          - Platform: Windows x64
+          - Build number: ${{ github.run_number }}
+          "@ | Out-File -FilePath "WINDOWS_INSTALL_NOTES.md" -Encoding utf8
+
+      - name: 🔎 Final package check
+        shell: pwsh
+        run: |
+          Write-Host "Version: ${{ env.APP_VERSION }}"
+          Write-Host "Release tag: ${{ env.RELEASE_TAG }}"
+          Write-Host "ZIP: ${{ steps.package.outputs.zip_path }}"
+          Write-Host "EXE: ${{ steps.verify.outputs.exe_name }}"
+
+          if (!(Test-Path "${{ steps.package.outputs.zip_path }}")) {
+            Write-Host "❌ Upload file missing."
+            exit 1
+          }
+
+      - name: 🚀 Upload Windows ZIP to GitHub Releases
+        uses: svenstaro/upload-release-action@v2
+        with:
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          file: ${{ steps.package.outputs.zip_path }}
+          asset_name: ${{ steps.package.outputs.zip_name }}
+          tag: ${{ env.RELEASE_TAG }}
+          overwrite: true
+          body: |
+            ## 📍 GPS Tracker — Windows v${{ env.APP_VERSION }}
+
+            | Field | Value |
+            |---|---|
+            | Platform | Windows x64 |
+            | Flutter | 3.27.4 |
+            | Build | ${{ github.run_number }} |
+            | Package | ZIP |
+
+            ### 🪟 Install
+            1. Download `${{ steps.package.outputs.zip_name }}`
+            2. Extract the ZIP
+            3. Run `${{ steps.verify.outputs.exe_name }}`
+
+            > Keep all `.dll` files in the same folder as the `.exe`.
+
+      - name: 📤 Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: GPS-Tracker-Windows-v${{ env.APP_VERSION }}
+          path: |
+            ${{ steps.package.outputs.zip_path }}
+            WINDOWS_INSTALL_NOTES.md
+          if-no-files-found: error

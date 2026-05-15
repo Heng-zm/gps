@@ -1,4 +1,4 @@
-// ignore_for_file: unused_element
+// ignore_for_file: unused_element, deprecated_member_use
 
 import 'dart:async';
 import 'dart:convert';
@@ -20,6 +20,7 @@ import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart' as mb;
 import '../models/trip_data.dart';
 import '../utils/smooth_polyline.dart';
 import '../config/mapbox_config.dart';
+
 
 // ─────────────────────────────────────────────────────────────────────────────
 // EXTENSIONS
@@ -332,6 +333,19 @@ class _PlannedRoute {
     if (h > 0) return '${h}h ${m.toString().padLeft(2, '0')}m';
     return '${m}m';
   }
+}
+
+
+class _MapboxPlaceResult {
+  const _MapboxPlaceResult({
+    required this.name,
+    required this.address,
+    required this.position,
+  });
+
+  final String name;
+  final String address;
+  final LatLng position;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1049,12 +1063,12 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
     setState(() => _directionsLoading = true);
 
     try {
-      final Uri uri = Uri.https(
-        'api.mapbox.com',
-        '/directions/v5/${profile.apiProfile}/'
-            '${start.longitude},${start.latitude};'
-            '${destination.longitude},${destination.latitude}',
-        <String, String>{
+      final Uri uri = Uri.parse(
+        'https://api.mapbox.com/directions/v5/${profile.apiProfile}/'
+        '${start.longitude},${start.latitude};'
+        '${destination.longitude},${destination.latitude}',
+      ).replace(
+        queryParameters: <String, String>{
           'alternatives': 'false',
           'geometries': 'geojson',
           'overview': 'full',
@@ -2695,11 +2709,11 @@ class _NativeMapboxLayerState extends State<_NativeMapboxLayer> {
           puckBearingEnabled: true,
           puckBearing: mb.PuckBearing.HEADING,
           pulsingEnabled: widget.isLive,
-          pulsingColor: _kBlue.toARGB32(),
+          pulsingColor: _kBlue.value,
           pulsingMaxRadius: 46,
           showAccuracyRing: widget.isLive,
-          accuracyRingColor: _kBlue.withValues(alpha: 0.18).toARGB32(),
-          accuracyRingBorderColor: _kBlue.withValues(alpha: 0.42).toARGB32(),
+          accuracyRingColor: _kBlue.withValues(alpha: 0.18).value,
+          accuracyRingBorderColor: _kBlue.withValues(alpha: 0.42).value,
         ),
       );
     } catch (error) {
@@ -2825,10 +2839,10 @@ class _NativeMapboxLayerState extends State<_NativeMapboxLayer> {
     await outer?.create(
       mb.PolylineAnnotationOptions(
         geometry: line,
-        lineColor: Colors.white.toARGB32(),
+        lineColor: Colors.white.value,
         lineWidth: outerWidth,
         lineOpacity: 0.86,
-        lineBorderColor: Colors.black.toARGB32(),
+        lineBorderColor: Colors.black.value,
         lineBorderWidth: 2.0,
         lineJoin: mb.LineJoin.ROUND,
       ),
@@ -2837,7 +2851,7 @@ class _NativeMapboxLayerState extends State<_NativeMapboxLayer> {
     await core?.create(
       mb.PolylineAnnotationOptions(
         geometry: line,
-        lineColor: color.toARGB32(),
+        lineColor: color.value,
         lineWidth: coreWidth,
         lineOpacity: 0.96,
         lineJoin: mb.LineJoin.ROUND,
@@ -4500,197 +4514,334 @@ class _MapboxControlsSheet extends StatefulWidget {
 }
 
 class _MapboxControlsSheetState extends State<_MapboxControlsSheet> {
-  late final TextEditingController _latCtrl;
-  late final TextEditingController _lngCtrl;
+  late final TextEditingController _searchCtrl;
+  late final FocusNode _searchFocusNode;
   _DirectionsProfile _profile = _DirectionsProfile.drivingTraffic;
+  _MapboxPlaceResult? _selectedPlace;
+  List<_MapboxPlaceResult> _results = const <_MapboxPlaceResult>[];
+  bool _searching = false;
+  int _searchToken = 0;
 
   @override
   void initState() {
     super.initState();
-    _latCtrl = TextEditingController();
-    _lngCtrl = TextEditingController();
+    _searchCtrl = TextEditingController();
+    _searchFocusNode = FocusNode();
   }
 
   @override
   void dispose() {
-    _latCtrl.dispose();
-    _lngCtrl.dispose();
+    _searchToken++;
+    _searchCtrl.dispose();
+    _searchFocusNode.dispose();
     super.dispose();
   }
 
-  Future<void> _submit() async {
-    final double? lat = double.tryParse(_latCtrl.text.trim());
-    final double? lng = double.tryParse(_lngCtrl.text.trim());
+  Future<void> _searchPlaces() async {
+    final String query = _searchCtrl.text.trim();
 
-    if (lat == null || lng == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Enter destination latitude and longitude.'),
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
+    if (query.length < 2) {
+      _showSheetSnack('Type a place name first.');
+      return;
+    }
+
+    if (_kMapboxAccessToken.isEmpty) {
+      _showSheetSnack('Mapbox token is missing.');
+      return;
+    }
+
+    _searchFocusNode.unfocus();
+
+    final int token = ++_searchToken;
+    setState(() {
+      _searching = true;
+      _results = const <_MapboxPlaceResult>[];
+      _selectedPlace = null;
+    });
+
+    try {
+      final Map<String, String> params = <String, String>{
+        'access_token': _kMapboxAccessToken,
+        'limit': '7',
+        'types':
+            'country,region,postcode,district,place,locality,neighborhood,address,poi',
+        'language': 'en',
+        'autocomplete': 'true',
+        'fuzzyMatch': 'true',
+      };
+
+      final Uri uri = Uri.parse(
+        'https://api.mapbox.com/geocoding/v5/mapbox.places/'
+        '${Uri.encodeComponent(query)}.json',
+      ).replace(queryParameters: params);
+
+      final http.Response response =
+          await http.get(uri).timeout(const Duration(seconds: 12));
+
+      if (!mounted || token != _searchToken) return;
+
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        debugPrint(
+          'Mapbox geocoding error ${response.statusCode}: ${response.body}',
+        );
+        _showSheetSnack(
+          'Location search failed (${response.statusCode}). Check token.',
+        );
+        return;
+      }
+
+      final Object? decoded = jsonDecode(response.body);
+      if (decoded is! Map<String, dynamic>) {
+        _showSheetSnack('Location search response was invalid.');
+        return;
+      }
+
+      final List<dynamic> features =
+          decoded['features'] as List<dynamic>? ?? <dynamic>[];
+      final List<_MapboxPlaceResult> nextResults = <_MapboxPlaceResult>[];
+
+      for (final dynamic item in features) {
+        if (item is! Map<String, dynamic>) continue;
+
+        final String name =
+            (item['text'] ?? item['place_name'] ?? '').toString().trim();
+        final String address = (item['place_name'] ?? '').toString().trim();
+        final List<dynamic> center = item['center'] as List<dynamic>? ?? [];
+
+        if (name.isEmpty || center.length < 2) continue;
+
+        final double? lng = (center[0] as num?)?.toDouble();
+        final double? lat = (center[1] as num?)?.toDouble();
+
+        if (lat == null || lng == null) continue;
+
+        final LatLng position = LatLng(lat, lng);
+        if (!_isValidLatLng(position)) continue;
+
+        nextResults.add(
+          _MapboxPlaceResult(
+            name: name,
+            address: address,
+            position: position,
+          ),
+        );
+      }
+
+      setState(() {
+        _results = List<_MapboxPlaceResult>.unmodifiable(nextResults);
+        if (nextResults.length == 1) {
+          _selectedPlace = nextResults.first;
+        }
+      });
+
+      if (nextResults.isEmpty) {
+        _showSheetSnack('No matching location found.');
+      }
+    } on TimeoutException {
+      if (mounted) _showSheetSnack('Location search timed out.');
+    } catch (error, stackTrace) {
+      debugPrint('Mapbox location search error: $error\n$stackTrace');
+      if (mounted) _showSheetSnack('Location search failed.');
+    } finally {
+      if (mounted && token == _searchToken) {
+        setState(() => _searching = false);
+      }
+    }
+  }
+
+  Future<void> _submit() async {
+    final _MapboxPlaceResult? place = _selectedPlace;
+
+    if (place == null) {
+      if (_results.isNotEmpty) {
+        _showSheetSnack('Tap a search result first.');
+      } else {
+        _showSheetSnack('Search and select a destination first.');
+      }
       return;
     }
 
     await widget.onPlanRoute(
-      destinationLat: lat,
-      destinationLng: lng,
+      destinationLat: place.position.latitude,
+      destinationLng: place.position.longitude,
       profile: _profile,
     );
   }
 
-  void _useDemoPoint() {
-    _latCtrl.text = '11.5621';
-    _lngCtrl.text = '104.8885';
+  void _quickSearch(String query) {
+    _searchCtrl.text = query;
+    unawaited(_searchPlaces());
+  }
+
+  void _showSheetSnack(String message) {
+    if (!mounted) return;
+
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Text(message),
+          behavior: SnackBarBehavior.floating,
+          duration: const Duration(seconds: 2),
+        ),
+      );
   }
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      margin: const EdgeInsets.only(top: 54),
-      decoration: const BoxDecoration(
-        color: _kSurface,
-        borderRadius: BorderRadius.vertical(top: Radius.circular(32)),
-      ),
-      child: SafeArea(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.fromLTRB(18, 12, 18, 28),
-          child: Center(
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 520),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: <Widget>[
-                  Container(
-                    width: 44,
-                    height: 4,
-                    margin: const EdgeInsets.only(bottom: 16),
-                    decoration: BoxDecoration(
-                      color: Colors.white24,
-                      borderRadius: BorderRadius.circular(99),
+    final double bottomInset = MediaQuery.viewInsetsOf(context).bottom;
+    final double maxHeight = MediaQuery.sizeOf(context).height * 0.92;
+
+    return AnimatedPadding(
+      duration: const Duration(milliseconds: 240),
+      curve: Curves.easeOutCubic,
+      padding: EdgeInsets.only(bottom: bottomInset),
+      child: Align(
+        alignment: Alignment.bottomCenter,
+        child: ConstrainedBox(
+          constraints: BoxConstraints(maxHeight: maxHeight),
+          child: ClipRRect(
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(34)),
+            child: BackdropFilter(
+              filter: ui.ImageFilter.blur(sigmaX: 22, sigmaY: 22),
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  color: _kSurface.withValues(alpha: 0.96),
+                  border: Border(
+                    top: BorderSide(
+                      color: Colors.white.withValues(alpha: 0.10),
                     ),
                   ),
-                  const Row(
-                    children: <Widget>[
-                      Icon(
-                        CupertinoIcons.location_north_line_fill,
-                        color: _kBlue,
-                        size: 18,
-                      ),
-                      SizedBox(width: 8),
-                      Text(
-                        'MAPBOX CONTROLS',
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontSize: 16,
-                          fontWeight: FontWeight.w900,
-                          letterSpacing: 1,
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 14),
-                  _MapboxControlCard(
-                    title: 'Standard preset',
-                    subtitle: 'Day, dusk, dawn, night',
-                    child: _MapboxInlineButton(
-                      label: widget.mapboxPreset.label,
-                      icon: CupertinoIcons.sparkles,
-                      color: _kGoldSoft,
-                      onTap: () =>
-                          widget.onPresetChanged(widget.mapboxPreset.next),
-                    ),
-                  ),
-                  const SizedBox(height: 10),
-                  _MapboxControlCard(
-                    title: 'Native / Web fallback',
-                    subtitle: widget.mapboxRuntimeMode.description,
-                    child: _MapboxInlineButton(
-                      label: widget.mapboxRuntimeMode.label,
-                      icon: CupertinoIcons.arrow_2_circlepath,
-                      color: _kGreen,
-                      onTap: () => widget
-                          .onRuntimeChanged(widget.mapboxRuntimeMode.next),
-                    ),
-                  ),
-                  const SizedBox(height: 10),
-                  _MapboxControlCard(
-                    title: 'Directions API route planning',
-                    subtitle: 'Plan from replay/current point to destination',
-                    child: Column(
-                      children: <Widget>[
-                        Row(
-                          children: <Widget>[
-                            Expanded(
-                              child: _CoordinateField(
-                                controller: _latCtrl,
-                                placeholder: 'Lat',
-                              ),
-                            ),
-                            const SizedBox(width: 8),
-                            Expanded(
-                              child: _CoordinateField(
-                                controller: _lngCtrl,
-                                placeholder: 'Lng',
-                              ),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 8),
-                        Row(
-                          children: <Widget>[
-                            Expanded(
-                              child: _MapboxInlineButton(
-                                label: _profile.label,
-                                icon: CupertinoIcons.car_detailed,
-                                color: _kBlue,
-                                onTap: () {
-                                  setState(() => _profile = _profile.next);
-                                },
-                              ),
-                            ),
-                            const SizedBox(width: 8),
-                            SizedBox(
-                              width: 92,
-                              child: _MapboxInlineButton(
-                                label: 'DEMO',
-                                icon: CupertinoIcons.map_pin_ellipse,
-                                color: _kGoldSoft,
-                                onTap: _useDemoPoint,
-                                fullWidth: false,
-                              ),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 8),
-                        _MapboxInlineButton(
-                          label: widget.directionsLoading
-                              ? 'PLANNING...'
-                              : 'PLAN ROUTE',
-                          icon: widget.directionsLoading
-                              ? CupertinoIcons.hourglass
-                              : CupertinoIcons.location_fill,
-                          color: _kGreen,
-                          onTap: widget.directionsLoading ? () {} : _submit,
-                        ),
-                      ],
-                    ),
-                  ),
-                  if (widget.plannedRoute != null) ...<Widget>[
-                    const SizedBox(height: 10),
-                    _MapboxControlCard(
-                      title: 'Planned route',
-                      subtitle:
-                          '${widget.plannedRoute!.distanceLabel} · ${widget.plannedRoute!.durationLabel()} · ${widget.plannedRoute!.profile.label}',
-                      child: _MapboxInlineButton(
-                        label: 'CLEAR ROUTE',
-                        icon: CupertinoIcons.xmark_circle_fill,
-                        color: _kRed,
-                        onTap: widget.onClearRoute,
-                      ),
+                  boxShadow: <BoxShadow>[
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.58),
+                      blurRadius: 32,
+                      offset: const Offset(0, -14),
                     ),
                   ],
-                ],
+                ),
+                child: SafeArea(
+                  top: false,
+                  child: SingleChildScrollView(
+                    physics: const BouncingScrollPhysics(),
+                    keyboardDismissBehavior:
+                        ScrollViewKeyboardDismissBehavior.onDrag,
+                    padding: const EdgeInsets.fromLTRB(16, 10, 16, 24),
+                    child: Center(
+                      child: ConstrainedBox(
+                        constraints: const BoxConstraints(maxWidth: 560),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: <Widget>[
+                            Container(
+                              width: 46,
+                              height: 4,
+                              margin: const EdgeInsets.only(bottom: 14),
+                              decoration: BoxDecoration(
+                                color: Colors.white.withValues(alpha: 0.22),
+                                borderRadius: BorderRadius.circular(99),
+                              ),
+                            ),
+                            _RoutePlannerHeader(
+                              selectedPlace: _selectedPlace,
+                              onClear: _selectedPlace == null
+                                  ? null
+                                  : () {
+                                      setState(() {
+                                        _selectedPlace = null;
+                                        _results =
+                                            const <_MapboxPlaceResult>[];
+                                        _searchCtrl.clear();
+                                      });
+                                    },
+                            ),
+                            const SizedBox(height: 14),
+                            _RoutePlannerSearchCard(
+                              controller: _searchCtrl,
+                              focusNode: _searchFocusNode,
+                              searching: _searching,
+                              selectedPlace: _selectedPlace,
+                              results: _results,
+                              onSearch: () => unawaited(_searchPlaces()),
+                              onSelect: (place) {
+                                HapticFeedback.selectionClick();
+                                setState(() => _selectedPlace = place);
+                              },
+                              onQuickSearch: _quickSearch,
+                            ),
+                            const SizedBox(height: 12),
+                            _RoutePlannerModeCard(
+                              selectedProfile: _profile,
+                              onChanged: (profile) {
+                                HapticFeedback.selectionClick();
+                                setState(() => _profile = profile);
+                              },
+                            ),
+                            const SizedBox(height: 12),
+                            Row(
+                              children: <Widget>[
+                                Expanded(
+                                  child: _RoutePlannerSelectCard(
+                                    title: 'Map style',
+                                    subtitle: 'Standard preset',
+                                    icon: CupertinoIcons.map_fill,
+                                    color: _kGoldSoft,
+                                    child: _RoutePlannerSelectButton(
+                                      label: widget.mapboxPreset.label,
+                                      icon: _presetIcon(widget.mapboxPreset),
+                                      color: _kGoldSoft,
+                                      onTap: () => widget.onPresetChanged(
+                                        widget.mapboxPreset.next,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(width: 10),
+                                Expanded(
+                                  child: _RoutePlannerSelectCard(
+                                    title: 'Runtime',
+                                    subtitle: 'Best map engine',
+                                    icon: CupertinoIcons.speedometer,
+                                    color: _kGreen,
+                                    child: _RoutePlannerSelectButton(
+                                      label: widget.mapboxRuntimeMode.label,
+                                      icon: CupertinoIcons.arrow_2_circlepath,
+                                      color: _kGreen,
+                                      onTap: () => widget.onRuntimeChanged(
+                                        widget.mapboxRuntimeMode.next,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 12),
+                            _RoutePlannerSummaryCard(
+                              route: widget.plannedRoute,
+                              selectedPlace: _selectedPlace,
+                              profile: _profile,
+                              onClearRoute: widget.plannedRoute == null
+                                  ? null
+                                  : widget.onClearRoute,
+                            ),
+                            const SizedBox(height: 14),
+                            _RoutePlannerPlanButton(
+                              loading: widget.directionsLoading,
+                              enabled:
+                                  _selectedPlace != null && !widget.directionsLoading,
+                              onTap: _selectedPlace != null &&
+                                      !widget.directionsLoading
+                                  ? _submit
+                                  : () => _showSheetSnack(
+                                        'Search and select a destination first.',
+                                      ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
               ),
             ),
           ),
@@ -4698,59 +4849,342 @@ class _MapboxControlsSheetState extends State<_MapboxControlsSheet> {
       ),
     );
   }
+
+  static IconData _presetIcon(_MapboxStandardPreset preset) {
+    switch (preset) {
+      case _MapboxStandardPreset.day:
+        return CupertinoIcons.sun_max_fill;
+      case _MapboxStandardPreset.dusk:
+        return CupertinoIcons.sunset_fill;
+      case _MapboxStandardPreset.dawn:
+        return CupertinoIcons.sunrise_fill;
+      case _MapboxStandardPreset.night:
+        return CupertinoIcons.moon_stars_fill;
+    }
+  }
 }
 
-class _MapboxControlCard extends StatelessWidget {
-  const _MapboxControlCard({
-    required this.title,
-    required this.subtitle,
-    required this.child,
+class _RoutePlannerHeader extends StatelessWidget {
+  const _RoutePlannerHeader({
+    required this.selectedPlace,
+    required this.onClear,
   });
 
-  final String title;
-  final String subtitle;
-  final Widget child;
+  final _MapboxPlaceResult? selectedPlace;
+  final VoidCallback? onClear;
 
   @override
   Widget build(BuildContext context) {
-    return SizedBox(
-      width: double.infinity,
-      child: Container(
-        width: double.infinity,
-        padding: const EdgeInsets.all(14),
-        decoration: BoxDecoration(
-          color: Colors.white.withValues(alpha: 0.045),
-          borderRadius: BorderRadius.circular(20),
-          border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+    return Row(
+      children: <Widget>[
+        Container(
+          width: 46,
+          height: 46,
+          decoration: BoxDecoration(
+            color: _kBlue.withValues(alpha: 0.14),
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(color: _kBlue.withValues(alpha: 0.24)),
+            boxShadow: <BoxShadow>[
+              BoxShadow(
+                color: _kBlue.withValues(alpha: 0.18),
+                blurRadius: 24,
+              ),
+            ],
+          ),
+          child: const Icon(
+            Icons.navigation_rounded,
+            color: _kBlue,
+            size: 25,
+          ),
         ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: <Widget>[
-            Text(
-              title,
-              maxLines: 1,
-              overflow: TextOverflow.clip,
-              style: const TextStyle(
-                color: Colors.white,
-                fontSize: 13,
-                fontWeight: FontWeight.w900,
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[
+              const Text(
+                'ROUTE PLANNER',
+                maxLines: 1,
+                overflow: TextOverflow.clip,
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 18,
+                  fontWeight: FontWeight.w900,
+                  letterSpacing: 1.0,
+                ),
+              ),
+              const SizedBox(height: 3),
+              Text(
+                selectedPlace == null
+                    ? 'Search and plan your next route'
+                    : 'Destination selected',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  color: Colors.white54,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ],
+          ),
+        ),
+        if (onClear != null)
+          _RoutePlannerTinyButton(
+            icon: CupertinoIcons.xmark,
+            color: Colors.white54,
+            onTap: onClear!,
+          ),
+      ],
+    );
+  }
+}
+
+class _RoutePlannerSearchCard extends StatelessWidget {
+  const _RoutePlannerSearchCard({
+    required this.controller,
+    required this.focusNode,
+    required this.searching,
+    required this.selectedPlace,
+    required this.results,
+    required this.onSearch,
+    required this.onSelect,
+    required this.onQuickSearch,
+  });
+
+  final TextEditingController controller;
+  final FocusNode focusNode;
+  final bool searching;
+  final _MapboxPlaceResult? selectedPlace;
+  final List<_MapboxPlaceResult> results;
+  final VoidCallback onSearch;
+  final ValueChanged<_MapboxPlaceResult> onSelect;
+  final ValueChanged<String> onQuickSearch;
+
+  @override
+  Widget build(BuildContext context) {
+    return _RoutePlannerGlassCard(
+      padding: const EdgeInsets.all(14),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: <Widget>[
+          Row(
+            children: <Widget>[
+              Container(
+                width: 26,
+                height: 26,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: _kBlue.withValues(alpha: 0.18),
+                ),
+                child: const Icon(
+                  CupertinoIcons.location_fill,
+                  color: _kBlue,
+                  size: 14,
+                ),
+              ),
+              const SizedBox(width: 8),
+              const Text(
+                'From:',
+                style: TextStyle(
+                  color: Colors.white54,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+              const SizedBox(width: 5),
+              const Expanded(
+                child: Text(
+                  'My Location / Replay Point',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: _kBlue,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+              ),
+              if (selectedPlace != null)
+                const Icon(
+                  CupertinoIcons.checkmark_circle_fill,
+                  color: _kGreen,
+                  size: 16,
+                ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Container(
+            height: 54,
+            decoration: BoxDecoration(
+              color: Colors.black.withValues(alpha: 0.36),
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+            ),
+            child: Row(
+              children: <Widget>[
+                const SizedBox(width: 14),
+                const Icon(CupertinoIcons.search, color: Colors.white54, size: 20),
+                const SizedBox(width: 9),
+                Expanded(
+                  child: CupertinoTextField.borderless(
+                    controller: controller,
+                    focusNode: focusNode,
+                    placeholder: 'Search destination...',
+                    textInputAction: TextInputAction.search,
+                    onSubmitted: (_) => onSearch(),
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 14,
+                      fontWeight: FontWeight.w800,
+                    ),
+                    placeholderStyle: const TextStyle(
+                      color: Colors.white38,
+                      fontSize: 14,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 6),
+                SizedBox(
+                  width: 96,
+                  height: 44,
+                  child: _RoutePlannerGradientButton(
+                    label: searching ? '...' : 'SEARCH',
+                    icon: CupertinoIcons.search,
+                    color: _kBlue,
+                    onTap: searching ? () {} : onSearch,
+                    compact: true,
+                  ),
+                ),
+                const SizedBox(width: 5),
+              ],
+            ),
+          ),
+          if (searching) ...<Widget>[
+            const SizedBox(height: 10),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(99),
+              child: LinearProgressIndicator(
+                minHeight: 3,
+                backgroundColor: Colors.white.withValues(alpha: 0.05),
+                color: _kBlue,
               ),
             ),
-            const SizedBox(height: 4),
-            Text(
-              subtitle,
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(
-                color: Colors.white54,
-                fontSize: 10,
-                fontWeight: FontWeight.w700,
+          ],
+          if (results.isEmpty && selectedPlace == null) ...<Widget>[
+            const SizedBox(height: 14),
+            const Align(
+              alignment: Alignment.centerLeft,
+              child: Text(
+                'Recent & popular',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w900,
+                ),
               ),
             ),
             const SizedBox(height: 10),
-            SizedBox(
-              width: double.infinity,
-              child: child,
+            Row(
+              children: <Widget>[
+                Expanded(
+                  child: _RoutePlannerShortcutChip(
+                    icon: CupertinoIcons.house_fill,
+                    title: 'Home',
+                    subtitle: 'Search',
+                    onTap: () => onQuickSearch('home'),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: _RoutePlannerShortcutChip(
+                    icon: CupertinoIcons.briefcase_fill,
+                    title: 'Work',
+                    subtitle: 'Search',
+                    onTap: () => onQuickSearch('work'),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: _RoutePlannerShortcutChip(
+                    icon: CupertinoIcons.building_2_fill,
+                    title: 'Market',
+                    subtitle: 'Popular',
+                    onTap: () => onQuickSearch('Central Market Phnom Penh'),
+                  ),
+                ),
+              ],
+            ),
+          ],
+          if (results.isNotEmpty) ...<Widget>[
+            const SizedBox(height: 12),
+            ...results.map(
+              (place) => _RoutePlannerPlaceTile(
+                place: place,
+                selected: identical(place, selectedPlace),
+                onTap: () => onSelect(place),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _RoutePlannerShortcutChip extends StatelessWidget {
+  const _RoutePlannerShortcutChip({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return _PressableButton(
+      onTap: onTap,
+      child: Container(
+        height: 70,
+        padding: const EdgeInsets.symmetric(horizontal: 9),
+        decoration: BoxDecoration(
+          color: Colors.white.withValues(alpha: 0.045),
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+        ),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: <Widget>[
+            Icon(icon, color: _kBlue, size: 17),
+            const SizedBox(height: 6),
+            Text(
+              title,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 11,
+                fontWeight: FontWeight.w900,
+              ),
+            ),
+            const SizedBox(height: 2),
+            Text(
+              subtitle,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                color: Colors.white38,
+                fontSize: 8,
+                fontWeight: FontWeight.w700,
+              ),
             ),
           ],
         ),
@@ -4759,99 +5193,662 @@ class _MapboxControlCard extends StatelessWidget {
   }
 }
 
-class _CoordinateField extends StatelessWidget {
-  const _CoordinateField({
-    required this.controller,
-    required this.placeholder,
+class _RoutePlannerModeCard extends StatelessWidget {
+  const _RoutePlannerModeCard({
+    required this.selectedProfile,
+    required this.onChanged,
   });
 
-  final TextEditingController controller;
-  final String placeholder;
+  final _DirectionsProfile selectedProfile;
+  final ValueChanged<_DirectionsProfile> onChanged;
 
   @override
   Widget build(BuildContext context) {
-    return CupertinoTextField(
-      controller: controller,
-      placeholder: placeholder,
-      keyboardType: const TextInputType.numberWithOptions(
-        signed: true,
-        decimal: true,
-      ),
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      style: const TextStyle(
-        color: Colors.white,
-        fontSize: 13,
-        fontWeight: FontWeight.w800,
-      ),
-      placeholderStyle: const TextStyle(
-        color: Colors.white38,
-        fontSize: 12,
-        fontWeight: FontWeight.w800,
-      ),
-      decoration: BoxDecoration(
-        color: Colors.black.withValues(alpha: 0.38),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+    return _RoutePlannerGlassCard(
+      padding: const EdgeInsets.all(14),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          const Text(
+            'Travel mode',
+            style: TextStyle(
+              color: Colors.white,
+              fontSize: 14,
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+          const SizedBox(height: 11),
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            physics: const BouncingScrollPhysics(),
+            child: Row(
+              children: _DirectionsProfile.values.map((profile) {
+                return Padding(
+                  padding: const EdgeInsets.only(right: 8),
+                  child: _RoutePlannerModeChip(
+                    profile: profile,
+                    selected: profile == selectedProfile,
+                    onTap: () => onChanged(profile),
+                  ),
+                );
+              }).toList(growable: false),
+            ),
+          ),
+        ],
       ),
     );
   }
 }
 
-class _MapboxInlineButton extends StatelessWidget {
-  const _MapboxInlineButton({
+class _RoutePlannerModeChip extends StatelessWidget {
+  const _RoutePlannerModeChip({
+    required this.profile,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final _DirectionsProfile profile;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final Color color = selected ? _kBlue : Colors.white54;
+
+    return _PressableButton(
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 180),
+        height: 46,
+        padding: const EdgeInsets.symmetric(horizontal: 14),
+        decoration: BoxDecoration(
+          color: selected
+              ? _kBlue.withValues(alpha: 0.16)
+              : Colors.white.withValues(alpha: 0.045),
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(
+            color: selected
+                ? _kBlue.withValues(alpha: 0.46)
+                : Colors.white.withValues(alpha: 0.09),
+          ),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: <Widget>[
+            Icon(_profileIcon(profile), color: color, size: 16),
+            const SizedBox(width: 7),
+            Text(
+              _profileShortLabel(profile),
+              maxLines: 1,
+              overflow: TextOverflow.clip,
+              style: TextStyle(
+                color: color,
+                fontSize: 11,
+                fontWeight: FontWeight.w900,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  static IconData _profileIcon(_DirectionsProfile profile) {
+    switch (profile) {
+      case _DirectionsProfile.drivingTraffic:
+      case _DirectionsProfile.driving:
+        return CupertinoIcons.car_detailed;
+      case _DirectionsProfile.walking:
+        return CupertinoIcons.person_fill;
+      case _DirectionsProfile.cycling:
+        return Icons.directions_bike_rounded;
+    }
+  }
+
+  static String _profileShortLabel(_DirectionsProfile profile) {
+    switch (profile) {
+      case _DirectionsProfile.drivingTraffic:
+        return 'Drive+Traffic';
+      case _DirectionsProfile.driving:
+        return 'Driving';
+      case _DirectionsProfile.walking:
+        return 'Walking';
+      case _DirectionsProfile.cycling:
+        return 'Cycling';
+    }
+  }
+}
+
+class _RoutePlannerSelectCard extends StatelessWidget {
+  const _RoutePlannerSelectCard({
+    required this.title,
+    required this.subtitle,
+    required this.icon,
+    required this.color,
+    required this.child,
+  });
+
+  final String title;
+  final String subtitle;
+  final IconData icon;
+  final Color color;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return _RoutePlannerGlassCard(
+      padding: const EdgeInsets.all(13),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          Row(
+            children: <Widget>[
+              Expanded(
+                child: Text(
+                  title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+              ),
+              Icon(icon, color: color, size: 18),
+            ],
+          ),
+          const SizedBox(height: 3),
+          Text(
+            subtitle,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              color: Colors.white38,
+              fontSize: 9,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          const SizedBox(height: 10),
+          child,
+        ],
+      ),
+    );
+  }
+}
+
+class _RoutePlannerSelectButton extends StatelessWidget {
+  const _RoutePlannerSelectButton({
     required this.label,
     required this.icon,
     required this.color,
     required this.onTap,
-    this.fullWidth = true,
   });
 
   final String label;
   final IconData icon;
   final Color color;
   final VoidCallback onTap;
-  final bool fullWidth;
 
   @override
   Widget build(BuildContext context) {
-    final Widget content = _PressableButton(
+    return _PressableButton(
       onTap: onTap,
       child: Container(
-        height: 42,
-        width: fullWidth ? double.infinity : null,
-        constraints: fullWidth
-            ? const BoxConstraints.expand(height: 42)
-            : const BoxConstraints(
-                minWidth: 74,
-                maxWidth: 150,
-                minHeight: 42,
-                maxHeight: 42,
-              ),
-        padding: const EdgeInsets.symmetric(horizontal: 10),
+        height: 40,
+        padding: const EdgeInsets.symmetric(horizontal: 11),
         decoration: BoxDecoration(
-          color: color.withValues(alpha: 0.13),
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: color.withValues(alpha: 0.22)),
+          color: color.withValues(alpha: 0.12),
+          borderRadius: BorderRadius.circular(15),
+          border: Border.all(color: color.withValues(alpha: 0.26)),
         ),
         child: Row(
-          mainAxisSize: fullWidth ? MainAxisSize.max : MainAxisSize.min,
-          mainAxisAlignment: MainAxisAlignment.center,
           children: <Widget>[
             Icon(icon, color: color, size: 14),
             const SizedBox(width: 7),
-            Flexible(
-              fit: FlexFit.loose,
+            Expanded(
               child: Text(
                 label,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                softWrap: false,
-                textAlign: TextAlign.center,
                 style: TextStyle(
                   color: color,
-                  fontSize: 10,
+                  fontSize: 11,
                   fontWeight: FontWeight.w900,
-                  letterSpacing: 0.7,
+                ),
+              ),
+            ),
+            Icon(CupertinoIcons.chevron_down, color: color, size: 12),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _RoutePlannerSummaryCard extends StatelessWidget {
+  const _RoutePlannerSummaryCard({
+    required this.route,
+    required this.selectedPlace,
+    required this.profile,
+    required this.onClearRoute,
+  });
+
+  final _PlannedRoute? route;
+  final _MapboxPlaceResult? selectedPlace;
+  final _DirectionsProfile profile;
+  final VoidCallback? onClearRoute;
+
+  @override
+  Widget build(BuildContext context) {
+    final bool hasRoute = route != null;
+
+    return _RoutePlannerGlassCard(
+      padding: const EdgeInsets.all(14),
+      child: Column(
+        children: <Widget>[
+          Row(
+            children: <Widget>[
+              const Expanded(
+                child: Text(
+                  'Route summary',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
+                decoration: BoxDecoration(
+                  color: _kGreen.withValues(alpha: 0.10),
+                  borderRadius: BorderRadius.circular(99),
+                  border: Border.all(color: _kGreen.withValues(alpha: 0.18)),
+                ),
+                child: const Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: <Widget>[
+                    Icon(CupertinoIcons.circle_fill, color: _kGreen, size: 7),
+                    SizedBox(width: 5),
+                    Text(
+                      'Live traffic',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 10,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Container(
+            padding: const EdgeInsets.all(13),
+            decoration: BoxDecoration(
+              color: Colors.black.withValues(alpha: 0.26),
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(color: Colors.white.withValues(alpha: 0.07)),
+            ),
+            child: Column(
+              children: <Widget>[
+                Row(
+                  children: <Widget>[
+                    Container(
+                      width: 46,
+                      height: 46,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: _kBlue.withValues(alpha: 0.18),
+                        border: Border.all(
+                          color: _kBlue.withValues(alpha: 0.32),
+                        ),
+                      ),
+                      child: Icon(
+                        _RoutePlannerModeChip._profileIcon(profile),
+                        color: _kBlue,
+                        size: 22,
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: hasRoute
+                          ? Row(
+                              children: <Widget>[
+                                Expanded(
+                                  child: _RouteMetric(
+                                    value: route!.distanceLabel,
+                                    label: 'Distance',
+                                  ),
+                                ),
+                                const _MetricDivider(),
+                                Expanded(
+                                  child: _RouteMetric(
+                                    value: route!.durationLabel(),
+                                    label: 'Est. time',
+                                  ),
+                                ),
+                              ],
+                            )
+                          : Text(
+                              selectedPlace == null
+                                  ? 'Select a destination to preview route.'
+                                  : 'Ready to calculate route to ${selectedPlace!.name}.',
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                color: Colors.white54,
+                                fontSize: 12,
+                                height: 1.25,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                    ),
+                    if (hasRoute) ...<Widget>[
+                      const _MetricDivider(),
+                      Expanded(
+                        child: _RouteMetric(
+                          value: _RoutePlannerModeChip._profileShortLabel(
+                            route!.profile,
+                          ),
+                          label: 'Mode',
+                          color: _kBlue,
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+                const SizedBox(height: 12),
+                SizedBox(
+                  height: 34,
+                  width: double.infinity,
+                  child: CustomPaint(
+                    painter: _RoutePreviewPainter(
+                      active: hasRoute,
+                      color: hasRoute ? _kBlue : Colors.white54,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          if (hasRoute && onClearRoute != null) ...<Widget>[
+            const SizedBox(height: 10),
+            _RoutePlannerSecondaryButton(
+              label: 'CLEAR ROUTE',
+              icon: CupertinoIcons.trash,
+              onTap: onClearRoute!,
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _RouteMetric extends StatelessWidget {
+  const _RouteMetric({
+    required this.value,
+    required this.label,
+    this.color = Colors.white,
+  });
+
+  final String value;
+  final String label;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        Text(
+          value,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(
+            color: color,
+            fontSize: 15,
+            fontWeight: FontWeight.w900,
+          ),
+        ),
+        const SizedBox(height: 3),
+        Text(
+          label,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: const TextStyle(
+            color: Colors.white38,
+            fontSize: 9,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _MetricDivider extends StatelessWidget {
+  const _MetricDivider();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 1,
+      height: 34,
+      margin: const EdgeInsets.symmetric(horizontal: 9),
+      color: Colors.white.withValues(alpha: 0.08),
+    );
+  }
+}
+
+class _RoutePlannerPlanButton extends StatelessWidget {
+  const _RoutePlannerPlanButton({
+    required this.loading,
+    required this.enabled,
+    required this.onTap,
+  });
+
+  final bool loading;
+  final bool enabled;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final Color disabledColor = Colors.white38;
+
+    return _PressableButton(
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 180),
+        height: 56,
+        width: double.infinity,
+        decoration: BoxDecoration(
+          gradient: enabled
+              ? LinearGradient(
+                  colors: <Color>[
+                    _kGreen.withValues(alpha: 0.86),
+                    _kGreen.withValues(alpha: 0.56),
+                  ],
+                )
+              : null,
+          color: enabled ? null : Colors.white.withValues(alpha: 0.06),
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(
+            color: enabled
+                ? _kGreen.withValues(alpha: 0.40)
+                : Colors.white.withValues(alpha: 0.08),
+          ),
+          boxShadow: enabled
+              ? <BoxShadow>[
+                  BoxShadow(
+                    color: _kGreen.withValues(alpha: 0.24),
+                    blurRadius: 22,
+                    offset: const Offset(0, 10),
+                  ),
+                ]
+              : null,
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: <Widget>[
+            if (loading)
+              const CupertinoActivityIndicator(color: Colors.white, radius: 10)
+            else
+              Icon(
+                CupertinoIcons.location_fill,
+                color: enabled ? Colors.white : disabledColor,
+                size: 19,
+              ),
+            const SizedBox(width: 10),
+            Text(
+              loading ? 'PLANNING ROUTE...' : 'PLAN ROUTE',
+              maxLines: 1,
+              overflow: TextOverflow.clip,
+              style: TextStyle(
+                color: enabled ? Colors.white : disabledColor,
+                fontSize: 14,
+                fontWeight: FontWeight.w900,
+                letterSpacing: 1.2,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _RoutePlannerSecondaryButton extends StatelessWidget {
+  const _RoutePlannerSecondaryButton({
+    required this.label,
+    required this.icon,
+    required this.onTap,
+  });
+
+  final String label;
+  final IconData icon;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return _PressableButton(
+      onTap: onTap,
+      child: Container(
+        height: 42,
+        decoration: BoxDecoration(
+          color: Colors.white.withValues(alpha: 0.045),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: <Widget>[
+            Icon(icon, color: Colors.white54, size: 15),
+            const SizedBox(width: 8),
+            Text(
+              label,
+              style: const TextStyle(
+                color: Colors.white54,
+                fontSize: 11,
+                fontWeight: FontWeight.w900,
+                letterSpacing: 0.6,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _RoutePlannerGlassCard extends StatelessWidget {
+  const _RoutePlannerGlassCard({
+    required this.child,
+    this.padding = const EdgeInsets.all(14),
+  });
+
+  final Widget child;
+  final EdgeInsetsGeometry padding;
+
+  @override
+  Widget build(BuildContext context) {
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(24),
+      child: BackdropFilter(
+        filter: ui.ImageFilter.blur(sigmaX: 18, sigmaY: 18),
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            color: Colors.black.withValues(alpha: 0.56),
+            borderRadius: BorderRadius.circular(24),
+            border: Border.all(color: Colors.white.withValues(alpha: 0.09)),
+            boxShadow: <BoxShadow>[
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.24),
+                blurRadius: 18,
+                offset: const Offset(0, 10),
+              ),
+            ],
+          ),
+          child: Padding(
+            padding: padding,
+            child: child,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _RoutePlannerGradientButton extends StatelessWidget {
+  const _RoutePlannerGradientButton({
+    required this.label,
+    required this.icon,
+    required this.color,
+    required this.onTap,
+    this.compact = false,
+  });
+
+  final String label;
+  final IconData icon;
+  final Color color;
+  final VoidCallback onTap;
+  final bool compact;
+
+  @override
+  Widget build(BuildContext context) {
+    return _PressableButton(
+      onTap: onTap,
+      child: Container(
+        height: compact ? 44 : 48,
+        padding: EdgeInsets.symmetric(horizontal: compact ? 8 : 12),
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            colors: <Color>[
+              color.withValues(alpha: 0.85),
+              color.withValues(alpha: 0.42),
+            ],
+          ),
+          borderRadius: BorderRadius.circular(compact ? 17 : 18),
+          border: Border.all(color: color.withValues(alpha: 0.36)),
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: <Widget>[
+            Icon(icon, color: Colors.white, size: compact ? 13 : 15),
+            const SizedBox(width: 7),
+            Flexible(
+              child: Text(
+                label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: compact ? 10 : 12,
+                  fontWeight: FontWeight.w900,
+                  letterSpacing: 0.8,
                 ),
               ),
             ),
@@ -4859,14 +5856,172 @@ class _MapboxInlineButton extends StatelessWidget {
         ),
       ),
     );
-
-    if (fullWidth) {
-      return SizedBox(width: double.infinity, height: 42, child: content);
-    }
-
-    return SizedBox(height: 42, child: content);
   }
 }
+
+class _RoutePlannerTinyButton extends StatelessWidget {
+  const _RoutePlannerTinyButton({
+    required this.icon,
+    required this.color,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final Color color;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return _PressableButton(
+      onTap: onTap,
+      child: Container(
+        width: 38,
+        height: 38,
+        decoration: BoxDecoration(
+          color: Colors.white.withValues(alpha: 0.045),
+          shape: BoxShape.circle,
+          border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+        ),
+        child: Icon(icon, color: color, size: 16),
+      ),
+    );
+  }
+}
+
+class _RoutePlannerPlaceTile extends StatelessWidget {
+  const _RoutePlannerPlaceTile({
+    required this.place,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final _MapboxPlaceResult place;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final Color accent = selected ? _kGreen : _kBlue;
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 7),
+      child: _PressableButton(
+        onTap: onTap,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 180),
+          padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 10),
+          decoration: BoxDecoration(
+            color: accent.withValues(alpha: selected ? 0.16 : 0.08),
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(
+              color: accent.withValues(alpha: selected ? 0.34 : 0.16),
+            ),
+          ),
+          child: Row(
+            children: <Widget>[
+              Icon(
+                selected
+                    ? CupertinoIcons.checkmark_circle_fill
+                    : CupertinoIcons.location_solid,
+                color: accent,
+                size: 17,
+              ),
+              const SizedBox(width: 9),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    Text(
+                      place.name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      place.address,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: Colors.white54,
+                        fontSize: 10,
+                        fontWeight: FontWeight.w700,
+                        height: 1.15,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _RoutePreviewPainter extends CustomPainter {
+  const _RoutePreviewPainter({
+    required this.active,
+    required this.color,
+  });
+
+  final bool active;
+  final Color color;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final Paint gridPaint = Paint()
+      ..color = Colors.white.withValues(alpha: 0.035)
+      ..strokeWidth = 1.0;
+
+    for (double x = 0; x < size.width; x += 38) {
+      canvas.drawLine(Offset(x, 0), Offset(x + 22, size.height), gridPaint);
+    }
+
+    final ui.Path path = ui.Path()
+      ..moveTo(12, size.height * 0.62)
+      ..cubicTo(
+        size.width * 0.28,
+        size.height * 0.10,
+        size.width * 0.38,
+        size.height * 0.92,
+        size.width * 0.58,
+        size.height * 0.42,
+      )
+      ..cubicTo(
+        size.width * 0.78,
+        -4,
+        size.width * 0.82,
+        size.height * 0.88,
+        size.width - 14,
+        size.height * 0.32,
+      );
+
+    final Paint routePaint = Paint()
+      ..color = color.withValues(alpha: active ? 0.82 : 0.28)
+      ..strokeWidth = 3.0
+      ..strokeCap = StrokeCap.round
+      ..style = PaintingStyle.stroke;
+
+    canvas.drawPath(path, routePaint);
+
+    final Paint dotPaint = Paint()
+      ..color = color.withValues(alpha: active ? 1.0 : 0.45);
+    canvas.drawCircle(Offset(12, size.height * 0.62), 5, dotPaint);
+    canvas.drawCircle(Offset(size.width - 14, size.height * 0.32), 6, dotPaint);
+  }
+
+  @override
+  bool shouldRepaint(covariant _RoutePreviewPainter oldDelegate) {
+    return oldDelegate.active != active || oldDelegate.color != color;
+  }
+}
+
 
 class _EmptyMapState extends StatefulWidget {
   const _EmptyMapState({
