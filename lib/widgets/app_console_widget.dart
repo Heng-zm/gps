@@ -11,6 +11,7 @@ import 'package:flutter/foundation.dart'
         kIsWeb,
         kProfileMode,
         kReleaseMode;
+import 'package:flutter/scheduler.dart' show SchedulerBinding, SchedulerPhase;
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -40,6 +41,9 @@ class AppConsole {
       ValueNotifier<List<AppConsoleEntry>>(<AppConsoleEntry>[]);
 
   static const int _maxEntries = 500;
+
+  static final List<AppConsoleEntry> _pendingFrameEntries = <AppConsoleEntry>[];
+  static bool _flushScheduled = false;
 
   static DebugPrintCallback? _originalDebugPrint;
   static bool _debugPrintCaptureInstalled = false;
@@ -494,14 +498,18 @@ class AppConsole {
     AppConsoleEntry entry, {
     bool echoToDebugPrint = true,
   }) {
-    final List<AppConsoleEntry> next = <AppConsoleEntry>[
-      entry,
-      ...entries.value,
-    ];
+    final SchedulerPhase phase = SchedulerBinding.instance.schedulerPhase;
+    final bool unsafeDuringFrame =
+        phase == SchedulerPhase.persistentCallbacks ||
+            phase == SchedulerPhase.postFrameCallbacks ||
+            phase == SchedulerPhase.midFrameMicrotasks;
 
-    entries.value = List<AppConsoleEntry>.unmodifiable(
-      next.length > _maxEntries ? next.take(_maxEntries) : next,
-    );
+    if (unsafeDuringFrame) {
+      _pendingFrameEntries.add(entry);
+      _scheduleFlushPendingEntries();
+    } else {
+      _insertEntries(<AppConsoleEntry>[entry]);
+    }
 
     if (kDebugMode && echoToDebugPrint) {
       _writingToDebugPrint = true;
@@ -512,6 +520,35 @@ class AppConsole {
         _writingToDebugPrint = false;
       }
     }
+  }
+
+  static void _scheduleFlushPendingEntries() {
+    if (_flushScheduled) return;
+
+    _flushScheduled = true;
+    SchedulerBinding.instance.addPostFrameCallback((_) {
+      _flushScheduled = false;
+
+      if (_pendingFrameEntries.isEmpty) return;
+
+      final List<AppConsoleEntry> pending =
+          List<AppConsoleEntry>.from(_pendingFrameEntries);
+      _pendingFrameEntries.clear();
+      _insertEntries(pending);
+    });
+  }
+
+  static void _insertEntries(List<AppConsoleEntry> newEntries) {
+    if (newEntries.isEmpty) return;
+
+    final List<AppConsoleEntry> next = <AppConsoleEntry>[
+      ...newEntries.reversed,
+      ...entries.value,
+    ];
+
+    entries.value = List<AppConsoleEntry>.unmodifiable(
+      next.length > _maxEntries ? next.take(_maxEntries) : next,
+    );
   }
 
   static String _trimStack(StackTrace stackTrace) {

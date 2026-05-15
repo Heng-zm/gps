@@ -34,7 +34,6 @@ class GpsService {
 
   DateTime? _lastProcessedAt;
   DateTime? _lastStoredAt; // [FIX-7] monotonic wall-clock for storage interval
-  DateTime? _lastEmittedAt;
   double? _lastValidAltM;
 
   // ── accumulators ──────────────────────────────────────────────────────────
@@ -304,7 +303,6 @@ class GpsService {
     _lastStoredSmoothedPos = null;
     _lastProcessedAt = null;
     _lastStoredAt = null;
-    _lastEmittedAt = null;
     _lastValidAltM = null;
 
     _isAutoPaused = false;
@@ -465,7 +463,6 @@ class GpsService {
 
     _lastRawPos = pos;
     _lastEmittedSmoothedPos = smoothed;
-    _lastEmittedAt = now;
 
     _emit(point);
   }

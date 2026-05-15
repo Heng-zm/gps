@@ -1,3 +1,5 @@
+// ignore_for_file: unused_element_parameter
+
 import 'dart:math' as math;
 import 'dart:ui' as ui;
 
@@ -965,10 +967,7 @@ class _RouteQuality {
 
       final double lat = point.position.latitude;
       final double lng = point.position.longitude;
-      if (lastLat != null &&
-          lastLng != null &&
-          lat == lastLat &&
-          lng == lastLng) {
+      if (lastLat != null && lastLng != null && lat == lastLat && lng == lastLng) {
         duplicateLike++;
       }
       lastLat = lat;
@@ -1018,15 +1017,13 @@ class _SafeText extends StatelessWidget {
     this.data, {
     required this.style,
     this.maxLines,
-    this.textAlign,
-    this.softWrap = false,
+    this.textAlign
   });
 
   final String data;
   final TextStyle style;
   final int? maxLines;
   final TextAlign? textAlign;
-  final bool softWrap;
 
   @override
   Widget build(BuildContext context) {
@@ -1035,7 +1032,7 @@ class _SafeText extends StatelessWidget {
         data,
         maxLines: maxLines,
         overflow: TextOverflow.clip,
-        softWrap: softWrap,
+        softWrap: false,
         textAlign: textAlign,
         style: style,
       ),

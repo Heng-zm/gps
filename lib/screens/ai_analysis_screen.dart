@@ -1,482 +1,371 @@
-import 'package:flutter/material.dart';
+// ignore_for_file: prefer_const_constructors
+
+import 'dart:ui';
 import 'package:flutter/cupertino.dart';
-import '../models/trip_data.dart';
-import '../services/ai_service.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
-class AiAnalysisCard extends StatefulWidget {
-  final TripSummary summary;
-  const AiAnalysisCard({super.key, required this.summary});
+// --- Design Tokens ---
+const _kGoldCore = Color(0xFFEDD068);
+const _kGoldMid = Color(0xFFD4A843);
+const _kBarHeight = 72.0;
+const _kBarRadius = 36.0;
+const _kItemCount = 3;
 
+class AppShell extends StatefulWidget {
+  const AppShell({super.key});
   @override
-  State<AiAnalysisCard> createState() => _AiAnalysisCardState();
+  State<AppShell> createState() => _AppShellState();
 }
 
-class _AiAnalysisCardState extends State<AiAnalysisCard>
+class _AppShellState extends State<AppShell>
     with SingleTickerProviderStateMixin {
-  String? _analysis;
-  bool _loading = false;
-  late final AnimationController _shimmerController;
+  int _current = 0;
+  int _previous = 0;
 
-  // ── Gold palette (matches SpeedometerWidget) ──────────────────────────────
-  static const Color _goldMid = Color(0xFFD4A843);
-  static const Color _goldDark = Color(0xFF8B6914);
-  static const Color _cardBg = Color(0xFF181710);
+  late final AnimationController _ctrl = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 450),
+  )..value = 1.0;
 
-  @override
-  void initState() {
-    super.initState();
-    _shimmerController = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 1400),
-    )..repeat();
-  }
+  late final Animation<double> _anim = CurvedAnimation(
+    parent: _ctrl,
+    curve: Curves.easeOutBack,
+  );
+
+  final List<Widget> _pages = const [
+    _PlaceholderPage(label: 'TRACK', icon: CupertinoIcons.speedometer),
+    _PlaceholderPage(label: 'HISTORY', icon: CupertinoIcons.clock_fill),
+    _PlaceholderPage(label: 'SETTINGS', icon: CupertinoIcons.settings_solid),
+  ];
 
   @override
   void dispose() {
-    _shimmerController.dispose();
+    _ctrl.dispose();
     super.dispose();
   }
 
-  Future<void> _getAiInsights() async {
-    setState(() => _loading = true);
-    try {
-      final result = await AiService.instance.analyzeTrip(widget.summary);
-      if (mounted) {
-        setState(() {
-          _analysis = result;
-          _loading = false;
-        });
-      }
-    } catch (_) {
-      if (mounted) {
-        setState(() {
-          _analysis = 'Analysis unavailable. Please try again.';
-          _loading = false;
-        });
-      }
+  void _onTap(int index) {
+    if (_current == index) return;
+    HapticFeedback.selectionClick();
+    setState(() {
+      _previous = _current;
+      _current = index;
+    });
+    _ctrl.forward(from: 0.0);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final mq = MediaQuery.of(context);
+    final bottomPad = mq.padding.bottom;
+    const barMargin = 16.0;
+
+    // Calculate precise padding so pages don't overlap the bar
+    final totalBarHeight = _kBarHeight + bottomPad + barMargin;
+
+    return Scaffold(
+      backgroundColor: Colors.black,
+      extendBody:
+          true, // Crucial for BackdropFilter to see pixels behind the bar
+      body: Stack(
+        children: [
+          // 1. Optimized Page Stack with Cross-fade and Ticker management
+          Positioned.fill(
+            child: IndexedStack(
+              index: _current,
+              children: _pages.asMap().entries.map((e) {
+                return _TabPageWrapper(
+                  active: e.key == _current,
+                  bottomPadding: totalBarHeight,
+                  child: e.value,
+                );
+              }).toList(),
+            ),
+          ),
+
+          // 2. Liquid Glass Navigation Bar
+          Positioned(
+            left: 16,
+            right: 16,
+            bottom: bottomPad + 12,
+            child: Center(
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 500),
+                child: RepaintBoundary(
+                  // Isolate bar repaints from page content
+                  child: AnimatedBuilder(
+                    animation: _anim,
+                    builder: (context, _) => _LiquidGlassBar(
+                      currentIndex: _current,
+                      previousIndex: _previous,
+                      animValue: _anim.value,
+                      onTap: _onTap,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// --- Page Wrapper for Performance ---
+class _TabPageWrapper extends StatelessWidget {
+  final bool active;
+  final double bottomPadding;
+  final Widget child;
+
+  const _TabPageWrapper({
+    required this.active,
+    required this.bottomPadding,
+    required this.child,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return TickerMode(
+      enabled: active, // Stops background animations/sensors on hidden tabs
+      child: AnimatedOpacity(
+        opacity: active ? 1.0 : 0.0,
+        duration: const Duration(milliseconds: 300),
+        curve: Curves.easeInOut,
+        child: Padding(
+          padding: EdgeInsets.only(bottom: bottomPadding),
+          child: child,
+        ),
+      ),
+    );
+  }
+}
+
+// --- Bar Component ---
+class _LiquidGlassBar extends StatelessWidget {
+  final int currentIndex;
+  final int previousIndex;
+  final double animValue;
+  final ValueChanged<int> onTap;
+
+  const _LiquidGlassBar({
+    required this.currentIndex,
+    required this.previousIndex,
+    required this.animValue,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      height: _kBarHeight,
+      child: Stack(
+        children: [
+          // A. Ambient Metaball Glow
+          Positioned.fill(
+            child: CustomPaint(
+              painter: _MetaballPainter(
+                current: currentIndex,
+                previous: previousIndex,
+                t: animValue,
+              ),
+            ),
+          ),
+
+          // B. Frosted Glass Body
+          Positioned.fill(
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(_kBarRadius),
+              child: BackdropFilter(
+                filter: ImageFilter.blur(sigmaX: 25, sigmaY: 25),
+                child: Container(
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.04),
+                    borderRadius: BorderRadius.circular(_kBarRadius),
+                    border: Border.all(
+                        color: Colors.white.withValues(alpha: 0.12),
+                        width: 0.5),
+                  ),
+                ),
+              ),
+            ),
+          ),
+
+          // C. Sliding Pill Lens
+          Positioned.fill(
+            child: _SlidingPill(
+              currentIndex: currentIndex,
+              previousIndex: previousIndex,
+              t: animValue,
+            ),
+          ),
+
+          // D. Interaction layer
+          Positioned.fill(
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceAround,
+              children: [
+                _NavItem(
+                    icon: CupertinoIcons.speedometer,
+                    label: 'TRACK',
+                    active: currentIndex == 0,
+                    onTap: () => onTap(0)),
+                _NavItem(
+                    icon: CupertinoIcons.clock_fill,
+                    label: 'HISTORY',
+                    active: currentIndex == 1,
+                    onTap: () => onTap(1)),
+                _NavItem(
+                    icon: CupertinoIcons.settings_solid,
+                    label: 'SETTINGS',
+                    active: currentIndex == 2,
+                    onTap: () => onTap(2)),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// --- Sliding Pill logic ---
+class _SlidingPill extends StatelessWidget {
+  final int currentIndex, previousIndex;
+  final double t;
+  const _SlidingPill(
+      {required this.currentIndex,
+      required this.previousIndex,
+      required this.t});
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(builder: (context, c) {
+      final itemW = c.maxWidth / _kItemCount;
+      const pW = 82.0, pH = 46.0;
+      double left(int i) => itemW * i + (itemW - pW) / 2;
+
+      return Stack(children: [
+        Positioned(
+          left: lerpDouble(left(previousIndex), left(currentIndex), t)!,
+          top: (_kBarHeight - pH) / 2,
+          child: Container(
+            width: pW,
+            height: pH,
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(23),
+              color: _kGoldMid.withValues(alpha: 0.15),
+              border: Border.all(
+                  color: _kGoldMid.withValues(alpha: 0.3), width: 0.5),
+            ),
+          ),
+        )
+      ]);
+    });
+  }
+}
+
+// --- Nav Item logic ---
+class _NavItem extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final bool active;
+  final VoidCallback onTap;
+
+  const _NavItem(
+      {required this.icon,
+      required this.label,
+      required this.active,
+      required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      behavior: HitTestBehavior.opaque,
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(icon,
+              size: 22,
+              color: active ? _kGoldCore : Colors.white.withValues(alpha: 0.3)),
+          const SizedBox(height: 4),
+          Text(label,
+              style: TextStyle(
+                color:
+                    active ? Colors.white : Colors.white.withValues(alpha: 0.3),
+                fontSize: 9,
+                fontWeight: active ? FontWeight.w800 : FontWeight.w500,
+                letterSpacing: 0.8,
+              )),
+          const SizedBox(height: 4),
+          AnimatedContainer(
+            duration: const Duration(milliseconds: 300),
+            width: active ? 12 : 0,
+            height: 2.5,
+            decoration: BoxDecoration(
+                color: _kGoldMid, borderRadius: BorderRadius.circular(1)),
+          )
+        ],
+      ),
+    );
+  }
+}
+
+// --- Metaball Painter logic ---
+class _MetaballPainter extends CustomPainter {
+  final int current, previous;
+  final double t;
+
+  _MetaballPainter(
+      {required this.current, required this.previous, required this.t});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final itemW = size.width / _kItemCount;
+    final cy = size.height / 2;
+    final paint = Paint()..style = PaintingStyle.fill;
+
+    for (int i = 0; i < _kItemCount; i++) {
+      final cx = itemW * i + itemW / 2;
+      double r = (i == current)
+          ? lerpDouble(12, 28, t)!
+          : (i == previous)
+              ? lerpDouble(28, 12, t)!
+              : 12;
+
+      paint.maskFilter = MaskFilter.blur(BlurStyle.normal, r * 0.7);
+      paint.color = _kGoldMid.withValues(alpha: 0.35);
+      canvas.drawCircle(Offset(cx, cy), r, paint);
     }
   }
 
   @override
+  bool shouldRepaint(covariant _MetaballPainter old) => old.t != t;
+}
+
+class _PlaceholderPage extends StatelessWidget {
+  final String label;
+  final IconData icon;
+  const _PlaceholderPage({required this.label, required this.icon});
+
+  @override
   Widget build(BuildContext context) {
     return Container(
-      margin: const EdgeInsets.only(bottom: 16),
-      decoration: BoxDecoration(
-        color: _cardBg,
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: _goldDark.withValues(alpha: 0.4), width: 1),
-        boxShadow: [
-          BoxShadow(
-            color: _goldMid.withValues(alpha: 0.06),
-            blurRadius: 24,
-            spreadRadius: -4,
-          ),
-        ],
-      ),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(20),
+      color: Colors.black,
+      child: Center(
         child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
           children: [
-            _Header(
-              hasAnalysis: _analysis != null,
-              isLoading: _loading,
-              onRefresh: _getAiInsights,
-            ),
-            _Divider(),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(20, 16, 20, 20),
-              child: _Body(
-                loading: _loading,
-                analysis: _analysis,
-                shimmerController: _shimmerController,
-                onAnalyze: _getAiInsights,
-              ),
-            ),
+            Icon(icon, size: 64, color: _kGoldMid.withValues(alpha: 0.2)),
+            const SizedBox(height: 16),
+            Text(label,
+                style:
+                    const TextStyle(color: Colors.white24, letterSpacing: 4)),
           ],
         ),
       ),
-    );
-  }
-}
-
-// ─── Header ───────────────────────────────────────────────────────────────────
-
-class _Header extends StatelessWidget {
-  final bool hasAnalysis;
-  final bool isLoading;
-  final VoidCallback onRefresh;
-
-  const _Header({
-    required this.hasAnalysis,
-    required this.isLoading,
-    required this.onRefresh,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(20, 16, 16, 0),
-      child: Row(
-        children: [
-          // Gold AI icon badge
-          Container(
-            width: 28,
-            height: 28,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              gradient: const RadialGradient(
-                colors: [Color(0xFFEDD068), Color(0xFF8B6914)],
-                stops: [0.3, 1.0],
-              ),
-              boxShadow: [
-                BoxShadow(
-                  color: const Color(0xFFD4A843).withValues(alpha: 0.35),
-                  blurRadius: 10,
-                  spreadRadius: 0,
-                ),
-              ],
-            ),
-            child: const Icon(
-              Icons.auto_awesome,
-              color: Color(0xFF1A1500),
-              size: 14,
-            ),
-          ),
-          const SizedBox(width: 10),
-
-          // Title
-          const Text(
-            'AI ANALYSIS',
-            style: TextStyle(
-              color: Color(0xFFEDD068),
-              fontWeight: FontWeight.w800,
-              fontSize: 11,
-              letterSpacing: 3,
-            ),
-          ),
-
-          // Decorative dot
-          const SizedBox(width: 8),
-          Container(
-            width: 3,
-            height: 3,
-            decoration: BoxDecoration(
-              color: const Color(0xFF8B6914),
-              shape: BoxShape.circle,
-            ),
-          ),
-
-          const Spacer(),
-
-          // Refresh button
-          if (hasAnalysis && !isLoading)
-            GestureDetector(
-              onTap: onRefresh,
-              child: Container(
-                padding: const EdgeInsets.all(6),
-                decoration: BoxDecoration(
-                  color: const Color(0xFF8B6914).withValues(alpha: 0.15),
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(
-                    color: const Color(0xFF8B6914).withValues(alpha: 0.3),
-                  ),
-                ),
-                child: const Icon(
-                  Icons.refresh_rounded,
-                  color: Color(0xFF8B6914),
-                  size: 14,
-                ),
-              ),
-            ),
-        ],
-      ),
-    );
-  }
-}
-
-// ─── Gold hairline divider ────────────────────────────────────────────────────
-
-class _Divider extends StatelessWidget {
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(20, 14, 20, 0),
-      child: ShaderMask(
-        shaderCallback: (bounds) => const LinearGradient(
-          colors: [
-            Colors.transparent,
-            Color(0xFF8B6914),
-            Color(0xFFD4A843),
-            Color(0xFF8B6914),
-            Colors.transparent,
-          ],
-          stops: [0.0, 0.2, 0.5, 0.8, 1.0],
-        ).createShader(bounds),
-        child: Container(height: 1, color: Colors.white),
-      ),
-    );
-  }
-}
-
-// ─── Body ─────────────────────────────────────────────────────────────────────
-
-class _Body extends StatelessWidget {
-  final bool loading;
-  final String? analysis;
-  final AnimationController shimmerController;
-  final VoidCallback onAnalyze;
-
-  const _Body({
-    required this.loading,
-    required this.analysis,
-    required this.shimmerController,
-    required this.onAnalyze,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    if (loading) return _LoadingState(controller: shimmerController);
-    if (analysis == null) return _IdleState(onAnalyze: onAnalyze);
-    return _ResultState(text: analysis!);
-  }
-}
-
-// ─── Loading state — animated shimmer lines ───────────────────────────────────
-
-class _LoadingState extends StatelessWidget {
-  final AnimationController controller;
-  const _LoadingState({required this.controller});
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          children: [
-            const CupertinoActivityIndicator(
-              color: Color(0xFFD4A843),
-              radius: 8,
-            ),
-            const SizedBox(width: 10),
-            Text(
-              'Analysing trip data…',
-              style: TextStyle(
-                color: const Color(0xFF8B6914).withValues(alpha: 0.8),
-                fontSize: 12,
-                letterSpacing: 1,
-                fontStyle: FontStyle.italic,
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 16),
-        ...[0.9, 0.75, 0.85, 0.55].map(
-          (w) => _ShimmerLine(controller: controller, widthFactor: w),
-        ),
-      ],
-    );
-  }
-}
-
-class _ShimmerLine extends StatelessWidget {
-  final AnimationController controller;
-  final double widthFactor;
-  const _ShimmerLine({required this.controller, required this.widthFactor});
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 8),
-      child: AnimatedBuilder(
-        animation: controller,
-        builder: (_, __) {
-          return FractionallySizedBox(
-            widthFactor: widthFactor,
-            alignment: Alignment.centerLeft,
-            child: ShaderMask(
-              shaderCallback: (bounds) => LinearGradient(
-                colors: const [
-                  Color(0xFF1E1C10),
-                  Color(0xFF3A3418),
-                  Color(0xFF1E1C10),
-                ],
-                stops: [
-                  (controller.value - 0.4).clamp(0.0, 1.0),
-                  controller.value.clamp(0.0, 1.0),
-                  (controller.value + 0.4).clamp(0.0, 1.0),
-                ],
-              ).createShader(bounds),
-              child: Container(
-                height: 10,
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(4),
-                ),
-              ),
-            ),
-          );
-        },
-      ),
-    );
-  }
-}
-
-// ─── Idle state — CTA button ──────────────────────────────────────────────────
-
-class _IdleState extends StatelessWidget {
-  final VoidCallback onAnalyze;
-  const _IdleState({required this.onAnalyze});
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      children: [
-        // Decorative icon
-        Container(
-          width: 48,
-          height: 48,
-          margin: const EdgeInsets.only(bottom: 14),
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            color: const Color(0xFF8B6914).withValues(alpha: 0.1),
-            border: Border.all(
-              color: const Color(0xFF8B6914).withValues(alpha: 0.25),
-            ),
-          ),
-          child: const Icon(
-            Icons.insights_rounded,
-            color: Color(0xFF8B6914),
-            size: 22,
-          ),
-        ),
-
-        Text(
-          'Unlock your trip intelligence',
-          style: TextStyle(
-            color: Colors.white.withValues(alpha: 0.5),
-            fontSize: 12,
-            letterSpacing: 0.5,
-          ),
-        ),
-        const SizedBox(height: 16),
-
-        // Gold CTA button
-        GestureDetector(
-          onTap: onAnalyze,
-          child: Container(
-            width: double.infinity,
-            padding: const EdgeInsets.symmetric(vertical: 14),
-            decoration: BoxDecoration(
-              gradient: const LinearGradient(
-                colors: [
-                  Color(0xFF8B6914),
-                  Color(0xFFD4A843),
-                  Color(0xFF8B6914)
-                ],
-                stops: [0.0, 0.5, 1.0],
-              ),
-              borderRadius: BorderRadius.circular(12),
-              boxShadow: [
-                BoxShadow(
-                  color: const Color(0xFFD4A843).withValues(alpha: 0.2),
-                  blurRadius: 16,
-                  spreadRadius: -4,
-                  offset: const Offset(0, 4),
-                ),
-              ],
-            ),
-            child: const Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Icon(Icons.auto_awesome, color: Color(0xFF1A1500), size: 14),
-                SizedBox(width: 8),
-                Text(
-                  'ANALYSE TRIP PERFORMANCE',
-                  style: TextStyle(
-                    color: Color(0xFF1A1500),
-                    fontSize: 11,
-                    fontWeight: FontWeight.w900,
-                    letterSpacing: 2,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-// ─── Result state — analysis text ─────────────────────────────────────────────
-
-class _ResultState extends StatelessWidget {
-  final String text;
-  const _ResultState({required this.text});
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        // Left gold bar + quote
-        IntrinsicHeight(
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Container(
-                width: 2,
-                margin: const EdgeInsets.only(right: 14),
-                decoration: BoxDecoration(
-                  gradient: const LinearGradient(
-                    begin: Alignment.topCenter,
-                    end: Alignment.bottomCenter,
-                    colors: [Color(0xFFEDD068), Color(0xFF8B6914)],
-                  ),
-                  borderRadius: BorderRadius.circular(1),
-                ),
-              ),
-              Expanded(
-                child: Text(
-                  text,
-                  style: TextStyle(
-                    color: Colors.white.withValues(alpha: 0.82),
-                    fontSize: 13.5,
-                    height: 1.65,
-                    fontStyle: FontStyle.italic,
-                    letterSpacing: 0.2,
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
-
-        const SizedBox(height: 14),
-
-        // Footer tag
-        Row(
-          children: [
-            Container(
-              width: 16,
-              height: 1,
-              color: const Color(0xFF8B6914).withValues(alpha: 0.5),
-            ),
-            const SizedBox(width: 6),
-            Text(
-              'AI GENERATED',
-              style: TextStyle(
-                color: const Color(0xFF8B6914).withValues(alpha: 0.6),
-                fontSize: 9,
-                fontWeight: FontWeight.w700,
-                letterSpacing: 2.5,
-              ),
-            ),
-          ],
-        ),
-      ],
     );
   }
 }

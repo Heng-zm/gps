@@ -1,3 +1,5 @@
+// ignore_for_file: unused_element
+
 import 'dart:async';
 import 'dart:math' as math;
 import 'dart:ui' as ui;
@@ -11,6 +13,13 @@ import 'package:latlong2/latlong.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../services/settings_service.dart';
+import '../widgets/common/app_empty_state.dart';
+import '../widgets/common/app_filter_chip.dart';
+import '../widgets/common/app_search_bar.dart';
+import '../widgets/common/app_status_pill.dart';
+import '../widgets/common/app_metric_card.dart';
+import '../widgets/common/app_glass_card.dart';
+import '../widgets/common/app_page_shell.dart';
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // HISTORY SCREEN — Optimized Premium Dark UI
@@ -105,7 +114,8 @@ class SavedTrip {
   late final String formattedDate =
       DateFormat('MMM d, yyyy · h:mm a').format(date);
 
-  late final String formattedDateShort = DateFormat('MMM d, yyyy').format(date);
+  late final String formattedDateShort =
+      DateFormat('MMM d, yyyy').format(date);
 
   late final String formattedDuration = _calculateFormattedDuration();
 
@@ -294,6 +304,9 @@ class _HistoryScreenState extends State<HistoryScreen> {
   List<SavedTrip> _trips = const <SavedTrip>[];
   bool _loading = true;
   bool _refreshing = false;
+  final TextEditingController _searchCtrl = TextEditingController();
+  String _query = '';
+  String _filter = 'all';
 
   double _totalMiles = 0.0;
   double _allTimeTopSpeedMph = 0.0;
@@ -308,6 +321,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
 
   @override
   void dispose() {
+    _searchCtrl.dispose();
     _settings.removeListener(_onSettingsChanged);
     super.dispose();
   }
@@ -359,8 +373,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
   Future<void> _executeDelete(SavedTrip trip) async {
     HapticFeedback.mediumImpact();
 
-    final int originalIndex =
-        _trips.indexWhere((SavedTrip t) => t.id == trip.id);
+    final int originalIndex = _trips.indexWhere((SavedTrip t) => t.id == trip.id);
     if (originalIndex < 0) return;
 
     setState(() {
@@ -446,75 +459,144 @@ class _HistoryScreenState extends State<HistoryScreen> {
     );
   }
 
+  List<SavedTrip> get _visibleTrips {
+    final DateTime now = DateTime.now();
+    final String q = _query.trim().toLowerCase();
+
+    return _trips.where((SavedTrip trip) {
+      final bool matchesQuery = q.isEmpty ||
+          trip.formattedDate.toLowerCase().contains(q) ||
+          trip.formattedDuration.toLowerCase().contains(q) ||
+          settingsDistanceLabel(trip).toLowerCase().contains(q);
+
+      if (!matchesQuery) return false;
+
+      switch (_filter) {
+        case 'week':
+          return now.difference(trip.date).inDays <= 7;
+        case 'month':
+          return now.difference(trip.date).inDays <= 31;
+        case 'long':
+          return trip.distanceMiles >= 10.0;
+        case 'fast':
+          return trip.maxSpeedMph >= 55.0;
+        default:
+          return true;
+      }
+    }).toList(growable: false);
+  }
+
+  String settingsDistanceLabel(SavedTrip trip) {
+    final double distance = _settings.toDisplayDistance(trip.distanceMiles);
+    return '${distance.toStringAsFixed(1)} ${_settings.distanceUnit}';
+  }
+
+  void _setFilter(String filter) {
+    HapticFeedback.selectionClick();
+    setState(() => _filter = filter);
+  }
+
+  void _onSearchChanged(String value) {
+    setState(() => _query = value);
+  }
+
   @override
   Widget build(BuildContext context) {
+    final List<SavedTrip> visibleTrips = _visibleTrips;
     final bool showSummary = !_loading && _trips.isNotEmpty;
 
     return AnnotatedRegion<SystemUiOverlayStyle>(
       value: SystemUiOverlayStyle.light,
-      child: CupertinoPageScaffold(
-        backgroundColor: _kBg,
-        child: Stack(
-          children: <Widget>[
-            const Positioned.fill(child: _HistoryBackground()),
-            SafeArea(
-              child: CustomScrollView(
-                physics: const BouncingScrollPhysics(
-                  parent: AlwaysScrollableScrollPhysics(),
-                ),
-                slivers: <Widget>[
-                  CupertinoSliverRefreshControl(onRefresh: _loadTrips),
-                  SliverToBoxAdapter(
-                    child: _HistoryHeader(
-                      loading: _loading,
-                      refreshing: _refreshing,
-                      tripCount: _trips.length,
-                    ),
-                  ),
-                  if (showSummary)
-                    SliverToBoxAdapter(
-                      child: _LifetimeSummary(
-                        settings: _settings,
-                        totalMiles: _totalMiles,
-                        allTimeTopSpeedMph: _allTimeTopSpeedMph,
-                        totalMinutes: _totalMinutes,
-                      ),
-                    ),
-                  const SliverToBoxAdapter(child: SizedBox(height: 12)),
-                  if (_loading)
-                    const SliverToBoxAdapter(child: _LoadingState())
-                  else if (_trips.isEmpty)
-                    const SliverToBoxAdapter(child: _EmptyState())
-                  else
-                    SliverPadding(
-                      padding: const EdgeInsets.fromLTRB(20, 0, 20, 40),
-                      sliver: SliverList.builder(
-                        itemCount: _trips.length,
-                        itemBuilder: (BuildContext context, int index) {
-                          final SavedTrip trip = _trips[index];
-
-                          return Padding(
-                            padding: const EdgeInsets.only(bottom: 12),
-                            child: _Pressable(
-                              onTap: () => _openTripDetails(trip),
-                              child: _TripCard(
-                                trip: trip,
-                                settings: _settings,
-                                onDelete: () => _confirmDelete(trip),
-                              ),
-                            ),
-                          );
-                        },
-                      ),
-                    ),
-                ],
-              ),
+      child: AppPageShell(
+        title: 'History',
+        subtitle: _loading
+            ? 'Loading recordings...'
+            : '${visibleTrips.length} of ${_trips.length} trips',
+        trailing: AppStatusPill(
+          label: _refreshing ? 'SYNCING' : 'CLOUD',
+          color: _refreshing ? _kGoldSoft : _kGreen,
+          icon: _refreshing
+              ? CupertinoIcons.arrow_2_circlepath
+              : CupertinoIcons.cloud_fill,
+        ),
+        padding: EdgeInsets.zero,
+        child: RefreshIndicator(
+          onRefresh: _loadTrips,
+          color: _kGoldSoft,
+          backgroundColor: _kSurface,
+          child: ListView(
+            physics: const BouncingScrollPhysics(
+              parent: AlwaysScrollableScrollPhysics(),
             ),
-          ],
+            padding: const EdgeInsets.fromLTRB(16, 4, 16, 32),
+            children: <Widget>[
+              AppSearchBar(
+                controller: _searchCtrl,
+                hintText: 'Search trips by date, time, distance...',
+                onChanged: _onSearchChanged,
+                onClear: () => _onSearchChanged(''),
+              ),
+              const SizedBox(height: 12),
+              _HistoryFilterBar(
+                selected: _filter,
+                onSelected: _setFilter,
+              ),
+              if (showSummary) ...<Widget>[
+                const SizedBox(height: 14),
+                _LifetimeSummaryRedesign(
+                  settings: _settings,
+                  totalMiles: _totalMiles,
+                  allTimeTopSpeedMph: _allTimeTopSpeedMph,
+                  totalMinutes: _totalMinutes,
+                  tripCount: _trips.length,
+                ),
+              ],
+              const SizedBox(height: 14),
+              if (_loading)
+                const _LoadingState()
+              else if (_trips.isEmpty)
+                AppEmptyState(
+                  icon: CupertinoIcons.map,
+                  title: 'No trips yet',
+                  message: 'Saved recordings will appear here after you finish a trip.',
+                  actionLabel: 'Refresh',
+                  onAction: _loadTrips,
+                )
+              else if (visibleTrips.isEmpty)
+                AppEmptyState(
+                  icon: CupertinoIcons.search,
+                  title: 'No matching trips',
+                  message: 'Try another search or clear the active filter.',
+                  actionLabel: 'Clear filters',
+                  onAction: () {
+                    _searchCtrl.clear();
+                    setState(() {
+                      _query = '';
+                      _filter = 'all';
+                    });
+                  },
+                )
+              else
+                ...visibleTrips.map((SavedTrip trip) {
+                  return Padding(
+                    padding: const EdgeInsets.only(bottom: 12),
+                    child: _Pressable(
+                      onTap: () => _openTripDetails(trip),
+                      child: _TripCard(
+                        trip: trip,
+                        settings: _settings,
+                        onDelete: () => _confirmDelete(trip),
+                      ),
+                    ),
+                  );
+                }),
+            ],
+          ),
         ),
       ),
     );
   }
+
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -538,6 +620,153 @@ class _HistoryBackground extends StatelessWidget {
           ],
           stops: const <double>[0.0, 0.45, 1.0],
         ),
+      ),
+    );
+  }
+}
+
+
+class _HistoryFilterBar extends StatelessWidget {
+  const _HistoryFilterBar({
+    required this.selected,
+    required this.onSelected,
+  });
+
+  final String selected;
+  final ValueChanged<String> onSelected;
+
+  @override
+  Widget build(BuildContext context) {
+    const List<_HistoryFilter> filters = <_HistoryFilter>[
+      _HistoryFilter('all', 'All', CupertinoIcons.square_grid_2x2_fill),
+      _HistoryFilter('week', 'Week', CupertinoIcons.calendar_today),
+      _HistoryFilter('month', 'Month', CupertinoIcons.calendar),
+      _HistoryFilter('long', 'Long', CupertinoIcons.map_fill),
+      _HistoryFilter('fast', 'Fast', CupertinoIcons.bolt_fill),
+    ];
+
+    return SizedBox(
+      height: 42,
+      child: ListView.separated(
+        scrollDirection: Axis.horizontal,
+        itemCount: filters.length,
+        separatorBuilder: (_, __) => const SizedBox(width: 8),
+        itemBuilder: (BuildContext context, int index) {
+          final _HistoryFilter filter = filters[index];
+
+          return AppFilterChip(
+            label: filter.label,
+            selected: selected == filter.key,
+            icon: filter.icon,
+            onTap: () => onSelected(filter.key),
+          );
+        },
+      ),
+    );
+  }
+}
+
+class _HistoryFilter {
+  const _HistoryFilter(this.key, this.label, this.icon);
+
+  final String key;
+  final String label;
+  final IconData icon;
+}
+
+class _LifetimeSummaryRedesign extends StatelessWidget {
+  const _LifetimeSummaryRedesign({
+    required this.settings,
+    required this.totalMiles,
+    required this.allTimeTopSpeedMph,
+    required this.totalMinutes,
+    required this.tripCount,
+  });
+
+  final SettingsService settings;
+  final double totalMiles;
+  final double allTimeTopSpeedMph;
+  final int totalMinutes;
+  final int tripCount;
+
+  @override
+  Widget build(BuildContext context) {
+    final String totalDistance =
+        settings.toDisplayDistance(totalMiles).toStringAsFixed(1);
+    final String topSpeed =
+        settings.toDisplaySpeed(allTimeTopSpeedMph).round().toString();
+    final String totalTime = totalMinutes >= 60
+        ? '${(totalMinutes / 60).toStringAsFixed(1)}h'
+        : '${totalMinutes}m';
+
+    return AppGlassCard(
+      padding: const EdgeInsets.all(14),
+      borderRadius: 26,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          Row(
+            children: <Widget>[
+              const Icon(
+                CupertinoIcons.chart_bar_alt_fill,
+                color: _kGoldSoft,
+                size: 18,
+              ),
+              const SizedBox(width: 8),
+              const Expanded(
+                child: Text(
+                  'Lifetime stats',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 15,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+              ),
+              AppStatusPill(
+                label: '$tripCount TRIPS',
+                color: _kGoldSoft,
+                icon: CupertinoIcons.map_pin_ellipse,
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Row(
+            children: <Widget>[
+              Expanded(
+                child: AppMetricCard(
+                  label: 'Distance',
+                  value: totalDistance,
+                  unit: settings.distanceUnit,
+                  icon: CupertinoIcons.map_fill,
+                  color: _kGoldSoft,
+                  compact: true,
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: AppMetricCard(
+                  label: 'Top speed',
+                  value: topSpeed,
+                  unit: settings.speedUnit,
+                  icon: CupertinoIcons.bolt_fill,
+                  color: _kBlue,
+                  compact: true,
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: AppMetricCard(
+                  label: 'Time',
+                  value: totalTime,
+                  icon: CupertinoIcons.timer,
+                  color: _kGreen,
+                  compact: true,
+                ),
+              ),
+            ],
+          ),
+        ],
       ),
     );
   }
@@ -1188,7 +1417,8 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
     final double elapsedSeconds =
         now.difference(previous).inMilliseconds.clamp(0, 120) / 1000.0;
 
-    final double delta = elapsedSeconds * _playbackSpeed / _segmentSecondsAt1x;
+    final double delta =
+        elapsedSeconds * _playbackSpeed / _segmentSecondsAt1x;
 
     _advanceReplay(delta);
   }
@@ -1293,8 +1523,7 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
     final DateTime now = DateTime.now();
     if (!force &&
         _lastCameraFollow != null &&
-        now.difference(_lastCameraFollow!) <
-            const Duration(milliseconds: 180)) {
+        now.difference(_lastCameraFollow!) < const Duration(milliseconds: 180)) {
       return;
     }
 
@@ -1364,7 +1593,8 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
         options: _mapOptions(),
         children: <Widget>[
           fm.TileLayer(
-            urlTemplate: 'https://server.arcgisonline.com/ArcGIS/rest/services/'
+            urlTemplate:
+                'https://server.arcgisonline.com/ArcGIS/rest/services/'
                 'World_Imagery/MapServer/tile/{z}/{y}/{x}',
             userAgentPackageName: 'com.trackpro.ai',
             tileBuilder: _darkTileBuilder,

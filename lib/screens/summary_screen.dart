@@ -1,3 +1,5 @@
+// ignore_for_file: unused_element
+
 import 'dart:convert';
 import 'dart:math' as math;
 import 'dart:ui' as ui;
@@ -7,6 +9,7 @@ import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:latlong2/latlong.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../models/trip_data.dart';
@@ -15,7 +18,16 @@ import '../services/trip_export_service.dart';
 import '../services/offline_sync_queue.dart';
 import '../widgets/ai_analysis_card.dart';
 import '../widgets/ai_chat_sheet.dart';
-import 'map_screen.dart';
+import '../theme/app_theme.dart';
+import '../widgets/common/app_speed_chart.dart';
+import '../widgets/common/app_route_preview.dart';
+import '../widgets/common/app_section_card.dart';
+import '../widgets/common/app_status_pill.dart';
+import '../widgets/common/app_action_button.dart';
+import '../widgets/common/app_metric_card.dart';
+import '../widgets/common/app_glass_card.dart';
+import '../widgets/common/app_page_shell.dart';
+import 'map/map_screen.dart';
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // SUMMARY SCREEN — Fixed + Optimized Premium UI
@@ -441,6 +453,14 @@ class _SummaryScreenState extends State<SummaryScreen> {
     required Color color,
     bool darkText = false,
   }) {
+    if (!mounted) return;
+
+    final EdgeInsets safeMargin = EdgeInsets.only(
+      left: 16,
+      right: 16,
+      bottom: math.max(16.0, MediaQuery.paddingOf(context).bottom + 12),
+    );
+
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
       ..showSnackBar(
@@ -448,12 +468,15 @@ class _SummaryScreenState extends State<SummaryScreen> {
           behavior: SnackBarBehavior.floating,
           backgroundColor: color,
           duration: const Duration(seconds: 2),
-          margin: const EdgeInsets.all(16),
+          margin: safeMargin,
+          elevation: 10,
           shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(14),
+            borderRadius: BorderRadius.circular(16),
           ),
           content: Text(
             message,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
             style: TextStyle(
               color: darkText ? Colors.black : Colors.white,
               fontWeight: FontWeight.w800,
@@ -562,290 +585,291 @@ Date: ${widget.summary.date}
     final double maxAltitude = _safeDouble(summary.maxAltitudeFt * _altFactor);
     final double minAltitude = _safeDouble(summary.minAltitudeFt * _altFactor);
 
+    final List<LatLng> routePreviewPoints = _validPoints
+        .map((TripPoint point) => point.position)
+        .toList(growable: false);
+
+    final List<double> speedValues = _validPoints
+        .map((TripPoint point) => _settings.toDisplaySpeed(point.speedMph))
+        .where((double value) => value.isFinite && value >= 0.0)
+        .toList(growable: false);
+
+    final List<double> altitudeValues = _validPoints
+        .map((TripPoint point) => point.altitudeFt * _altFactor)
+        .where((double value) => value.isFinite)
+        .toList(growable: false);
+
     return AnnotatedRegion<SystemUiOverlayStyle>(
       value: SystemUiOverlayStyle.light,
-      child: Scaffold(
-        backgroundColor: _kBg,
-        floatingActionButton: _AiFab(onTap: _openAiCoach),
-        body: DecoratedBox(
-          decoration: const BoxDecoration(
-            gradient: RadialGradient(
-              center: Alignment.topCenter,
-              radius: 1.15,
-              colors: <Color>[
-                Color(0xFF172A28),
-                Color(0xFF090909),
-                Color(0xFF000000),
-              ],
-              stops: <double>[0.0, 0.48, 1.0],
-            ),
-          ),
-          child: SafeArea(
-            bottom: false,
-            child: Column(
+      child: AppPageShell(
+        title: 'Trip Summary',
+        subtitle:
+            '${summary.formattedTotalTime} · ${_validPoints.length} points',
+        showBackButton: true,
+        onBack: () => Navigator.of(context).pop(),
+        trailing: AppStatusPill(
+          label: '${_routeQuality.score}% QUALITY',
+          color: _routeQuality.color,
+          icon: CupertinoIcons.checkmark_shield_fill,
+        ),
+        padding: EdgeInsets.zero,
+        child: Stack(
+          children: <Widget>[
+            ListView(
+              physics: const BouncingScrollPhysics(),
+              padding: const EdgeInsets.fromLTRB(16, 4, 16, 118),
               children: <Widget>[
-                _SummaryAppBar(
-                  onBack: () => Navigator.of(context).pop(),
-                  onMap: _openMap,
-                  onCopy: _copySummary,
-                  pointCount: _validPoints.length,
+                _SummaryHeroRedesign(
+                  distance: distance,
+                  distanceUnit: _settings.distanceUnit.toUpperCase(),
+                  duration: summary.formattedTotalTime,
+                  date: summary.date,
+                  quality: _routeQuality,
                 ),
-                Expanded(
-                  child: CustomScrollView(
-                    physics: const BouncingScrollPhysics(),
-                    slivers: <Widget>[
-                      SliverPadding(
-                        padding: const EdgeInsets.fromLTRB(16, 8, 16, 112),
-                        sliver: SliverList.list(
-                          children: <Widget>[
-                            _HeroDistanceCard(
-                              distance: distance,
-                              unit: _settings.distanceUnit.toUpperCase(),
-                              date: summary.date,
-                              duration: summary.formattedTotalTime,
-                              pointCount: _validPoints.length,
-                            ),
-                            const SizedBox(height: 14),
-                            _QuickActionsRow(
-                              onMap: _openMap,
-                              onCopy: _copySummary,
-                              onExportFiles: _exportTripFiles,
-                              onToggleCharts: () {
-                                HapticFeedback.selectionClick();
-                                setState(() => _showCharts = !_showCharts);
-                              },
-                              chartsVisible: _showCharts,
-                            ),
-                            const SizedBox(height: 14),
-                            _OfflineSyncCard(
-                              pendingCount:
-                                  OfflineSyncQueue.instance.pendingCount,
-                              onSync: _syncOfflineQueue,
-                            ),
-                            const SizedBox(height: 14),
-                            AiAnalysisCard(summary: summary),
-                            const SizedBox(height: 14),
-                            _SectionCard(
-                              title: 'TIME METRICS',
-                              icon: CupertinoIcons.timer,
-                              children: <Widget>[
-                                Row(
-                                  children: <Widget>[
-                                    Expanded(
-                                      child: _StatBox(
-                                        label: 'TOTAL',
-                                        value: summary.formattedTotalTime,
-                                        icon: CupertinoIcons.timer,
-                                        color: _kTeal,
-                                      ),
-                                    ),
-                                    const SizedBox(width: 10),
-                                    Expanded(
-                                      child: _StatBox(
-                                        label: 'MOVING',
-                                        value: _formatDuration(_movingTime),
-                                        icon: CupertinoIcons.play_circle,
-                                        color: _kGreen,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                                const SizedBox(height: 10),
-                                _StatBox(
-                                  label: 'STOPPED TIME',
-                                  value: summary.formattedStoppedTime,
-                                  icon: CupertinoIcons.pause_circle,
-                                  color: _kGold,
-                                  wide: true,
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 12),
-                            _SectionCard(
-                              title:
-                                  'SPEED ANALYTICS (${_settings.speedUnit.toUpperCase()})',
-                              icon: CupertinoIcons.speedometer,
-                              children: <Widget>[
-                                Row(
-                                  children: <Widget>[
-                                    Expanded(
-                                      child: _StatBox(
-                                        label: 'MAXIMUM',
-                                        value: maxSpeed.toStringAsFixed(0),
-                                        icon: CupertinoIcons.bolt_fill,
-                                        color: _kGoldSoft,
-                                        large: true,
-                                      ),
-                                    ),
-                                    const SizedBox(width: 10),
-                                    Expanded(
-                                      child: _StatBox(
-                                        label: 'AVERAGE',
-                                        value: avgSpeed.toStringAsFixed(0),
-                                        icon: CupertinoIcons.chart_bar,
-                                        color: _kBlue,
-                                        large: true,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                                if (_showCharts &&
-                                    _validPoints.length > 5) ...<Widget>[
-                                  const SizedBox(height: 18),
-                                  _ChartHeader(
-                                    title: 'Speed profile',
-                                    color: _kBlue,
-                                    unit: _settings.speedUnit,
-                                  ),
-                                  const SizedBox(height: 8),
-                                  _PerformanceChart(
-                                    points: _validPoints,
-                                    getValue: (TripPoint point) {
-                                      return _settings.toDisplaySpeed(
-                                        point.speedMph,
-                                      );
-                                    },
-                                    color: _kBlue,
-                                  ),
-                                ],
-                              ],
-                            ),
-                            const SizedBox(height: 12),
-                            _SectionCard(
-                              title: 'ELEVATION PROFILE ($_altUnit)',
-                              icon: CupertinoIcons.graph_square,
-                              children: <Widget>[
-                                Row(
-                                  children: <Widget>[
-                                    Expanded(
-                                      child: _StatBox(
-                                        label: 'GAIN',
-                                        value:
-                                            '+${altitudeGain.toStringAsFixed(0)}',
-                                        icon: CupertinoIcons.arrow_up_right,
-                                        color: _kTeal,
-                                      ),
-                                    ),
-                                    const SizedBox(width: 8),
-                                    Expanded(
-                                      child: _StatBox(
-                                        label: 'MAX',
-                                        value: maxAltitude.toStringAsFixed(0),
-                                        icon: CupertinoIcons.chevron_up,
-                                        color: _kGold,
-                                      ),
-                                    ),
-                                    const SizedBox(width: 8),
-                                    Expanded(
-                                      child: _StatBox(
-                                        label: 'MIN',
-                                        value: minAltitude.toStringAsFixed(0),
-                                        icon: CupertinoIcons.chevron_down,
-                                        color: _kPurple,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                                if (_showCharts &&
-                                    _validPoints.length > 5) ...<Widget>[
-                                  const SizedBox(height: 18),
-                                  _ChartHeader(
-                                    title: 'Elevation profile',
-                                    color: _kTeal,
-                                    unit: _altUnit,
-                                  ),
-                                  const SizedBox(height: 8),
-                                  _PerformanceChart(
-                                    points: _validPoints,
-                                    getValue: (TripPoint point) {
-                                      final double alt =
-                                          point.altitudeFt * _altFactor;
-                                      return alt.isFinite ? alt : 0.0;
-                                    },
-                                    color: _kTeal,
-                                  ),
-                                ],
-                              ],
-                            ),
-                            const SizedBox(height: 12),
-                            _SectionCard(
-                              title: 'ROUTE QUALITY',
-                              icon: CupertinoIcons.location_fill,
-                              children: <Widget>[
-                                Row(
-                                  children: <Widget>[
-                                    Expanded(
-                                      child: _StatBox(
-                                        label: 'QUALITY',
-                                        value: '${_routeQuality.score}%',
-                                        icon: CupertinoIcons.checkmark_shield,
-                                        color: _routeQuality.color,
-                                      ),
-                                    ),
-                                    const SizedBox(width: 10),
-                                    Expanded(
-                                      child: _StatBox(
-                                        label: 'PACE',
-                                        value: _paceLabel(avgSpeed),
-                                        icon: CupertinoIcons.gauge,
-                                        color: _paceColor(avgSpeed),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                                const SizedBox(height: 10),
-                                Row(
-                                  children: <Widget>[
-                                    Expanded(
-                                      child: _StatBox(
-                                        label: 'POINTS',
-                                        value: '${_validPoints.length}',
-                                        icon:
-                                            CupertinoIcons.circle_grid_hex_fill,
-                                        color: _kBlue,
-                                      ),
-                                    ),
-                                    const SizedBox(width: 10),
-                                    Expanded(
-                                      child: _StatBox(
-                                        label: 'ACCURACY',
-                                        value: _routeQuality.accuracyLabel,
-                                        icon: CupertinoIcons.scope,
-                                        color: _routeQuality.color,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                                const SizedBox(height: 12),
-                                _RouteInsightStrip(
-                                  distance: distance,
-                                  avgSpeed: avgSpeed,
-                                  pointCount: _validPoints.length,
-                                  speedUnit: _settings.speedUnit,
-                                  distanceUnit: _settings.distanceUnit,
-                                  quality: _routeQuality,
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 20),
-                            _SaveButton(
-                              isSaving: _isSaving,
-                              isSaved: _isSaved,
-                              onTap: _handleSaveTrip,
-                            ),
-                            const SizedBox(height: 12),
-                            _DismissButton(
-                              onTap: () => Navigator.of(context).pop(),
-                            ),
-                          ],
-                        ),
+                const SizedBox(height: 14),
+                Row(
+                  children: <Widget>[
+                    Expanded(
+                      child: AppActionButton(
+                        label: _isSaved ? 'Saved' : 'Save',
+                        icon: _isSaved
+                            ? CupertinoIcons.checkmark_circle_fill
+                            : CupertinoIcons.square_arrow_down_fill,
+                        primary: !_isSaved,
+                        enabled: !_isSaving,
+                        onTap: _handleSaveTrip,
                       ),
-                    ],
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: AppActionButton(
+                        label: 'Replay',
+                        icon: CupertinoIcons.play_circle_fill,
+                        onTap: _openMap,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                Row(
+                  children: <Widget>[
+                    Expanded(
+                      child: AppActionButton(
+                        label: 'AI Coach',
+                        icon: CupertinoIcons.sparkles,
+                        onTap: _openAiCoach,
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: AppActionButton(
+                        label: 'Export',
+                        icon: CupertinoIcons.share,
+                        onTap: _exportTripFiles,
+                      ),
+                    ),
+                  ],
+                ),
+                AppSectionCard(
+                  title: 'Core metrics',
+                  subtitle: 'Distance, speed and time overview',
+                  icon: CupertinoIcons.chart_bar_fill,
+                  spacing: 10,
+                  children: <Widget>[
+                    Row(
+                      children: <Widget>[
+                        Expanded(
+                          child: AppMetricCard(
+                            label: 'Average',
+                            value: avgSpeed.toStringAsFixed(0),
+                            unit: _settings.speedUnit,
+                            icon: CupertinoIcons.speedometer,
+                            color: _kBlue,
+                            compact: true,
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: AppMetricCard(
+                            label: 'Maximum',
+                            value: maxSpeed.toStringAsFixed(0),
+                            unit: _settings.speedUnit,
+                            icon: CupertinoIcons.bolt_fill,
+                            color: _kGoldSoft,
+                            compact: true,
+                          ),
+                        ),
+                      ],
+                    ),
+                    Row(
+                      children: <Widget>[
+                        Expanded(
+                          child: AppMetricCard(
+                            label: 'Moving',
+                            value: _formatDuration(_movingTime),
+                            icon: CupertinoIcons.play_circle_fill,
+                            color: _kGreen,
+                            compact: true,
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: AppMetricCard(
+                            label: 'Stopped',
+                            value: summary.formattedStoppedTime,
+                            icon: CupertinoIcons.pause_circle_fill,
+                            color: _kGold,
+                            compact: true,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+                AppSectionCard(
+                  title: 'Route preview',
+                  subtitle: routePreviewPoints.length >= 2
+                      ? 'Recorded path overview'
+                      : 'Route points unavailable',
+                  icon: CupertinoIcons.map_fill,
+                  children: <Widget>[
+                    AppRoutePreview(
+                      points: routePreviewPoints,
+                      height: 130,
+                      color: _kBlue,
+                    ),
+                    const SizedBox(height: 12),
+                    _RouteInsightStrip(
+                      distance: distance,
+                      avgSpeed: avgSpeed,
+                      pointCount: _validPoints.length,
+                      speedUnit: _settings.speedUnit,
+                      distanceUnit: _settings.distanceUnit,
+                      quality: _routeQuality,
+                    ),
+                  ],
+                ),
+                AppSectionCard(
+                  title: 'Speed profile',
+                  subtitle: _showCharts
+                      ? 'Performance across the trip'
+                      : 'Charts are hidden',
+                  icon: CupertinoIcons.waveform_path_ecg,
+                  trailing: CupertinoButton(
+                    padding: EdgeInsets.zero,
+                    minSize: 0,
+                    onPressed: () {
+                      HapticFeedback.selectionClick();
+                      setState(() => _showCharts = !_showCharts);
+                    },
+                    child: AppStatusPill(
+                      label: _showCharts ? 'HIDE' : 'SHOW',
+                      color: _showCharts ? _kBlue : Colors.white54,
+                    ),
                   ),
+                  children: <Widget>[
+                    if (_showCharts && speedValues.length > 1)
+                      AppSpeedChart(
+                        values: speedValues,
+                        height: 128,
+                        color: _kBlue,
+                      )
+                    else
+                      const _SummaryEmptyNote(
+                        text: 'Not enough speed samples for charting.',
+                      ),
+                  ],
+                ),
+                AppSectionCard(
+                  title: 'Elevation',
+                  subtitle: 'Gain, highest and lowest altitude',
+                  icon: CupertinoIcons.graph_square_fill,
+                  spacing: 10,
+                  children: <Widget>[
+                    Row(
+                      children: <Widget>[
+                        Expanded(
+                          child: AppMetricCard(
+                            label: 'Gain',
+                            value: '+${altitudeGain.toStringAsFixed(0)}',
+                            unit: _altUnit,
+                            icon: CupertinoIcons.arrow_up_right,
+                            color: _kTeal,
+                            compact: true,
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: AppMetricCard(
+                            label: 'Max',
+                            value: maxAltitude.toStringAsFixed(0),
+                            unit: _altUnit,
+                            icon: CupertinoIcons.chevron_up,
+                            color: _kGold,
+                            compact: true,
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: AppMetricCard(
+                            label: 'Min',
+                            value: minAltitude.toStringAsFixed(0),
+                            unit: _altUnit,
+                            icon: CupertinoIcons.chevron_down,
+                            color: _kPurple,
+                            compact: true,
+                          ),
+                        ),
+                      ],
+                    ),
+                    if (_showCharts && altitudeValues.length > 1)
+                      AppSpeedChart(
+                        values: altitudeValues,
+                        height: 116,
+                        color: _kTeal,
+                      ),
+                  ],
+                ),
+                AppSectionCard(
+                  title: 'AI Insight',
+                  subtitle: 'Trip analysis and recommendations',
+                  icon: CupertinoIcons.sparkles,
+                  children: <Widget>[
+                    AiAnalysisCard(summary: summary),
+                  ],
+                ),
+                AppSectionCard(
+                  title: 'Sync & export',
+                  subtitle: 'Offline queue and shareable files',
+                  icon: CupertinoIcons.cloud_upload_fill,
+                  children: <Widget>[
+                    _OfflineSyncCard(
+                      pendingCount: OfflineSyncQueue.instance.pendingCount,
+                      onSync: _syncOfflineQueue,
+                    ),
+                    const SizedBox(height: 10),
+                    AppActionButton(
+                      label: 'Copy summary text',
+                      icon: CupertinoIcons.doc_on_doc_fill,
+                      onTap: _copySummary,
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 18),
+                AppActionButton(
+                  label: 'Done',
+                  icon: CupertinoIcons.checkmark_circle_fill,
+                  primary: true,
+                  onTap: () => Navigator.of(context).pop(),
                 ),
               ],
             ),
-          ),
+            Positioned(
+              right: 18,
+              bottom: 18,
+              child: _AiFab(onTap: _openAiCoach),
+            ),
+          ],
         ),
       ),
     );
@@ -930,6 +954,204 @@ Date: ${widget.summary.date}
 
 // Reusable widgets
 
+class _SummaryHeroRedesign extends StatelessWidget {
+  static String _heroDateLabel(DateTime date) {
+    const List<String> months = <String>[
+      'Jan',
+      'Feb',
+      'Mar',
+      'Apr',
+      'May',
+      'Jun',
+      'Jul',
+      'Aug',
+      'Sep',
+      'Oct',
+      'Nov',
+      'Dec',
+    ];
+
+    final int monthIndex = date.month.clamp(1, 12) - 1;
+    final String month = months[monthIndex];
+    final String hour = date.hour.toString().padLeft(2, '0');
+    final String minute = date.minute.toString().padLeft(2, '0');
+
+    return '$month ${date.day}, ${date.year} · $hour:$minute';
+  }
+
+  const _SummaryHeroRedesign({
+    required this.distance,
+    required this.distanceUnit,
+    required this.duration,
+    required this.date,
+    required this.quality,
+  });
+
+  final double distance;
+  final String distanceUnit;
+  final String duration;
+  final DateTime date;
+  final _RouteQualitySnapshot quality;
+
+  @override
+  Widget build(BuildContext context) {
+    return AppGlassCard(
+      padding: const EdgeInsets.all(18),
+      borderRadius: 28,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          Row(
+            children: <Widget>[
+              Container(
+                width: 52,
+                height: 52,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  gradient: AppColors.blueButtonGradient,
+                  boxShadow: <BoxShadow>[
+                    BoxShadow(
+                      color: _kBlue.withValues(alpha: 0.32),
+                      blurRadius: 22,
+                    ),
+                  ],
+                ),
+                child: const Icon(
+                  CupertinoIcons.location_north_line_fill,
+                  color: Colors.white,
+                  size: 22,
+                ),
+              ),
+              const SizedBox(width: 13),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    const Text(
+                      'Trip completed',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 18,
+                        fontWeight: FontWeight.w900,
+                        letterSpacing: -0.35,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      _heroDateLabel(date),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: Colors.white54,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              AppStatusPill(
+                label: '${quality.score}%',
+                color: quality.color,
+                icon: CupertinoIcons.checkmark_shield_fill,
+              ),
+            ],
+          ),
+          const SizedBox(height: 18),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: <Widget>[
+              Flexible(
+                child: Text(
+                  distance.toStringAsFixed(distance >= 100 ? 0 : 2),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 56,
+                    height: 0.92,
+                    fontWeight: FontWeight.w900,
+                    letterSpacing: -3.0,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Padding(
+                padding: const EdgeInsets.only(bottom: 7),
+                child: Text(
+                  distanceUnit,
+                  style: const TextStyle(
+                    color: _kGoldSoft,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w900,
+                    letterSpacing: 0.8,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: <Widget>[
+              AppStatusPill(
+                label: duration,
+                color: _kTeal,
+                icon: CupertinoIcons.timer,
+              ),
+              AppStatusPill(
+                label: quality.accuracyLabel,
+                color: quality.color,
+                icon: CupertinoIcons.scope,
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SummaryEmptyNote extends StatelessWidget {
+  const _SummaryEmptyNote({
+    required this.text,
+  });
+
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    return AppGlassCard(
+      padding: const EdgeInsets.all(14),
+      borderRadius: 18,
+      shadow: false,
+      child: Row(
+        children: <Widget>[
+          const Icon(
+            CupertinoIcons.info_circle_fill,
+            color: Colors.white38,
+            size: 17,
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              text,
+              style: const TextStyle(
+                color: Colors.white54,
+                fontSize: 12,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _SummaryAppBar extends StatelessWidget {
   const _SummaryAppBar({
     required this.onBack,
@@ -950,15 +1172,22 @@ class _SummaryAppBar extends StatelessWidget {
       child: ClipRRect(
         borderRadius: BorderRadius.circular(24),
         child: BackdropFilter(
-          filter: ui.ImageFilter.blur(sigmaX: 16, sigmaY: 16),
+          filter: ui.ImageFilter.blur(sigmaX: 18, sigmaY: 18),
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
             decoration: BoxDecoration(
-              color: Colors.white.withValues(alpha: 0.07),
+              color: Colors.white.withValues(alpha: 0.075),
               borderRadius: BorderRadius.circular(24),
               border: Border.all(
-                color: Colors.white.withValues(alpha: 0.08),
+                color: Colors.white.withValues(alpha: 0.09),
               ),
+              boxShadow: <BoxShadow>[
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.22),
+                  blurRadius: 18,
+                  offset: const Offset(0, 8),
+                ),
+              ],
             ),
             child: Row(
               children: <Widget>[
@@ -966,7 +1195,7 @@ class _SummaryAppBar extends StatelessWidget {
                   icon: CupertinoIcons.chevron_back,
                   onTap: onBack,
                 ),
-                const SizedBox(width: 12),
+                const SizedBox(width: 10),
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -976,24 +1205,25 @@ class _SummaryAppBar extends StatelessWidget {
                         maxLines: 1,
                         style: TextStyle(
                           color: Colors.white,
-                          fontSize: 15,
+                          fontSize: 14,
                           fontWeight: FontWeight.w900,
-                          letterSpacing: 1.1,
+                          letterSpacing: 1.0,
                         ),
                       ),
-                      const SizedBox(height: 2),
+                      const SizedBox(height: 3),
                       _SafeText(
-                        '$pointCount route points · performance analytics',
+                        '$pointCount points · analytics · export',
                         maxLines: 1,
                         style: TextStyle(
-                          color: Colors.white.withValues(alpha: 0.42),
+                          color: Colors.white.withValues(alpha: 0.46),
                           fontSize: 11,
-                          fontWeight: FontWeight.w600,
+                          fontWeight: FontWeight.w700,
                         ),
                       ),
                     ],
                   ),
                 ),
+                const SizedBox(width: 8),
                 _HeaderMiniButton(
                   icon: CupertinoIcons.doc_on_doc,
                   onTap: onCopy,
@@ -1063,98 +1293,100 @@ class _HeroDistanceCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return _GlassCard(
-      padding: const EdgeInsets.all(22),
-      radius: 30,
-      borderColor: _kTeal.withValues(alpha: 0.13),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: <Widget>[
-          Row(
-            children: <Widget>[
-              const _IconBadge(
-                icon: CupertinoIcons.location_fill,
-                color: _kTeal,
-              ),
-              const SizedBox(width: 10),
-              const Expanded(
-                child: _SafeText(
-                  'TOTAL DISTANCE',
-                  maxLines: 1,
-                  style: TextStyle(
-                    color: _kTeal,
-                    fontSize: 11,
-                    fontWeight: FontWeight.w900,
-                    letterSpacing: 1.5,
+    return RepaintBoundary(
+      child: _GlassCard(
+        padding: const EdgeInsets.all(22),
+        radius: 30,
+        borderColor: _kTeal.withValues(alpha: 0.13),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            Row(
+              children: <Widget>[
+                const _IconBadge(
+                  icon: CupertinoIcons.location_fill,
+                  color: _kTeal,
+                ),
+                const SizedBox(width: 10),
+                const Expanded(
+                  child: _SafeText(
+                    'TOTAL DISTANCE',
+                    maxLines: 1,
+                    style: TextStyle(
+                      color: _kTeal,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w900,
+                      letterSpacing: 1.5,
+                    ),
                   ),
                 ),
+                _SmallPill(
+                  text: '${date.month}/${date.day}/${date.year}',
+                  color: _kGold,
+                ),
+              ],
+            ),
+            const SizedBox(height: 18),
+            FittedBox(
+              fit: BoxFit.scaleDown,
+              alignment: Alignment.centerLeft,
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.baseline,
+                textBaseline: TextBaseline.alphabetic,
+                children: <Widget>[
+                  Text(
+                    distance.toStringAsFixed(2),
+                    maxLines: 1,
+                    overflow: TextOverflow.clip,
+                    softWrap: false,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 58,
+                      fontWeight: FontWeight.w300,
+                      height: 0.95,
+                      letterSpacing: -2,
+                      fontFeatures: <ui.FontFeature>[
+                        ui.FontFeature.tabularFigures(),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Text(
+                    unit,
+                    maxLines: 1,
+                    overflow: TextOverflow.clip,
+                    softWrap: false,
+                    style: const TextStyle(
+                      color: _kTeal,
+                      fontSize: 20,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                ],
               ),
-              _SmallPill(
-                text: '${date.month}/${date.day}/${date.year}',
-                color: _kGold,
-              ),
-            ],
-          ),
-          const SizedBox(height: 18),
-          FittedBox(
-            fit: BoxFit.scaleDown,
-            alignment: Alignment.centerLeft,
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.baseline,
-              textBaseline: TextBaseline.alphabetic,
+            ),
+            const SizedBox(height: 18),
+            Row(
               children: <Widget>[
-                Text(
-                  distance.toStringAsFixed(2),
-                  maxLines: 1,
-                  overflow: TextOverflow.clip,
-                  softWrap: false,
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 58,
-                    fontWeight: FontWeight.w300,
-                    height: 0.95,
-                    letterSpacing: -2,
-                    fontFeatures: <ui.FontFeature>[
-                      ui.FontFeature.tabularFigures(),
-                    ],
+                Expanded(
+                  child: _MiniMetric(
+                    label: 'DURATION',
+                    value: duration,
+                    color: _kGold,
                   ),
                 ),
                 const SizedBox(width: 10),
-                Text(
-                  unit,
-                  maxLines: 1,
-                  overflow: TextOverflow.clip,
-                  softWrap: false,
-                  style: const TextStyle(
-                    color: _kTeal,
-                    fontSize: 20,
-                    fontWeight: FontWeight.w900,
+                Expanded(
+                  child: _MiniMetric(
+                    label: 'ROUTE POINTS',
+                    value: '$pointCount',
+                    color: _kBlue,
                   ),
                 ),
               ],
             ),
-          ),
-          const SizedBox(height: 18),
-          Row(
-            children: <Widget>[
-              Expanded(
-                child: _MiniMetric(
-                  label: 'DURATION',
-                  value: duration,
-                  color: _kGold,
-                ),
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: _MiniMetric(
-                  label: 'ROUTE POINTS',
-                  value: '$pointCount',
-                  color: _kBlue,
-                ),
-              ),
-            ],
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -1350,60 +1582,64 @@ class _QuickActionsRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      children: <Widget>[
-        Row(
-          children: <Widget>[
-            Expanded(
+    final List<_ActionData> actions = <_ActionData>[
+      _ActionData(
+        icon: CupertinoIcons.map_fill,
+        label: 'MAP',
+        color: _kTeal,
+        onTap: onMap,
+      ),
+      _ActionData(
+        icon: CupertinoIcons.doc_on_doc,
+        label: 'COPY',
+        color: _kGold,
+        onTap: onCopy,
+      ),
+      _ActionData(
+        icon: CupertinoIcons.arrow_down_doc_fill,
+        label: 'EXPORT',
+        color: _kGreen,
+        onTap: onExportFiles,
+      ),
+      _ActionData(
+        icon: chartsVisible
+            ? CupertinoIcons.chart_bar_fill
+            : CupertinoIcons.chart_bar,
+        label: chartsVisible ? 'CHARTS' : 'HIDDEN',
+        color: _kBlue,
+        onTap: onToggleCharts,
+      ),
+    ];
+
+    return LayoutBuilder(
+      builder: (BuildContext context, BoxConstraints constraints) {
+        final bool compact = constraints.maxWidth < 360;
+        final double spacing = compact ? 8 : 10;
+        final double itemWidth = (constraints.maxWidth - spacing) / 2;
+
+        return Wrap(
+          spacing: spacing,
+          runSpacing: spacing,
+          children: actions.map((action) {
+            return SizedBox(
+              width: itemWidth,
               child: _ActionChipButton(
-                icon: CupertinoIcons.map_fill,
-                label: 'MAP',
-                color: _kTeal,
-                onTap: onMap,
+                icon: action.icon,
+                label: action.label,
+                color: action.color,
+                onTap: action.onTap,
+                compact: compact,
               ),
-            ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: _ActionChipButton(
-                icon: CupertinoIcons.doc_on_doc,
-                label: 'COPY',
-                color: _kGold,
-                onTap: onCopy,
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 10),
-        Row(
-          children: <Widget>[
-            Expanded(
-              child: _ActionChipButton(
-                icon: CupertinoIcons.arrow_down_doc_fill,
-                label: 'EXPORT FILES',
-                color: _kGreen,
-                onTap: onExportFiles,
-              ),
-            ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: _ActionChipButton(
-                icon: chartsVisible
-                    ? CupertinoIcons.chart_bar_fill
-                    : CupertinoIcons.chart_bar,
-                label: chartsVisible ? 'CHARTS' : 'NO CHARTS',
-                color: _kBlue,
-                onTap: onToggleCharts,
-              ),
-            ),
-          ],
-        ),
-      ],
+            );
+          }).toList(growable: false),
+        );
+      },
     );
   }
 }
 
-class _ActionChipButton extends StatelessWidget {
-  const _ActionChipButton({
+class _ActionData {
+  const _ActionData({
     required this.icon,
     required this.label,
     required this.color,
@@ -1414,40 +1650,68 @@ class _ActionChipButton extends StatelessWidget {
   final String label;
   final Color color;
   final VoidCallback onTap;
+}
+
+class _ActionChipButton extends StatelessWidget {
+  const _ActionChipButton({
+    required this.icon,
+    required this.label,
+    required this.color,
+    required this.onTap,
+    this.compact = false,
+  });
+
+  final IconData icon;
+  final String label;
+  final Color color;
+  final VoidCallback onTap;
+  final bool compact;
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: () {
-        HapticFeedback.selectionClick();
-        onTap();
-      },
-      behavior: HitTestBehavior.opaque,
-      child: Container(
-        height: 44,
-        decoration: BoxDecoration(
-          color: color.withValues(alpha: 0.1),
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: color.withValues(alpha: 0.18)),
-        ),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: <Widget>[
-            Icon(icon, color: color, size: 15),
-            const SizedBox(width: 7),
-            Flexible(
-              child: _SafeText(
-                label,
-                maxLines: 1,
-                style: TextStyle(
-                  color: color,
-                  fontSize: 11,
-                  fontWeight: FontWeight.w900,
-                  letterSpacing: 0.7,
+    return Semantics(
+      button: true,
+      label: label,
+      child: GestureDetector(
+        onTap: () {
+          HapticFeedback.selectionClick();
+          onTap();
+        },
+        behavior: HitTestBehavior.opaque,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 180),
+          height: compact ? 42 : 46,
+          decoration: BoxDecoration(
+            color: color.withValues(alpha: 0.10),
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: color.withValues(alpha: 0.18)),
+            boxShadow: <BoxShadow>[
+              BoxShadow(
+                color: color.withValues(alpha: 0.06),
+                blurRadius: 12,
+                offset: const Offset(0, 6),
+              ),
+            ],
+          ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: <Widget>[
+              Icon(icon, color: color, size: compact ? 14 : 15),
+              const SizedBox(width: 7),
+              Flexible(
+                child: _SafeText(
+                  label,
+                  maxLines: 1,
+                  style: TextStyle(
+                    color: color,
+                    fontSize: compact ? 10 : 11,
+                    fontWeight: FontWeight.w900,
+                    letterSpacing: compact ? 0.4 : 0.7,
+                  ),
                 ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );
@@ -2125,7 +2389,7 @@ class _SafeText extends StatelessWidget {
       child: Text(
         data,
         maxLines: maxLines,
-        overflow: TextOverflow.clip,
+        overflow: TextOverflow.ellipsis,
         softWrap: softWrap,
         textAlign: textAlign,
         style: style,

@@ -1,3 +1,5 @@
+// ignore_for_file: unused_element
+
 import 'dart:ui' as ui;
 
 import 'package:flutter/cupertino.dart';
@@ -6,7 +8,9 @@ import 'package:flutter/services.dart';
 import 'package:geolocator/geolocator.dart';
 
 import '../services/settings_service.dart';
+import '../navigation/app_routes.dart';
 import '../widgets/app_console_widget.dart';
+import 'diagnostics/diagnostics_screen.dart';
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // SETTINGS SCREEN — Premium Map-First Companion UI
@@ -279,21 +283,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
     required String message,
     required Color color,
   }) {
-    if (!mounted) return;
-
-    ScaffoldMessenger.of(context)
-      ..hideCurrentSnackBar()
-      ..showSnackBar(
-        SnackBar(
-          content: Text(message),
-          backgroundColor: color,
-          behavior: SnackBarBehavior.floating,
-          margin: const EdgeInsets.all(16),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(14),
-          ),
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        backgroundColor: color,
+        behavior: SnackBarBehavior.floating,
+        margin: const EdgeInsets.all(16),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(14),
         ),
-      );
+      ),
+    );
   }
 
   bool get _hasLocationAccess {
@@ -325,6 +325,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
     return _goldSoft;
   }
 
+  void _openDiagnostics() {
+    Navigator.of(context).push(
+      CupertinoPageRoute<void>(
+        settings: const RouteSettings(name: AppRoutes.diagnostics),
+        builder: (_) => const DiagnosticsScreen(),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return AnnotatedRegion<SystemUiOverlayStyle>(
@@ -340,8 +349,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ),
               slivers: <Widget>[
                 CupertinoSliverNavigationBar(
-                  heroTag: 'settings_screen_nav_bar',
-                  transitionBetweenRoutes: false,
                   largeTitle: const Text(
                     'Settings',
                     style: TextStyle(
@@ -598,8 +605,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           const AppConsoleSettingsCard(),
                           _Section(
                             title: 'SYSTEM',
-                            children: const <Widget>[
+                            children: <Widget>[
                               _SettingTile(
+                                icon: CupertinoIcons.wrench_fill,
+                                iconColor: _blue,
+                                title: 'Diagnostics',
+                                subtitle: 'Check GPS, permissions and Mapbox',
+                                trailing: const Icon(
+                                  CupertinoIcons.chevron_right,
+                                  color: Colors.white24,
+                                  size: 15,
+                                ),
+                                onTap: _openDiagnostics,
+                              ),
+                              const _Sep(),
+                              const _SettingTile(
                                 icon: CupertinoIcons.info_circle_fill,
                                 iconColor: _blue,
                                 title: 'Version',
@@ -609,8 +629,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                   color: _muted,
                                 ),
                               ),
-                              _Sep(),
-                              _SettingTile(
+                              const _Sep(),
+                              const _SettingTile(
                                 icon: CupertinoIcons.checkmark_shield_fill,
                                 iconColor: _green,
                                 title: 'API Status',

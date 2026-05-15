@@ -11,7 +11,7 @@ import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart' as mb;
 
 import 'screens/history_screen.dart';
 import 'screens/settings_screen.dart';
-import 'screens/tracking_screen.dart';
+import 'screens/tracking/tracking_screen.dart';
 import 'services/settings_service.dart';
 import 'config/mapbox_config.dart';
 import 'services/offline_sync_queue.dart';
@@ -70,6 +70,7 @@ const String _kSupabaseAnonKey =
 const String _kAppVersion = '1.5.1';
 const Duration _kOfflineSyncBootDelay = Duration(seconds: 2);
 
+
 DateTime? _lastKeyboardAssertionLogAt;
 int _suppressedKeyboardAssertionCount = 0;
 
@@ -77,7 +78,6 @@ bool _isBenignHardwareKeyboardAssertion(Object error) {
   final String message = error.toString();
 
   if (!message.contains('hardware_keyboard.dart')) return false;
-  if (!message.contains('physicalKey')) return false;
 
   final bool isDuplicateKeyDown =
       message.contains('!_pressedKeys.containsKey(event.physicalKey)') &&
@@ -89,10 +89,14 @@ bool _isBenignHardwareKeyboardAssertion(Object error) {
           message.contains('KeyUpEvent is dispatched') &&
           message.contains('physical key is not pressed');
 
-  // Flutter Web/hotbuilder can emit duplicated synthesized keyboard events for
-  // any key while typing in text fields, not only Ctrl/Meta keys. These are
-  // framework-level web keyboard-state assertions and should not break the app.
-  return isDuplicateKeyDown || isDuplicateKeyUp;
+  final bool isControlKey = message.contains('Control Left') ||
+      message.contains('Control Right') ||
+      message.contains('PhysicalKeyboardKey#700e0') ||
+      message.contains('PhysicalKeyboardKey#700e4');
+
+  // Flutter Web/hotbuilder can occasionally send duplicated synthesized Ctrl
+  // key events. These are noisy framework assertions, not app logic errors.
+  return isControlKey && (isDuplicateKeyDown || isDuplicateKeyUp);
 }
 
 void _logIgnoredKeyboardAssertion(Object error) {
@@ -486,10 +490,10 @@ class _AppShellState extends State<AppShell>
     'SETTINGS',
   ];
 
-  late final List<Widget> _pages = const <Widget>[
-    TrackingScreen(),
-    HistoryScreen(),
-    SettingsScreen(),
+  late final List<Widget> _pages = <Widget>[
+    const TrackingScreen(),
+    const HistoryScreen(),
+    const SettingsScreen(),
   ];
 
   @override
@@ -523,9 +527,7 @@ class _AppShellState extends State<AppShell>
           await OfflineSyncQueue.instance.syncNow();
 
       AppConsole.log(
-        result.hasPending
-            ? 'Boot offline sync still pending'
-            : 'Boot offline sync complete',
+        result.hasPending ? 'Boot offline sync still pending' : 'Boot offline sync complete',
         tag: 'SYNC',
         data: <String, Object?>{
           'attempted': result.attempted,
