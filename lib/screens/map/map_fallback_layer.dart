@@ -10,6 +10,7 @@ part of 'map_screen.dart';
 
 class _FlutterMapLayer extends StatelessWidget {
   const _FlutterMapLayer({
+    super.key,
     required this.mapController,
     required this.route,
     required this.plannedRoute,

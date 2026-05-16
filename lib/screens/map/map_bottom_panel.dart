@@ -16,13 +16,13 @@ extension _MapScreenBottomPanel on _MapScreenState {
       onChange: (Size size) => _bottomPanelHeight.value = size.height,
       child: Padding(
         padding: EdgeInsets.fromLTRB(
-          12,
+          16,
           0,
-          12,
-          MediaQuery.of(context).padding.bottom + 8,
+          16,
+          MediaQuery.of(context).padding.bottom + 10,
         ),
         child: ClipRRect(
-          borderRadius: BorderRadius.circular(26),
+          borderRadius: BorderRadius.circular(24),
           child: BackdropFilter(
             filter: ui.ImageFilter.blur(sigmaX: 22, sigmaY: 22),
             child: Container(
@@ -35,7 +35,7 @@ extension _MapScreenBottomPanel on _MapScreenState {
                     Colors.black.withValues(alpha: 0.88),
                   ],
                 ),
-                borderRadius: BorderRadius.circular(26),
+                borderRadius: BorderRadius.circular(24),
                 border: Border.all(
                   color: Colors.white.withValues(alpha: 0.07),
                 ),
@@ -71,14 +71,15 @@ extension _MapScreenBottomPanel on _MapScreenState {
                     curve: Curves.easeInOutCubic,
                     child: _panelExpanded
                         ? Padding(
-                            padding: const EdgeInsets.fromLTRB(14, 4, 14, 14),
+                            padding: const EdgeInsets.fromLTRB(12, 4, 12, 12),
                             child: Column(
                               mainAxisSize: MainAxisSize.min,
                               children: <Widget>[
-                                if (_showChart &&
+                                if (widget.isLive &&
+                                    _showChart &&
                                     _route.speedSamples.isNotEmpty)
                                   _buildMiniChart(),
-                                if (_showSpeedGradient) ...<Widget>[
+                                if (widget.isLive && _showSpeedGradient) ...<Widget>[
                                   const SizedBox(height: 10),
                                   _buildSpeedLegend(),
                                   const SizedBox(height: 12),
@@ -87,7 +88,7 @@ extension _MapScreenBottomPanel on _MapScreenState {
                                     height: 1,
                                   ),
                                 ],
-                                const SizedBox(height: 14),
+                                const SizedBox(height: 10),
                                 _buildCompactRouteSummaryCard(),
                                 if (_plannedRoute != null) ...<Widget>[
                                   const SizedBox(height: 10),
@@ -95,10 +96,10 @@ extension _MapScreenBottomPanel on _MapScreenState {
                                 ],
                                 if (!widget.isLive &&
                                     _route.validPoints.length > 1) ...<Widget>[
-                                  const SizedBox(height: 12),
+                                  const SizedBox(height: 10),
                                   _buildReplayControls(),
                                 ],
-                                const SizedBox(height: 12),
+                                const SizedBox(height: 10),
                                 _buildActionRow(),
                               ],
                             ),

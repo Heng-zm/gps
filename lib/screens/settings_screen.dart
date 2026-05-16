@@ -7,15 +7,13 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:geolocator/geolocator.dart';
 
-import '../services/settings_service.dart';
+import '../models/location_puck_style.dart';
 import '../navigation/app_routes.dart';
+import '../services/settings_service.dart';
 import '../widgets/app_console_widget.dart';
+import '../widgets/location_puck_widget.dart';
+import '../widgets/settings/location_puck_style_selector.dart';
 import 'diagnostics/diagnostics_screen.dart';
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// SETTINGS SCREEN — Premium Map-First Companion UI
-// Bug fixes + UI/UX polish + overflow-safe text + better permission actions
-// ═══════════════════════════════════════════════════════════════════════════════
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -43,18 +41,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
   @override
   void initState() {
     super.initState();
-
     _s.addListener(_onSettingsChanged);
-
-    if (!_s.isLoaded) {
-      _s.load();
-    }
+    if (!_s.isLoaded) _s.load();
 
     AppConsole.log(
       'Settings screen opened',
       tag: 'SETTINGS',
       data: <String, Object?>{
         'mapStyle': _s.mapStyle.name,
+        'locationPuckStyle': _s.locationPuckStyle.name,
         'units': _s.useKmh ? 'metric' : 'imperial',
       },
     );
@@ -69,31 +64,23 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   void _onSettingsChanged() {
-    if (!mounted) return;
-    setState(() {});
+    if (mounted) setState(() {});
   }
 
   Future<void> _checkPermission() async {
-    if (mounted) {
-      setState(() => _checkingPermission = true);
-    }
+    if (mounted) setState(() => _checkingPermission = true);
 
     try {
       final LocationPermission permission = await Geolocator.checkPermission();
-
       if (!mounted) return;
-
       setState(() {
         _locationPermission = permission;
         _checkingPermission = false;
       });
-
       AppConsole.log(
         'Location permission checked',
         tag: 'PERMISSION',
-        data: <String, Object?>{
-          'status': permission.name,
-        },
+        data: <String, Object?>{'status': permission.name},
       );
     } catch (error, stackTrace) {
       debugPrint('SettingsScreen permission check failed: $error\n$stackTrace');
@@ -103,39 +90,26 @@ class _SettingsScreenState extends State<SettingsScreen> {
         error: error,
         stackTrace: stackTrace,
       );
-
-      if (!mounted) return;
-      setState(() => _checkingPermission = false);
+      if (mounted) setState(() => _checkingPermission = false);
     }
   }
 
   Future<void> _requestLocationPermission() async {
     HapticFeedback.lightImpact();
-
     try {
-      final LocationPermission permission =
-          await Geolocator.requestPermission();
-
+      final LocationPermission permission = await Geolocator.requestPermission();
       if (!mounted) return;
-
-      setState(() {
-        _locationPermission = permission;
-      });
-
+      setState(() => _locationPermission = permission);
       AppConsole.log(
         'Location permission requested',
         tag: 'PERMISSION',
-        data: <String, Object?>{
-          'status': permission.name,
-        },
+        data: <String, Object?>{'status': permission.name},
       );
-
       if (permission == LocationPermission.deniedForever) {
         await _openLocationSettings();
       }
     } catch (error, stackTrace) {
-      debugPrint(
-          'SettingsScreen permission request failed: $error\n$stackTrace');
+      debugPrint('SettingsScreen permission request failed: $error\n$stackTrace');
       AppConsole.error(
         'Permission request failed',
         tag: 'PERMISSION',
@@ -147,7 +121,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   Future<void> _openLocationSettings() async {
     HapticFeedback.lightImpact();
-
     try {
       await Geolocator.openAppSettings();
       AppConsole.log('Opened app settings', tag: 'PERMISSION');
@@ -160,7 +133,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
         stackTrace: stackTrace,
       );
     }
-
     await _checkPermission();
   }
 
@@ -175,7 +147,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
           message: const Text('Choose how the live map should look.'),
           actions: AppMapStyle.values.map((AppMapStyle style) {
             final bool selected = style == _s.mapStyle;
-
             return CupertinoActionSheetAction(
               isDefaultAction: selected,
               onPressed: () {
@@ -184,9 +155,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 AppConsole.success(
                   'Map style changed',
                   tag: 'SETTINGS',
-                  data: <String, Object?>{
-                    'style': style.name,
-                  },
+                  data: <String, Object?>{'style': style.name},
                 );
                 Navigator.pop(popupContext);
               },
@@ -205,7 +174,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ],
               ),
             );
-          }).toList(),
+          }).toList(growable: false),
           cancelButton: CupertinoActionSheetAction(
             isDefaultAction: true,
             onPressed: () => Navigator.pop(popupContext),
@@ -216,9 +185,121 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
+  void _showLocationPuckStylePicker() {
+    HapticFeedback.mediumImpact();
+
+    showCupertinoModalPopup<void>(
+      context: context,
+      builder: (BuildContext popupContext) {
+        final Size screenSize = MediaQuery.of(popupContext).size;
+        final EdgeInsets safe = MediaQuery.of(popupContext).padding;
+        final double maxPopupHeight =
+            (screenSize.height - safe.top - safe.bottom - 28).clamp(360.0, 720.0);
+
+        return Material(
+          color: Colors.transparent,
+          child: SafeArea(
+            top: false,
+            child: Container(
+              margin: const EdgeInsets.fromLTRB(10, 0, 10, 10),
+              constraints: BoxConstraints(maxHeight: maxPopupHeight),
+              decoration: BoxDecoration(
+                color: _surface.withValues(alpha: 0.98),
+                borderRadius: BorderRadius.circular(28),
+                border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+                boxShadow: <BoxShadow>[
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.48),
+                    blurRadius: 26,
+                    offset: const Offset(0, 10),
+                  ),
+                ],
+              ),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(28),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: <Widget>[
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 14, 16, 10),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: <Widget>[
+                          Container(
+                            width: 44,
+                            height: 4,
+                            decoration: BoxDecoration(
+                              color: Colors.white.withValues(alpha: 0.18),
+                              borderRadius: BorderRadius.circular(99),
+                            ),
+                          ),
+                          const SizedBox(height: 14),
+                          Row(
+                            children: <Widget>[
+                              const Icon(
+                                CupertinoIcons.location_fill,
+                                color: _goldSoft,
+                                size: 20,
+                              ),
+                              const SizedBox(width: 10),
+                              const Expanded(
+                                child: _SafeText(
+                                  'Location Puck Style',
+                                  maxLines: 1,
+                                  style: TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 18,
+                                    fontWeight: FontWeight.w900,
+                                  ),
+                                ),
+                              ),
+                              CupertinoButton(
+                                padding: EdgeInsets.zero,
+                                minSize: 0,
+                                onPressed: () => Navigator.pop(popupContext),
+                                child: const Icon(
+                                  CupertinoIcons.xmark_circle_fill,
+                                  color: Colors.white38,
+                                  size: 24,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                    Flexible(
+                      child: SingleChildScrollView(
+                        primary: false,
+                        physics: const BouncingScrollPhysics(),
+                        padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                        child: LocationPuckStyleSelector(
+                          selected: _s.locationPuckStyle,
+                          onChanged: (LocationPuckStyle style) {
+                            HapticFeedback.selectionClick();
+                            _s.setLocationPuckStyle(style);
+                            AppConsole.success(
+                              'Location puck style changed',
+                              tag: 'SETTINGS',
+                              data: <String, Object?>{'style': style.name},
+                            );
+                            Navigator.pop(popupContext);
+                          },
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
   Future<void> _confirmClearData() async {
     HapticFeedback.heavyImpact();
-
     final bool? confirmed = await showCupertinoDialog<bool>(
       context: context,
       builder: (BuildContext dialogContext) {
@@ -243,20 +324,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
 
     if (confirmed != true || _busyReset) return;
-
     setState(() => _busyReset = true);
 
     try {
       await _s.clearAllData();
-
       AppConsole.warn('Factory settings reset complete', tag: 'SETTINGS');
-
       if (!mounted) return;
-
-      _showSnack(
-        message: 'Settings reset complete.',
-        color: _green,
-      );
+      _showSnack(message: 'Settings reset complete.', color: _green);
     } catch (error, stackTrace) {
       debugPrint('Clear settings failed: $error\n$stackTrace');
       AppConsole.error(
@@ -265,33 +339,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
         error: error,
         stackTrace: stackTrace,
       );
-
       if (!mounted) return;
-
-      _showSnack(
-        message: 'Failed to reset settings.',
-        color: _red,
-      );
+      _showSnack(message: 'Failed to reset settings.', color: _red);
     } finally {
-      if (mounted) {
-        setState(() => _busyReset = false);
-      }
+      if (mounted) setState(() => _busyReset = false);
     }
   }
 
-  void _showSnack({
-    required String message,
-    required Color color,
-  }) {
+  void _showSnack({required String message, required Color color}) {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(message),
         backgroundColor: color,
         behavior: SnackBarBehavior.floating,
         margin: const EdgeInsets.all(16),
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(14),
-        ),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
       ),
     );
   }
@@ -303,7 +365,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   String get _permissionLabel {
     if (_checkingPermission) return 'CHECKING';
-
     switch (_locationPermission) {
       case LocationPermission.always:
         return 'ALWAYS';
@@ -410,6 +471,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                 ),
                                 onTap: _showMapStylePicker,
                               ),
+                              const _Sep(),
+                              _SettingTile(
+                                icon: _s.locationPuckStyle.icon,
+                                iconColor: _s.locationPuckStyle.accentColor,
+                                title: 'Location Puck',
+                                subtitle: _s.locationPuckStyle.description,
+                                trailing: _LocationPuckPreview(
+                                  style: _s.locationPuckStyle,
+                                ),
+                                onTap: _showLocationPuckStylePicker,
+                              ),
                             ],
                           ),
                           _Section(
@@ -435,8 +507,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                 icon: CupertinoIcons.cloud_sun_fill,
                                 iconColor: _goldSoft,
                                 title: 'Weather Card',
-                                subtitle:
-                                    'Show live weather on tracking screen',
+                                subtitle: 'Show live weather on tracking screen',
                                 value: _s.showWeather,
                                 onChanged: (bool value) {
                                   _s.setShowWeather(value);
@@ -502,8 +573,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             title: 'SAFETY',
                             children: <Widget>[
                               _SwitchTile(
-                                icon: CupertinoIcons
-                                    .exclamationmark_triangle_fill,
+                                icon: CupertinoIcons.exclamationmark_triangle_fill,
                                 iconColor: _red,
                                 title: 'Speed Alert',
                                 subtitle: 'Warn when speed exceeds your limit',
@@ -523,9 +593,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                 switchOutCurve: Curves.easeIn,
                                 child: _s.speedAlertEnabled
                                     ? Column(
-                                        key: const ValueKey<String>(
-                                          'speed-alert-slider',
-                                        ),
+                                        key: const ValueKey<String>('speed-alert-slider'),
                                         children: <Widget>[
                                           const _Sep(),
                                           _SpeedAlertPanel(
@@ -534,24 +602,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                             max: _s.speedAlertMax,
                                             unit: _s.speedUnit,
                                             onChanged: (double value) {
-                                              _s.setSpeedAlertDisplayValue(
-                                                  value);
-                                              AppConsole.log(
-                                                'Speed alert threshold changed',
-                                                tag: 'SETTINGS',
-                                                data: <String, Object?>{
-                                                  'value': value.round(),
-                                                  'unit': _s.speedUnit,
-                                                },
-                                              );
+                                              _s.setSpeedAlertDisplayValue(value);
                                             },
                                           ),
                                         ],
                                       )
                                     : const SizedBox(
-                                        key: ValueKey<String>(
-                                          'speed-alert-disabled',
-                                        ),
+                                        key: ValueKey<String>('speed-alert-disabled'),
                                         height: 0,
                                       ),
                               ),
@@ -585,8 +642,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                 icon: CupertinoIcons.trash_fill,
                                 iconColor: _red,
                                 title: 'Reset Factory Settings',
-                                subtitle:
-                                    'Restore defaults and clear local cache',
+                                subtitle: 'Restore defaults and clear local cache',
                                 trailing: _busyReset
                                     ? const CupertinoActivityIndicator(
                                         color: _red,
@@ -624,10 +680,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                 iconColor: _blue,
                                 title: 'Version',
                                 subtitle: 'TrackPro AI',
-                                trailing: _ValueLabel(
-                                  value: '1.5.0',
-                                  color: _muted,
-                                ),
+                                trailing: _ValueLabel(value: '1.5.0', color: _muted),
                               ),
                               const _Sep(),
                               const _SettingTile(
@@ -635,10 +688,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                 iconColor: _green,
                                 title: 'API Status',
                                 subtitle: 'Cloud services are reachable',
-                                trailing: _StatusPill(
-                                  label: 'ONLINE',
-                                  color: _green,
-                                ),
+                                trailing: _StatusPill(label: 'ONLINE', color: _green),
                               ),
                             ],
                           ),
@@ -656,9 +706,27 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// BACKGROUND / HERO
-// ═══════════════════════════════════════════════════════════════════════════════
+class _LocationPuckPreview extends StatelessWidget {
+  const _LocationPuckPreview({required this.style});
+
+  final LocationPuckStyle style;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: 48,
+      height: 44,
+      child: Center(
+        child: AppLocationPuck(
+          style: style,
+          bearing: 30,
+          speed: 28,
+          size: 42,
+        ),
+      ),
+    );
+  }
+}
 
 class _SettingsBackground extends StatelessWidget {
   const _SettingsBackground();
@@ -716,14 +784,10 @@ class _HeroStatusCard extends StatelessWidget {
                 decoration: BoxDecoration(
                   color: permissionColor.withValues(alpha: 0.13),
                   borderRadius: BorderRadius.circular(18),
-                  border: Border.all(
-                    color: permissionColor.withValues(alpha: 0.24),
-                  ),
+                  border: Border.all(color: permissionColor.withValues(alpha: 0.24)),
                 ),
                 child: Icon(
-                  hasLocationAccess
-                      ? CupertinoIcons.location_fill
-                      : CupertinoIcons.location_slash,
+                  hasLocationAccess ? CupertinoIcons.location_fill : CupertinoIcons.location_slash,
                   color: permissionColor,
                   size: 24,
                 ),
@@ -734,9 +798,7 @@ class _HeroStatusCard extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: <Widget>[
                     _SafeText(
-                      hasLocationAccess
-                          ? 'Ready to Track'
-                          : 'Location Setup Needed',
+                      hasLocationAccess ? 'Ready to Track' : 'Location Setup Needed',
                       maxLines: 1,
                       style: const TextStyle(
                         color: Colors.white,
@@ -821,11 +883,7 @@ class _HeroStatusCard extends StatelessWidget {
 }
 
 class _HeroMiniStat extends StatelessWidget {
-  const _HeroMiniStat({
-    required this.label,
-    required this.value,
-    required this.color,
-  });
+  const _HeroMiniStat({required this.label, required this.value, required this.color});
 
   final String label;
   final String value;
@@ -837,9 +895,7 @@ class _HeroMiniStat extends StatelessWidget {
       decoration: BoxDecoration(
         color: Colors.white.withValues(alpha: 0.04),
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(
-          color: Colors.white.withValues(alpha: 0.07),
-        ),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.07)),
       ),
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 11),
@@ -875,15 +931,8 @@ class _HeroMiniStat extends StatelessWidget {
   }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// SECTIONS
-// ═══════════════════════════════════════════════════════════════════════════════
-
 class _Section extends StatelessWidget {
-  const _Section({
-    required this.title,
-    required this.children,
-  });
+  const _Section({required this.title, required this.children});
 
   final String title;
   final List<Widget> children;
@@ -919,11 +968,7 @@ class _Section extends StatelessWidget {
 }
 
 class _GlassCard extends StatelessWidget {
-  const _GlassCard({
-    required this.child,
-    this.padding = const EdgeInsets.all(16),
-    this.radius = 22,
-  });
+  const _GlassCard({required this.child, this.padding = const EdgeInsets.all(16), this.radius = 22});
 
   final Widget child;
   final EdgeInsetsGeometry padding;
@@ -939,9 +984,7 @@ class _GlassCard extends StatelessWidget {
           decoration: BoxDecoration(
             color: _SettingsScreenState._surface.withValues(alpha: 0.90),
             borderRadius: BorderRadius.circular(radius),
-            border: Border.all(
-              color: Colors.white.withValues(alpha: 0.07),
-            ),
+            border: Border.all(color: Colors.white.withValues(alpha: 0.07)),
             boxShadow: <BoxShadow>[
               BoxShadow(
                 color: Colors.black.withValues(alpha: 0.30),
@@ -950,19 +993,12 @@ class _GlassCard extends StatelessWidget {
               ),
             ],
           ),
-          child: Padding(
-            padding: padding,
-            child: child,
-          ),
+          child: Padding(padding: padding, child: child),
         ),
       ),
     );
   }
 }
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// ROWS / TILES
-// ═══════════════════════════════════════════════════════════════════════════════
 
 class _SettingTile extends StatelessWidget {
   const _SettingTile({
@@ -996,11 +1032,7 @@ class _SettingTile extends StatelessWidget {
                 _SafeText(
                   title,
                   maxLines: 1,
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 15,
-                    fontWeight: FontWeight.w800,
-                  ),
+                  style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w800),
                 ),
                 const SizedBox(height: 3),
                 _SafeText(
@@ -1026,7 +1058,6 @@ class _SettingTile extends StatelessWidget {
     );
 
     if (onTap == null) return content;
-
     return CupertinoButton(
       padding: EdgeInsets.zero,
       minSize: 0,
@@ -1076,10 +1107,7 @@ class _SwitchTile extends StatelessWidget {
 }
 
 class _IconBox extends StatelessWidget {
-  const _IconBox({
-    required this.icon,
-    required this.color,
-  });
+  const _IconBox({required this.icon, required this.color});
 
   final IconData icon;
   final Color color;
@@ -1092,25 +1120,15 @@ class _IconBox extends StatelessWidget {
       decoration: BoxDecoration(
         color: color.withValues(alpha: 0.12),
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(
-          color: color.withValues(alpha: 0.16),
-        ),
+        border: Border.all(color: color.withValues(alpha: 0.16)),
       ),
       child: Icon(icon, color: color, size: 17),
     );
   }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// SPECIAL PANELS
-// ═══════════════════════════════════════════════════════════════════════════════
-
 class _GpsAccuracyPanel extends StatelessWidget {
-  const _GpsAccuracyPanel({
-    required this.label,
-    required this.selectedMode,
-    required this.onSelect,
-  });
+  const _GpsAccuracyPanel({required this.label, required this.selectedMode, required this.onSelect});
 
   final String label;
   final int selectedMode;
@@ -1124,10 +1142,7 @@ class _GpsAccuracyPanel extends StatelessWidget {
         children: <Widget>[
           Row(
             children: <Widget>[
-              const _IconBox(
-                icon: CupertinoIcons.scope,
-                color: _SettingsScreenState._goldSoft,
-              ),
+              const _IconBox(icon: CupertinoIcons.scope, color: _SettingsScreenState._goldSoft),
               const SizedBox(width: 13),
               const Expanded(
                 child: Column(
@@ -1136,11 +1151,7 @@ class _GpsAccuracyPanel extends StatelessWidget {
                     _SafeText(
                       'Accuracy Mode',
                       maxLines: 1,
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontSize: 15,
-                        fontWeight: FontWeight.w800,
-                      ),
+                      style: TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w800),
                     ),
                     SizedBox(height: 3),
                     _SafeText(
@@ -1158,38 +1169,17 @@ class _GpsAccuracyPanel extends StatelessWidget {
                 ),
               ),
               const SizedBox(width: 10),
-              _ValueLabel(
-                value: label.toUpperCase(),
-                color: _SettingsScreenState._goldSoft,
-              ),
+              _ValueLabel(value: label.toUpperCase(), color: _SettingsScreenState._goldSoft),
             ],
           ),
           const SizedBox(height: 16),
           Row(
             children: <Widget>[
-              Expanded(
-                child: _AccuracyChip(
-                  label: 'BEST',
-                  selected: selectedMode == 0,
-                  onTap: () => onSelect(0),
-                ),
-              ),
+              Expanded(child: _AccuracyChip(label: 'BEST', selected: selectedMode == 0, onTap: () => onSelect(0))),
               const SizedBox(width: 8),
-              Expanded(
-                child: _AccuracyChip(
-                  label: 'BALANCED',
-                  selected: selectedMode == 1,
-                  onTap: () => onSelect(1),
-                ),
-              ),
+              Expanded(child: _AccuracyChip(label: 'BALANCED', selected: selectedMode == 1, onTap: () => onSelect(1))),
               const SizedBox(width: 8),
-              Expanded(
-                child: _AccuracyChip(
-                  label: 'ECO',
-                  selected: selectedMode == 2,
-                  onTap: () => onSelect(2),
-                ),
-              ),
+              Expanded(child: _AccuracyChip(label: 'ECO', selected: selectedMode == 2, onTap: () => onSelect(2))),
             ],
           ),
         ],
@@ -1199,13 +1189,7 @@ class _GpsAccuracyPanel extends StatelessWidget {
 }
 
 class _SpeedAlertPanel extends StatelessWidget {
-  const _SpeedAlertPanel({
-    required this.value,
-    required this.min,
-    required this.max,
-    required this.unit,
-    required this.onChanged,
-  });
+  const _SpeedAlertPanel({required this.value, required this.min, required this.max, required this.unit, required this.onChanged});
 
   final double value;
   final double min;
@@ -1228,27 +1212,14 @@ class _SpeedAlertPanel extends StatelessWidget {
               const _SafeText(
                 'Alert Threshold',
                 maxLines: 1,
-                style: TextStyle(
-                  color: Colors.white,
-                  fontSize: 15,
-                  fontWeight: FontWeight.w800,
-                ),
+                style: TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w800),
               ),
               const Spacer(),
-              _ValueLabel(
-                value: '${safeValue.round()} $unit',
-                color: _SettingsScreenState._red,
-              ),
+              _ValueLabel(value: '${safeValue.round()} $unit', color: _SettingsScreenState._red),
             ],
           ),
           const SizedBox(height: 8),
-          CupertinoSlider(
-            value: safeValue,
-            min: safeMin,
-            max: safeMax,
-            activeColor: _SettingsScreenState._red,
-            onChanged: onChanged,
-          ),
+          CupertinoSlider(value: safeValue, min: safeMin, max: safeMax, activeColor: _SettingsScreenState._red, onChanged: onChanged),
         ],
       ),
     );
@@ -1266,31 +1237,20 @@ class _WakeLockNote extends StatelessWidget {
         decoration: BoxDecoration(
           color: _SettingsScreenState._gold.withValues(alpha: 0.08),
           borderRadius: BorderRadius.circular(14),
-          border: Border.all(
-            color: _SettingsScreenState._gold.withValues(alpha: 0.12),
-          ),
+          border: Border.all(color: _SettingsScreenState._gold.withValues(alpha: 0.12)),
         ),
         child: const Padding(
           padding: EdgeInsets.all(12),
           child: Row(
             children: <Widget>[
-              Icon(
-                CupertinoIcons.exclamationmark_circle_fill,
-                color: _SettingsScreenState._goldSoft,
-                size: 16,
-              ),
+              Icon(CupertinoIcons.exclamationmark_circle_fill, color: _SettingsScreenState._goldSoft, size: 16),
               SizedBox(width: 9),
               Expanded(
                 child: _SafeText(
                   'On Web, screen wake lock may be blocked by browser policy.',
                   maxLines: 2,
                   softWrap: true,
-                  style: TextStyle(
-                    color: Colors.white54,
-                    fontSize: 11,
-                    height: 1.25,
-                    fontWeight: FontWeight.w600,
-                  ),
+                  style: TextStyle(color: Colors.white54, fontSize: 11, height: 1.25, fontWeight: FontWeight.w600),
                 ),
               ),
             ],
@@ -1301,16 +1261,8 @@ class _WakeLockNote extends StatelessWidget {
   }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// SMALL COMPONENTS
-// ═══════════════════════════════════════════════════════════════════════════════
-
 class _AccuracyChip extends StatelessWidget {
-  const _AccuracyChip({
-    required this.label,
-    required this.selected,
-    required this.onTap,
-  });
+  const _AccuracyChip({required this.label, required this.selected, required this.onTap});
 
   final String label;
   final bool selected;
@@ -1318,9 +1270,7 @@ class _AccuracyChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final Color color =
-        selected ? _SettingsScreenState._goldSoft : Colors.white38;
-
+    final Color color = selected ? _SettingsScreenState._goldSoft : Colors.white38;
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
       onTap: () {
@@ -1332,14 +1282,10 @@ class _AccuracyChip extends StatelessWidget {
         curve: Curves.easeOut,
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 11),
         decoration: BoxDecoration(
-          color: selected
-              ? _SettingsScreenState._gold.withValues(alpha: 0.13)
-              : Colors.white.withValues(alpha: 0.035),
+          color: selected ? _SettingsScreenState._gold.withValues(alpha: 0.13) : Colors.white.withValues(alpha: 0.035),
           borderRadius: BorderRadius.circular(14),
           border: Border.all(
-            color: selected
-                ? _SettingsScreenState._goldSoft.withValues(alpha: 0.72)
-                : Colors.white.withValues(alpha: 0.06),
+            color: selected ? _SettingsScreenState._goldSoft.withValues(alpha: 0.72) : Colors.white.withValues(alpha: 0.06),
             width: selected ? 1.4 : 1.0,
           ),
         ),
@@ -1347,12 +1293,7 @@ class _AccuracyChip extends StatelessWidget {
           label,
           maxLines: 1,
           textAlign: TextAlign.center,
-          style: TextStyle(
-            color: color,
-            fontSize: 10,
-            fontWeight: FontWeight.w900,
-            letterSpacing: 0.6,
-          ),
+          style: TextStyle(color: color, fontSize: 10, fontWeight: FontWeight.w900, letterSpacing: 0.6),
         ),
       ),
     );
@@ -1360,10 +1301,7 @@ class _AccuracyChip extends StatelessWidget {
 }
 
 class _StatusPill extends StatelessWidget {
-  const _StatusPill({
-    required this.label,
-    required this.color,
-  });
+  const _StatusPill({required this.label, required this.color});
 
   final String label;
   final Color color;
@@ -1374,21 +1312,14 @@ class _StatusPill extends StatelessWidget {
       decoration: BoxDecoration(
         color: color.withValues(alpha: 0.10),
         borderRadius: BorderRadius.circular(99),
-        border: Border.all(
-          color: color.withValues(alpha: 0.18),
-        ),
+        border: Border.all(color: color.withValues(alpha: 0.18)),
       ),
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 6),
         child: _SafeText(
           label,
           maxLines: 1,
-          style: TextStyle(
-            color: color,
-            fontSize: 10,
-            fontWeight: FontWeight.w900,
-            letterSpacing: 0.6,
-          ),
+          style: TextStyle(color: color, fontSize: 10, fontWeight: FontWeight.w900, letterSpacing: 0.6),
         ),
       ),
     );
@@ -1396,10 +1327,7 @@ class _StatusPill extends StatelessWidget {
 }
 
 class _ValueLabel extends StatelessWidget {
-  const _ValueLabel({
-    required this.value,
-    required this.color,
-  });
+  const _ValueLabel({required this.value, required this.color});
 
   final String value;
   final Color color;
@@ -1409,22 +1337,13 @@ class _ValueLabel extends StatelessWidget {
     return _SafeText(
       value,
       maxLines: 1,
-      style: TextStyle(
-        color: color,
-        fontSize: 12,
-        fontWeight: FontWeight.w900,
-        letterSpacing: 0.4,
-      ),
+      style: TextStyle(color: color, fontSize: 12, fontWeight: FontWeight.w900, letterSpacing: 0.4),
     );
   }
 }
 
 class _ActionButton extends StatelessWidget {
-  const _ActionButton({
-    required this.label,
-    required this.color,
-    required this.onTap,
-  });
+  const _ActionButton({required this.label, required this.color, required this.onTap});
 
   final String label;
   final Color color;
@@ -1442,19 +1361,12 @@ class _ActionButton extends StatelessWidget {
         decoration: BoxDecoration(
           color: color.withValues(alpha: 0.14),
           borderRadius: BorderRadius.circular(14),
-          border: Border.all(
-            color: color.withValues(alpha: 0.24),
-          ),
+          border: Border.all(color: color.withValues(alpha: 0.24)),
         ),
         child: _SafeText(
           label,
           maxLines: 1,
-          style: TextStyle(
-            color: color,
-            fontSize: 11,
-            fontWeight: FontWeight.w900,
-            letterSpacing: 0.7,
-          ),
+          style: TextStyle(color: color, fontSize: 11, fontWeight: FontWeight.w900, letterSpacing: 0.7),
         ),
       ),
     );
@@ -1495,7 +1407,7 @@ class _SafeText extends StatelessWidget {
       child: Text(
         data,
         maxLines: maxLines,
-        overflow: TextOverflow.clip,
+        overflow: TextOverflow.ellipsis,
         softWrap: softWrap,
         textAlign: textAlign,
         style: style,

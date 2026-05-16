@@ -3,6 +3,8 @@ import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 
+import '../models/location_puck_style.dart';
+
 /// Enum for type-safe map style preferences.
 enum AppMapStyle {
   dark,
@@ -38,6 +40,7 @@ class SettingsService extends ChangeNotifier {
   static const String _prefHeading = 'show_heading';
   static const String _prefGpsMode = 'gps_accuracy_mode';
   static const String _prefMapStyle = 'map_style_preference';
+  static const String _prefLocationPuckStyle = 'location_puck_style';
 
   static const List<String> _settingsKeys = <String>[
     _prefUseKmh,
@@ -50,6 +53,7 @@ class SettingsService extends ChangeNotifier {
     _prefHeading,
     _prefGpsMode,
     _prefMapStyle,
+    _prefLocationPuckStyle,
   ];
 
   SharedPreferences? _prefs;
@@ -74,6 +78,7 @@ class SettingsService extends ChangeNotifier {
   bool _showHeading = true;
   int _gpsAccuracyMode = 0;
   AppMapStyle _mapStyle = AppMapStyle.dark;
+  LocationPuckStyle _locationPuckStyle = LocationPuckStyle.classicBlue;
 
   // ───────────────────────────────────────────────────────────────────────────
   // Public Getters
@@ -89,6 +94,7 @@ class SettingsService extends ChangeNotifier {
   bool get showHeading => _showHeading;
   int get gpsAccuracyMode => _gpsAccuracyMode;
   AppMapStyle get mapStyle => _mapStyle;
+  LocationPuckStyle get locationPuckStyle => _locationPuckStyle;
 
   // ───────────────────────────────────────────────────────────────────────────
   // Derived Getters
@@ -124,6 +130,8 @@ class SettingsService extends ChangeNotifier {
       AppMapStyle.satellite => 'Satellite',
     };
   }
+
+  String get locationPuckStyleLabel => _locationPuckStyle.label;
 
   // ───────────────────────────────────────────────────────────────────────────
   // Unit Converters
@@ -194,6 +202,9 @@ class SettingsService extends ChangeNotifier {
       );
       _mapStyle = _parseMapStyleIndex(
         prefs.getInt(_prefMapStyle) ?? AppMapStyle.dark.index,
+      );
+      _locationPuckStyle = LocationPuckStyleX.fromStorageKey(
+        prefs.getString(_prefLocationPuckStyle),
       );
 
       _isLoaded = true;
@@ -340,6 +351,23 @@ class SettingsService extends ChangeNotifier {
       await prefs.setInt(_prefMapStyle, value.index);
     } catch (e, st) {
       debugPrint('SettingsService setMapStyle error: $e\n$st');
+    }
+  }
+
+  Future<void> setLocationPuckStyle(LocationPuckStyle value) async {
+    if (_locationPuckStyle == value) {
+      return;
+    }
+
+    _locationPuckStyle = value;
+    notifyListeners();
+    await _hapticSelection();
+
+    try {
+      final SharedPreferences prefs = await _getPrefs();
+      await prefs.setString(_prefLocationPuckStyle, value.storageKey);
+    } catch (e, st) {
+      debugPrint('SettingsService setLocationPuckStyle error: $e\n$st');
     }
   }
 
@@ -531,5 +559,6 @@ class SettingsService extends ChangeNotifier {
     _showHeading = true;
     _gpsAccuracyMode = 0;
     _mapStyle = AppMapStyle.dark;
+    _locationPuckStyle = LocationPuckStyle.classicBlue;
   }
 }

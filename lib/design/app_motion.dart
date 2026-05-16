@@ -23,9 +23,8 @@ class AppFadeSlide extends StatelessWidget {
       duration: delay + duration,
       curve: AppCurves.standard,
       builder: (BuildContext context, double value, Widget? child) {
-        final double t = delay == Duration.zero
-            ? value
-            : ((value - 0.25).clamp(0.0, 1.0));
+        final double t =
+            delay == Duration.zero ? value : ((value - 0.25).clamp(0.0, 1.0));
 
         return Opacity(
           opacity: t,

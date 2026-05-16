@@ -658,6 +658,12 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
 
   bool get _shouldUseNativeMapbox {
     if (kIsWeb) return false;
+
+    // Trip Replay needs a replay puck that follows `_replayIndex`.
+    // Native Mapbox location puck follows the real device location only,
+    // so replay mode uses the flutter_map layer with our custom replay marker.
+    if (!widget.isLive) return false;
+
     if (_mapboxRuntimeMode == MapboxRuntimeMode.webFallback) return false;
     return _mapboxRuntimeMode == MapboxRuntimeMode.auto ||
         _mapboxRuntimeMode == MapboxRuntimeMode.native;
@@ -1144,6 +1150,7 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
               )
             else
               _FlutterMapLayer(
+                key: ValueKey<String>('replay-${widget.isLive}-$_replayIndex-${_mapStyle.name}'),
                 mapController: _mapController,
                 route: _route,
                 plannedRoute: _plannedRoute,
@@ -1184,7 +1191,7 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
               ),
 
             // ── SPEED HUD ────────────────────────────────────────────────────
-            if (!_route.isEmpty)
+            if (!_route.isEmpty && widget.isLive)
               ValueListenableBuilder<double>(
                 valueListenable: _bottomPanelHeight,
                 builder: (_, double panelH, __) => Positioned(
@@ -1200,7 +1207,7 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
                 valueListenable: _bottomPanelHeight,
                 builder: (_, double panelH, __) => Positioned(
                   right: 16,
-                  bottom: panelH + 14,
+                  bottom: panelH + 18,
                   child: _buildZoomControls(),
                 ),
               ),
