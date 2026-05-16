@@ -10,6 +10,10 @@ part of 'map_screen.dart';
 // NATIVE MAPBOX LAYER — Android/mobile only. Web uses flutter_map fallback.
 // ─────────────────────────────────────────────────────────────────────────────
 
+<<<<<<< HEAD
+=======
+
+>>>>>>> d655b8fc8c832b4beadc44ea05c83d7603c5dc24
 int _mapColorToInt(Color color) => color.value;
 
 class _NativeMapboxLayer extends StatefulWidget {
@@ -91,8 +95,12 @@ class _NativeMapboxLayerState extends State<_NativeMapboxLayer> {
           pulsingMaxRadius: 46,
           showAccuracyRing: widget.isLive,
           accuracyRingColor: _mapColorToInt(_kBlue.withValues(alpha: 0.18)),
+<<<<<<< HEAD
           accuracyRingBorderColor:
               _mapColorToInt(_kBlue.withValues(alpha: 0.42)),
+=======
+          accuracyRingBorderColor: _mapColorToInt(_kBlue.withValues(alpha: 0.42)),
+>>>>>>> d655b8fc8c832b4beadc44ea05c83d7603c5dc24
         ),
       );
     } catch (error) {
