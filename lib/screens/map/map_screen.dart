@@ -496,6 +496,87 @@ class _RouteProcessor {
   }
 }
 
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PREMIUM MAP UX FEATURE MODES
+// ─────────────────────────────────────────────────────────────────────────────
+
+enum _PanelDockMode {
+  mini,
+  compact,
+  expanded,
+}
+
+enum _ReplayCameraMode {
+  follow,
+  cinematic,
+  orbit,
+  free,
+}
+
+enum _QuickActionMenuState {
+  closed,
+  open,
+}
+
+extension _PanelDockModeX on _PanelDockMode {
+  String get label {
+    switch (this) {
+      case _PanelDockMode.mini:
+        return 'MINI';
+      case _PanelDockMode.compact:
+        return 'COMPACT';
+      case _PanelDockMode.expanded:
+        return 'FULL';
+    }
+  }
+
+  bool get isExpanded => this == _PanelDockMode.expanded;
+  bool get isCompact => this == _PanelDockMode.compact;
+  bool get isMini => this == _PanelDockMode.mini;
+}
+
+extension _ReplayCameraModeX on _ReplayCameraMode {
+  String get label {
+    switch (this) {
+      case _ReplayCameraMode.follow:
+        return 'FOLLOW';
+      case _ReplayCameraMode.cinematic:
+        return 'CINEMA';
+      case _ReplayCameraMode.orbit:
+        return 'ORBIT';
+      case _ReplayCameraMode.free:
+        return 'FREE';
+    }
+  }
+
+  IconData get icon {
+    switch (this) {
+      case _ReplayCameraMode.follow:
+        return CupertinoIcons.location_fill;
+      case _ReplayCameraMode.cinematic:
+        return CupertinoIcons.film_fill;
+      case _ReplayCameraMode.orbit:
+        return CupertinoIcons.rotate_right;
+      case _ReplayCameraMode.free:
+        return CupertinoIcons.hand_draw_fill;
+    }
+  }
+
+  _ReplayCameraMode get next {
+    switch (this) {
+      case _ReplayCameraMode.follow:
+        return _ReplayCameraMode.cinematic;
+      case _ReplayCameraMode.cinematic:
+        return _ReplayCameraMode.orbit;
+      case _ReplayCameraMode.orbit:
+        return _ReplayCameraMode.free;
+      case _ReplayCameraMode.free:
+        return _ReplayCameraMode.follow;
+    }
+  }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // MAIN WIDGET
 // ─────────────────────────────────────────────────────────────────────────────
@@ -523,6 +604,15 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
   bool _followMode = true;
   bool _showSpeedGradient = false;
   bool _panelExpanded = true;
+
+  // PREMIUM FEATURE STATE
+  _PanelDockMode _panelDockMode = _PanelDockMode.expanded;
+  _ReplayCameraMode _replayCameraMode = _ReplayCameraMode.follow;
+  _QuickActionMenuState _quickActionMenuState = _QuickActionMenuState.closed;
+  bool _floatingHudMini = false;
+  bool _floatingHudLocked = false;
+  Offset _floatingHudOffset = const Offset(16, 132);
+  double _cinematicOrbitAngle = 0.0;
   bool _stylePickerOpen = false;
   bool _showChart = false;
   bool _mapReady = false;
@@ -628,7 +718,12 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
 
     if (_followMode && widget.isLive && newRoute.rawPoints.isNotEmpty) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) _animatedMove(newRoute.rawPoints.last, _currentZoom);
+        if (mounted) {
+          _animatedMove(
+            newRoute.rawPoints.last,
+            _appleMapsZoomForSpeed(newRoute.lastSpeedKmh),
+          );
+        }
       });
     }
   }
@@ -802,10 +897,7 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
     final bool next = !_followMode;
     setState(() => _followMode = next);
     if (next && _route.rawPoints.isNotEmpty) {
-      final LatLng? target = widget.isLive
-          ? _route.rawPoints.last
-          : _positionAtReplayIndex(_replayIndex);
-      if (target != null) _animatedMove(target, _currentZoom, force: true);
+      _premiumFollowLatest();
     }
   }
 
@@ -814,6 +906,7 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
     setState(() {
       _mapStyle = style;
       _stylePickerOpen = false;
+      _quickActionMenuState = _QuickActionMenuState.closed;
     });
   }
 
@@ -822,24 +915,25 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
     setState(() {
       _mapStyle = _mapStyle.next;
       _stylePickerOpen = false;
+      _quickActionMenuState = _QuickActionMenuState.closed;
     });
   }
 
   double _speedAtReplayIndex(int index) {
     if (_route.validPoints.isEmpty) return 0.0;
-    final int safeIndex = index.clamp(0, _route.validPoints.length - 1);
+    final int safeIndex = index.clamp(0, _route.validPoints.length - 1).toInt();
     return _route.validPoints[safeIndex].speedKmh;
   }
 
   LatLng? _positionAtReplayIndex(int index) {
     if (_route.validPoints.isEmpty) return null;
-    final int safeIndex = index.clamp(0, _route.validPoints.length - 1);
+    final int safeIndex = index.clamp(0, _route.validPoints.length - 1).toInt();
     return _route.validPoints[safeIndex].position;
   }
 
   void _setReplayIndex(int index, {bool moveCamera = true}) {
     if (_route.validPoints.isEmpty) return;
-    final int safeIndex = index.clamp(0, _route.validPoints.length - 1);
+    final int safeIndex = index.clamp(0, _route.validPoints.length - 1).toInt();
     final LatLng position = _route.validPoints[safeIndex].position;
 
     setState(() => _replayIndex = safeIndex);
@@ -847,7 +941,11 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
     _hudSpeed.value = _speedAtReplayIndex(safeIndex);
 
     if (moveCamera) {
-      _animatedMove(position, _currentZoom, force: true);
+      if (widget.isLive) {
+        _animatedMove(position, _appleMapsZoomForSpeed(_speedAtReplayIndex(safeIndex)), force: true);
+      } else {
+        _moveReplayCamera(position, force: true);
+      }
     }
   }
 
@@ -862,7 +960,7 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
     _stopReplayTimer();
     setState(() => _replayPlaying = true);
 
-    final int millis = (430 / _replaySpeed).round().clamp(80, 600);
+    final int millis = (430 / _replaySpeed).round().clamp(80, 600).toInt();
     _replayTimer = Timer.periodic(Duration(milliseconds: millis), (_) {
       if (!mounted) return;
       if (_replayIndex >= _route.validPoints.length - 1) {
@@ -888,9 +986,19 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
   }
 
   void _setReplaySpeed(double speed) {
+    final double safeSpeed = speed.clamp(0.5, 4.0).toDouble();
+    if (_replaySpeed == safeSpeed) return;
+
+    final bool wasPlaying = _replayPlaying;
     HapticFeedback.selectionClick();
-    setState(() => _replaySpeed = speed);
-    if (_replayPlaying) _startReplay();
+
+    _stopReplayTimer();
+    setState(() {
+      _replaySpeed = safeSpeed;
+      _replayPlaying = wasPlaying;
+    });
+
+    if (wasPlaying) _startReplay();
   }
 
   void _stopReplayTimer() {
@@ -938,17 +1046,186 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
 
   void _togglePanel() {
     HapticFeedback.selectionClick();
-    setState(() => _panelExpanded = !_panelExpanded);
-    if (_panelExpanded) {
-      _panelSlideController.forward();
+
+    if (_panelDockMode == _PanelDockMode.expanded) {
+      _setPanelDockMode(_PanelDockMode.compact);
     } else {
-      _panelSlideController.reverse();
+      _setPanelDockMode(_PanelDockMode.expanded);
     }
   }
 
   void _setMapState(VoidCallback fn) {
     if (!mounted) return;
     setState(fn);
+  }
+
+
+  // ───────────────────────────────────────────────────────────────────────────
+  // PREMIUM FEATURE CONTROLS
+  // ───────────────────────────────────────────────────────────────────────────
+
+  void _setPanelDockMode(_PanelDockMode mode) {
+    if (_panelDockMode == mode) return;
+    HapticFeedback.selectionClick();
+    setState(() {
+      _panelDockMode = mode;
+      _panelExpanded = mode != _PanelDockMode.mini;
+    });
+
+    if (mode == _PanelDockMode.expanded) {
+      _panelSlideController.forward();
+    } else if (mode == _PanelDockMode.mini) {
+      _panelSlideController.reverse();
+    }
+  }
+
+  void _cyclePanelDockMode() {
+    switch (_panelDockMode) {
+      case _PanelDockMode.expanded:
+        _setPanelDockMode(_PanelDockMode.compact);
+        break;
+      case _PanelDockMode.compact:
+        _setPanelDockMode(_PanelDockMode.mini);
+        break;
+      case _PanelDockMode.mini:
+        _setPanelDockMode(_PanelDockMode.expanded);
+        break;
+    }
+  }
+
+  void _handlePanelVerticalDragEnd(DragEndDetails details) {
+    final double velocity = details.primaryVelocity ?? 0.0;
+
+    if (velocity > 220) {
+      if (_panelDockMode == _PanelDockMode.expanded) {
+        _setPanelDockMode(_PanelDockMode.compact);
+      } else {
+        _setPanelDockMode(_PanelDockMode.mini);
+      }
+      return;
+    }
+
+    if (velocity < -220) {
+      if (_panelDockMode == _PanelDockMode.mini) {
+        _setPanelDockMode(_PanelDockMode.compact);
+      } else {
+        _setPanelDockMode(_PanelDockMode.expanded);
+      }
+    }
+  }
+
+  void _toggleQuickActionMenu() {
+    HapticFeedback.selectionClick();
+    setState(() {
+      _quickActionMenuState =
+          _quickActionMenuState == _QuickActionMenuState.open
+              ? _QuickActionMenuState.closed
+              : _QuickActionMenuState.open;
+    });
+  }
+
+  void _closeQuickActionMenu() {
+    if (_quickActionMenuState == _QuickActionMenuState.closed) return;
+    setState(() => _quickActionMenuState = _QuickActionMenuState.closed);
+  }
+
+  void _toggleFloatingHudMini() {
+    if (_floatingHudLocked) return;
+    HapticFeedback.selectionClick();
+    setState(() {
+      _floatingHudMini = !_floatingHudMini;
+      _floatingHudOffset = _clampFloatingHudOffset(_floatingHudOffset);
+    });
+  }
+
+  void _toggleFloatingHudLock() {
+    HapticFeedback.mediumImpact();
+    setState(() => _floatingHudLocked = !_floatingHudLocked);
+  }
+
+  Offset _clampFloatingHudOffset(Offset value) {
+    final Size screen = MediaQuery.sizeOf(context);
+    final EdgeInsets padding = MediaQuery.paddingOf(context);
+    final double hudWidth = _floatingHudMini ? 78.0 : 120.0;
+    final double hudHeight = _floatingHudMini ? 74.0 : 116.0;
+
+    final double minX = 8.0;
+    final double maxX = math.max(minX, screen.width - hudWidth - 8.0);
+    final double minY = padding.top + 72.0;
+    final double maxY = math.max(minY, screen.height - hudHeight - padding.bottom - 98.0);
+
+    return Offset(
+      value.dx.clamp(minX, maxX).toDouble(),
+      value.dy.clamp(minY, maxY).toDouble(),
+    );
+  }
+
+  void _updateFloatingHudOffset(DragUpdateDetails details) {
+    if (_floatingHudLocked) return;
+    final Offset next = _clampFloatingHudOffset(_floatingHudOffset + details.delta);
+    if (next == _floatingHudOffset) return;
+    setState(() => _floatingHudOffset = next);
+  }
+
+  void _snapFloatingHudToEdge() {
+    if (_floatingHudLocked) return;
+    final Size screen = MediaQuery.sizeOf(context);
+    final double hudWidth = _floatingHudMini ? 78.0 : 120.0;
+    final double targetX =
+        _floatingHudOffset.dx + hudWidth / 2.0 < screen.width / 2.0
+            ? 12.0
+            : screen.width - hudWidth - 12.0;
+    setState(() {
+      _floatingHudOffset = _clampFloatingHudOffset(
+        Offset(targetX, _floatingHudOffset.dy),
+      );
+    });
+  }
+
+  void _cycleReplayCameraMode() {
+    HapticFeedback.selectionClick();
+    setState(() => _replayCameraMode = _replayCameraMode.next);
+
+    final LatLng? target = _positionAtReplayIndex(_replayIndex);
+    if (target != null && _replayCameraMode != _ReplayCameraMode.free) {
+      _moveReplayCamera(target, force: true);
+    }
+  }
+
+  void _moveReplayCamera(LatLng position, {bool force = false}) {
+    if (!_isValidLatLng(position)) return;
+
+    switch (_replayCameraMode) {
+      case _ReplayCameraMode.free:
+        return;
+      case _ReplayCameraMode.follow:
+        _animatedMove(position, _currentZoom, force: force);
+        return;
+      case _ReplayCameraMode.cinematic:
+        _animatedMove(position, math.max(_currentZoom, 16.8), force: true);
+        return;
+      case _ReplayCameraMode.orbit:
+        _cinematicOrbitAngle = (_cinematicOrbitAngle + 18.0) % 360.0;
+        _animatedMove(position, math.max(_currentZoom, 16.2), force: true);
+        return;
+    }
+  }
+
+  double _appleMapsZoomForSpeed(double kmh) {
+    if (!kmh.isFinite || kmh <= 5.0) return 17.3;
+    if (kmh < 30.0) return 16.9;
+    if (kmh < 70.0) return 16.2;
+    if (kmh < 110.0) return 15.5;
+    return 14.9;
+  }
+
+  void _premiumFollowLatest() {
+    final LatLng? target =
+        widget.isLive ? (_route.rawPoints.isEmpty ? null : _route.rawPoints.last) : _positionAtReplayIndex(_replayIndex);
+    if (target == null) return;
+
+    final double speed = widget.isLive ? _route.lastSpeedKmh : _speedAtReplayIndex(_replayIndex);
+    _animatedMove(target, _appleMapsZoomForSpeed(speed), force: true);
   }
 
   void _openMapboxControls() {
@@ -1121,22 +1398,28 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
   @override
   Widget build(BuildContext context) {
     final List<fm.Marker> allMarkers = _buildMarkers();
-    final double topPad = MediaQuery.of(context).padding.top;
+    final MediaQueryData media = MediaQuery.of(context);
+    final double topPad = media.padding.top;
+    final Size viewportSize = media.size;
 
     return AnnotatedRegion<SystemUiOverlayStyle>(
       value: SystemUiOverlayStyle.light,
       child: Scaffold(
         backgroundColor: _kBg,
         body: Stack(
+          clipBehavior: Clip.none,
           children: <Widget>[
             // ── MAP ──────────────────────────────────────────────────────────
             if (_route.isEmpty)
-              _EmptyMapState(
+              RepaintBoundary(
+                child: _EmptyMapState(
                 mapStyle: _mapStyle,
                 isLive: widget.isLive,
+                ),
               )
             else if (_shouldUseNativeMapbox)
-              _NativeMapboxLayer(
+              RepaintBoundary(
+                child: _NativeMapboxLayer(
                 route: _route,
                 plannedRoute: _plannedRoute,
                 mapStyle: _mapStyle,
@@ -1147,10 +1430,11 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
                 onUserDrag: () {
                   if (_followMode) setState(() => _followMode = false);
                 },
+                ),
               )
             else
-              _FlutterMapLayer(
-                key: ValueKey<String>('replay-${widget.isLive}-$_replayIndex-${_mapStyle.name}'),
+              RepaintBoundary(
+                child: _FlutterMapLayer(
                 mapController: _mapController,
                 route: _route,
                 plannedRoute: _plannedRoute,
@@ -1158,11 +1442,12 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
                 showSpeedGradient: _showSpeedGradient,
                 mapStyle: _mapStyle,
                 currentZoom: _currentZoom,
-                onMapReady: () => _mapReady = true,
+                onMapReady: () { if (mounted) _mapReady = true; },
                 onZoomChanged: (double zoom) => _currentZoom = zoom,
                 onUserDrag: () {
                   if (_followMode) setState(() => _followMode = false);
                 },
+                ),
               ),
 
             // ── HEADER ───────────────────────────────────────────────────────
@@ -1186,38 +1471,34 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
             if (_stylePickerOpen)
               Positioned(
                 top: topPad + 66,
-                right: 16,
+                right: 12,
                 child: _buildStylePicker(),
               ),
 
-            // ── SPEED HUD ────────────────────────────────────────────────────
-            if (!_route.isEmpty && widget.isLive)
-              ValueListenableBuilder<double>(
-                valueListenable: _bottomPanelHeight,
-                builder: (_, double panelH, __) => Positioned(
-                  left: 16,
-                  bottom: panelH + 14,
-                  child: _buildSpeedHud(),
-                ),
-              ),
-
+            
             // ── ZOOM CONTROLS ─────────────────────────────────────────────
             if (!_route.isEmpty)
               ValueListenableBuilder<double>(
                 valueListenable: _bottomPanelHeight,
                 builder: (_, double panelH, __) => Positioned(
                   right: 16,
-                  bottom: panelH + 18,
-                  child: _buildZoomControls(),
+                  bottom: (panelH + 18).clamp(18.0, viewportSize.height * 0.62).toDouble(),
+                  child: RepaintBoundary(child: _buildZoomControls()),
                 ),
               ),
+
+            // ── PREMIUM FLOATING SPEED HUD ───────────────────────────────────
+            if (!_route.isEmpty) _buildFloatingSpeedHud(),
+
+            // ── PREMIUM QUICK ACTION WHEEL ────────────────────────────────────
+            if (!_route.isEmpty) _buildQuickActionWheel(),
 
             // ── BOTTOM PANEL ─────────────────────────────────────────────────
             Positioned(
               bottom: 0,
               left: 0,
               right: 0,
-              child: _buildBottomPanel(context),
+              child: RepaintBoundary(child: _buildBottomPanel(context)),
             ),
           ],
         ),
@@ -1230,6 +1511,10 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
   // ───────────────────────────────────────────────────────────────────────────
 
   Widget _buildHeader(BuildContext context, double topPad) {
+    final double width = MediaQuery.sizeOf(context).width;
+    final bool compact = width < 390;
+    final double iconSize = compact ? 34 : 38;
+    final double iconGap = compact ? 5 : 7;
     final Duration? elapsed = widget.tripStartTime != null
         ? DateTime.now().difference(widget.tripStartTime!)
         : null;
@@ -1241,8 +1526,8 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
           padding: EdgeInsets.only(
             top: topPad + 10,
             bottom: 14,
-            left: 14,
-            right: 14,
+            left: compact ? 10 : 14,
+            right: compact ? 10 : 14,
           ),
           decoration: BoxDecoration(
             gradient: LinearGradient(
@@ -1264,12 +1549,12 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
             children: <Widget>[
               _PressableButton(
                 onTap: () => Navigator.of(context).pop(),
-                child: const _GlassIconBox(
+                child: _GlassIconBox(
                   icon: CupertinoIcons.chevron_left,
-                  size: 38,
+                  size: iconSize,
                 ),
               ),
-              const SizedBox(width: 12),
+              SizedBox(width: compact ? 8 : 12),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -1332,7 +1617,7 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
                   ],
                 ),
               ),
-              const SizedBox(width: 8),
+              SizedBox(width: compact ? 5 : 8),
               _PressableButton(
                 onTap: () {
                   HapticFeedback.selectionClick();
@@ -1340,37 +1625,37 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
                 },
                 child: _GlassIconBox(
                   icon: Icons.speed_rounded,
-                  size: 38,
+                  size: iconSize,
                   active: _showSpeedGradient,
                   activeColor: _kBlue,
                 ),
               ),
-              const SizedBox(width: 7),
+              SizedBox(width: iconGap),
               _PressableButton(
                 onTap: _toggleChart,
                 child: _GlassIconBox(
                   icon: CupertinoIcons.graph_square,
-                  size: 38,
+                  size: iconSize,
                   active: _showChart,
                   activeColor: _kBlue,
                 ),
               ),
-              const SizedBox(width: 7),
+              SizedBox(width: iconGap),
               _PressableButton(
                 onTap: _openMapboxControls,
                 child: _GlassIconBox(
                   icon: CupertinoIcons.location_north_line_fill,
-                  size: 38,
+                  size: iconSize,
                   active: _plannedRoute != null,
                   activeColor: _kBlue,
                 ),
               ),
-              const SizedBox(width: 7),
+              SizedBox(width: iconGap),
               _PressableButton(
                 onTap: _cycleMapStyle,
                 child: _GlassIconBox(
                   icon: _mapStyle.icon,
-                  size: 38,
+                  size: iconSize,
                   active: _stylePickerOpen,
                   activeColor: _kBlue,
                 ),
@@ -1595,8 +1880,10 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
         child: BackdropFilter(
           filter: ui.ImageFilter.blur(sigmaX: 22, sigmaY: 22),
           child: Container(
-            width: 270,
-            constraints: const BoxConstraints(maxHeight: 520),
+            width: math.min(290, MediaQuery.sizeOf(context).width - 24),
+            constraints: BoxConstraints(
+              maxHeight: math.min(520, MediaQuery.sizeOf(context).height * 0.62),
+            ),
             padding: const EdgeInsets.all(8),
             decoration: BoxDecoration(
               color: _kCard.withValues(alpha: 0.94),
@@ -1775,10 +2062,15 @@ enum _ChartMode { speed, altitude }
 // ─────────────────────────────────────────────────────────────────────────────
 
 class _PressableButton extends StatefulWidget {
-  const _PressableButton({required this.onTap, required this.child});
+  const _PressableButton({
+    required this.onTap,
+    required this.child,
+    this.semanticLabel,
+  });
 
   final VoidCallback onTap;
   final Widget child;
+  final String? semanticLabel;
 
   @override
   State<_PressableButton> createState() => _PressableButtonState();
@@ -1789,9 +2081,9 @@ class _PressableButtonState extends State<_PressableButton>
   late final AnimationController _ctrl = AnimationController(
     vsync: this,
     duration: const Duration(milliseconds: 90),
-    reverseDuration: const Duration(milliseconds: 180),
+    reverseDuration: const Duration(milliseconds: 170),
     value: 1.0,
-    lowerBound: 0.88,
+    lowerBound: 0.90,
     upperBound: 1.0,
   );
 
@@ -1801,14 +2093,23 @@ class _PressableButtonState extends State<_PressableButton>
     super.dispose();
   }
 
+  Future<void> _playTapAnimation() async {
+    try {
+      await _ctrl.reverse();
+      if (mounted) await _ctrl.forward();
+    } catch (_) {}
+  }
+
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
+    final Widget button = GestureDetector(
+      behavior: HitTestBehavior.opaque,
       onTap: () {
-        _ctrl.reverse().then((_) => _ctrl.forward());
+        unawaited(_playTapAnimation());
         widget.onTap();
       },
       onTapDown: (_) => _ctrl.reverse(),
+      onTapUp: (_) => _ctrl.forward(),
       onTapCancel: () => _ctrl.forward(),
       child: AnimatedBuilder(
         animation: _ctrl,
@@ -1816,6 +2117,12 @@ class _PressableButtonState extends State<_PressableButton>
             Transform.scale(scale: _ctrl.value, child: child),
         child: widget.child,
       ),
+    );
+
+    return Semantics(
+      button: true,
+      label: widget.semanticLabel,
+      child: button,
     );
   }
 }
@@ -1954,7 +2261,7 @@ class _PulseDot extends StatelessWidget {
       animation: controller,
       builder: (_, __) {
         // Map 0→1 repeat to a pulse (0→1→0) via sin.
-        final double t = math.sin(controller.value * math.pi).clamp(0.0, 1.0);
+        final double t = math.sin(controller.value * math.pi).clamp(0.0, 1.0).toDouble();
         return Container(
           width: 7,
           height: 7,
@@ -2510,6 +2817,330 @@ class _EmptyMapStateState extends State<_EmptyMapState>
           ),
         ),
       ],
+    );
+  }
+}
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PREMIUM OVERLAYS — Floating HUD + Quick Action Wheel
+// ─────────────────────────────────────────────────────────────────────────────
+
+extension _MapScreenPremiumOverlays on _MapScreenState {
+  Widget _buildFloatingSpeedHud() {
+    return ValueListenableBuilder<double>(
+      valueListenable: _hudSpeed,
+      builder: (_, double speed, __) {
+        final Color color = _speedColor(speed);
+        final String speedLabel = speed.toStringAsFixed(0);
+
+        return Positioned(
+          left: _floatingHudOffset.dx,
+          top: _floatingHudOffset.dy,
+          child: GestureDetector(
+            onPanUpdate: _updateFloatingHudOffset,
+            onPanEnd: (_) => _snapFloatingHudToEdge(),
+            onDoubleTap: _toggleFloatingHudMini,
+            onLongPress: _toggleFloatingHudLock,
+            child: RepaintBoundary(
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 220),
+                curve: Curves.easeOutCubic,
+                width: _floatingHudMini ? 78 : 120,
+                padding: EdgeInsets.symmetric(
+                  horizontal: _floatingHudMini ? 10 : 14,
+                  vertical: _floatingHudMini ? 8 : 12,
+                ),
+                decoration: BoxDecoration(
+                  color: Colors.black.withValues(alpha: 0.68),
+                  borderRadius: BorderRadius.circular(_floatingHudMini ? 22 : 28),
+                  border: Border.all(
+                    color: (_floatingHudLocked ? _kRed : color)
+                        .withValues(alpha: 0.34),
+                  ),
+                  boxShadow: <BoxShadow>[
+                    BoxShadow(
+                      color: color.withValues(alpha: 0.22),
+                      blurRadius: 22,
+                      offset: const Offset(0, 10),
+                    ),
+                  ],
+                ),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(_floatingHudMini ? 22 : 28),
+                  child: BackdropFilter(
+                    filter: ui.ImageFilter.blur(sigmaX: 18, sigmaY: 18),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: <Widget>[
+                        Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: <Widget>[
+                            Icon(
+                              _floatingHudLocked
+                                  ? CupertinoIcons.lock_fill
+                                  : CupertinoIcons.speedometer,
+                              color: color,
+                              size: _floatingHudMini ? 12 : 15,
+                            ),
+                            if (!_floatingHudMini) ...<Widget>[
+                              const SizedBox(width: 5),
+                              Text(
+                                widget.isLive ? 'LIVE' : _replayCameraMode.label,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  color: Colors.white.withValues(alpha: 0.52),
+                                  fontSize: 9,
+                                  fontWeight: FontWeight.w900,
+                                  letterSpacing: 1.0,
+                                ),
+                              ),
+                            ],
+                          ],
+                        ),
+                        SizedBox(height: _floatingHudMini ? 2 : 5),
+                        FittedBox(
+                          fit: BoxFit.scaleDown,
+                          child: Text(
+                            speedLabel,
+                            maxLines: 1,
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: _floatingHudMini ? 28 : 42,
+                              height: 0.92,
+                              letterSpacing: -2.0,
+                              fontWeight: FontWeight.w900,
+                            ),
+                          ),
+                        ),
+                        if (!_floatingHudMini) ...<Widget>[
+                          const SizedBox(height: 2),
+                          Text(
+                            'KM/H',
+                            style: TextStyle(
+                              color: color,
+                              fontSize: 10,
+                              fontWeight: FontWeight.w900,
+                              letterSpacing: 1.2,
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildQuickActionWheel() {
+    return ValueListenableBuilder<double>(
+      valueListenable: _bottomPanelHeight,
+      builder: (_, double panelHeight, __) {
+        final bool open = _quickActionMenuState == _QuickActionMenuState.open;
+        final EdgeInsets safe = MediaQuery.paddingOf(context);
+        final Size screen = MediaQuery.sizeOf(context);
+        final double panelAwareBottom = panelHeight + 20.0;
+        final double minBottom = safe.bottom + (_panelDockMode.isMini ? 92.0 : 148.0);
+        final double bottom = math.min(
+          math.max(panelAwareBottom, minBottom),
+          math.max(96.0, screen.height * 0.58),
+        );
+
+        return Positioned(
+          right: 16,
+          bottom: bottom,
+          child: RepaintBoundary(
+            child: SizedBox(
+              width: 190,
+              height: 190,
+              child: Stack(
+                alignment: Alignment.bottomRight,
+                clipBehavior: Clip.none,
+                children: <Widget>[
+                  _QuickActionBubble(
+                    open: open,
+                    offset: const Offset(-128, -12),
+                    icon: CupertinoIcons.arrow_down_right_arrow_up_left,
+                    label: 'Fit',
+                    onTap: () {
+                      _closeQuickActionMenu();
+                      _fitRoute();
+                    },
+                  ),
+                  _QuickActionBubble(
+                    open: open,
+                    offset: const Offset(-112, -72),
+                    icon: _followMode
+                        ? CupertinoIcons.location_fill
+                        : CupertinoIcons.location,
+                    label: 'Follow',
+                    active: _followMode,
+                    onTap: () {
+                      _closeQuickActionMenu();
+                      _toggleFollow();
+                    },
+                  ),
+                  _QuickActionBubble(
+                    open: open,
+                    offset: const Offset(-62, -118),
+                    icon: CupertinoIcons.map_fill,
+                    label: 'Style',
+                    onTap: () {
+                      _closeQuickActionMenu();
+                      setState(() => _stylePickerOpen = !_stylePickerOpen);
+                    },
+                  ),
+                  _QuickActionBubble(
+                    open: open,
+                    offset: const Offset(0, -132),
+                    icon: CupertinoIcons.location_north_line_fill,
+                    label: 'Route',
+                    active: _plannedRoute != null,
+                    onTap: () {
+                      _closeQuickActionMenu();
+                      _openMapboxControls();
+                    },
+                  ),
+                  if (!widget.isLive)
+                    _QuickActionBubble(
+                      open: open,
+                      offset: const Offset(-12, -68),
+                      icon: _replayCameraMode.icon,
+                      label: _replayCameraMode.label,
+                      active: _replayCameraMode != _ReplayCameraMode.follow,
+                      onTap: _cycleReplayCameraMode,
+                    ),
+                  _PressableButton(
+                    onTap: _toggleQuickActionMenu,
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 220),
+                      width: 58,
+                      height: 58,
+                      decoration: BoxDecoration(
+                        gradient: open
+                            ? const LinearGradient(colors: <Color>[_kRed, _kBlue])
+                            : _kBlueGlassGradient,
+                        shape: BoxShape.circle,
+                        boxShadow: <BoxShadow>[
+                          BoxShadow(
+                            color: (open ? _kRed : _kBlue).withValues(alpha: 0.34),
+                            blurRadius: 24,
+                            offset: const Offset(0, 10),
+                          ),
+                        ],
+                        border: Border.all(
+                          color: Colors.white.withValues(alpha: 0.18),
+                        ),
+                      ),
+                      child: Icon(
+                        open
+                            ? CupertinoIcons.xmark
+                            : CupertinoIcons.slider_horizontal_3,
+                        color: Colors.white,
+                        size: 24,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+}
+
+class _QuickActionBubble extends StatelessWidget {
+  const _QuickActionBubble({
+    required this.open,
+    required this.offset,
+    required this.icon,
+    required this.label,
+    required this.onTap,
+    this.active = false,
+  });
+
+  final bool open;
+  final Offset offset;
+  final IconData icon;
+  final String label;
+  final VoidCallback onTap;
+  final bool active;
+
+  @override
+  Widget build(BuildContext context) {
+    return Positioned(
+      right: 0,
+      bottom: 0,
+      child: IgnorePointer(
+        ignoring: !open,
+        child: AnimatedOpacity(
+          duration: const Duration(milliseconds: 180),
+          opacity: open ? 1.0 : 0.0,
+          child: AnimatedScale(
+            duration: const Duration(milliseconds: 240),
+            curve: Curves.easeOutBack,
+            scale: open ? 1.0 : 0.62,
+            child: AnimatedSlide(
+              duration: const Duration(milliseconds: 260),
+              curve: Curves.easeOutBack,
+              offset: open ? Offset(offset.dx / 58.0, offset.dy / 58.0) : Offset.zero,
+              child: _PressableButton(
+                onTap: onTap,
+                child: Container(
+                  width: 58,
+                  height: 58,
+                  padding: const EdgeInsets.all(6),
+                  decoration: BoxDecoration(
+                    color: Colors.black.withValues(alpha: 0.72),
+                    shape: BoxShape.circle,
+                    border: Border.all(
+                      color: (active ? _kBlueSoft : Colors.white)
+                          .withValues(alpha: active ? 0.42 : 0.14),
+                    ),
+                    boxShadow: <BoxShadow>[
+                      BoxShadow(
+                        color: Colors.black.withValues(alpha: 0.32),
+                        blurRadius: 18,
+                        offset: const Offset(0, 8),
+                      ),
+                    ],
+                  ),
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: <Widget>[
+                      Icon(
+                        icon,
+                        color: active ? _kBlueSoft : Colors.white,
+                        size: 18,
+                      ),
+                      const SizedBox(height: 3),
+                      Text(
+                        label,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: active ? _kBlueSoft : Colors.white70,
+                          fontSize: 8,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
     );
   }
 }

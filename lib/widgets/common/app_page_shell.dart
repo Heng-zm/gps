@@ -16,6 +16,8 @@ class AppPageShell extends StatelessWidget {
     this.padding = const EdgeInsets.fromLTRB(16, 10, 16, 24),
     this.showBackButton = false,
     this.onBack,
+    this.resizeToAvoidBottomInset = true,
+    this.scrollable = false,
   });
 
   final String title;
@@ -26,15 +28,34 @@ class AppPageShell extends StatelessWidget {
   final EdgeInsetsGeometry padding;
   final bool showBackButton;
   final VoidCallback? onBack;
+  final bool resizeToAvoidBottomInset;
+  final bool scrollable;
 
   @override
   Widget build(BuildContext context) {
+    final MediaQueryData media = MediaQuery.of(context);
+
+    Widget bodyChild = Padding(
+      padding: padding,
+      child: child,
+    );
+
+    if (scrollable) {
+      bodyChild = SingleChildScrollView(
+        keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+        padding: EdgeInsets.only(bottom: media.padding.bottom + 8),
+        child: bodyChild,
+      );
+    }
+
     return Scaffold(
       backgroundColor: AppColors.background,
+      resizeToAvoidBottomInset: resizeToAvoidBottomInset,
       body: Stack(
         children: <Widget>[
           const Positioned.fill(child: _AppPageBackground()),
           SafeArea(
+            bottom: false,
             child: Column(
               children: <Widget>[
                 _AppPageHeader(
@@ -45,12 +66,7 @@ class AppPageShell extends StatelessWidget {
                   showBackButton: showBackButton,
                   onBack: onBack ?? () => Navigator.of(context).maybePop(),
                 ),
-                Expanded(
-                  child: Padding(
-                    padding: padding,
-                    child: child,
-                  ),
-                ),
+                Expanded(child: bodyChild),
               ],
             ),
           ),
@@ -105,11 +121,12 @@ class _AppPageHeader extends StatelessWidget {
         (showBackButton
             ? CupertinoButton(
                 padding: EdgeInsets.zero,
-                minSize: 0,
+                minSize: 44,
+                pressedOpacity: 0.78,
                 onPressed: onBack,
                 child: Container(
-                  width: 38,
-                  height: 38,
+                  width: 40,
+                  height: 40,
                   decoration: BoxDecoration(
                     shape: BoxShape.circle,
                     color: AppColors.white.withValues(alpha: 0.08),
@@ -128,60 +145,68 @@ class _AppPageHeader extends StatelessWidget {
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 10),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(26),
-        child: BackdropFilter(
-          filter: ui.ImageFilter.blur(sigmaX: 18, sigmaY: 18),
-          child: Container(
-            constraints: const BoxConstraints(minHeight: 64),
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-            decoration: BoxDecoration(
-              color: AppColors.card.withValues(alpha: 0.72),
-              borderRadius: BorderRadius.circular(26),
-              border: Border.all(color: AppColors.white.withValues(alpha: 0.08)),
-            ),
-            child: Row(
-              children: <Widget>[
-                if (resolvedLeading != null) ...<Widget>[
-                  resolvedLeading,
-                  const SizedBox(width: 12),
-                ],
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: <Widget>[
-                      Text(
-                        title,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          color: AppColors.white,
-                          fontSize: 20,
-                          fontWeight: FontWeight.w900,
-                          letterSpacing: -0.5,
-                        ),
-                      ),
-                      if (subtitle != null) ...<Widget>[
-                        const SizedBox(height: 3),
+      child: RepaintBoundary(
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(26),
+          child: BackdropFilter(
+            filter: ui.ImageFilter.blur(sigmaX: 18, sigmaY: 18),
+            child: Container(
+              constraints: const BoxConstraints(minHeight: 64),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+              decoration: BoxDecoration(
+                color: AppColors.card.withValues(alpha: 0.72),
+                borderRadius: BorderRadius.circular(26),
+                border: Border.all(
+                  color: AppColors.white.withValues(alpha: 0.08),
+                ),
+              ),
+              child: Row(
+                children: <Widget>[
+                  if (resolvedLeading != null) ...<Widget>[
+                    resolvedLeading,
+                    const SizedBox(width: 12),
+                  ],
+                  Expanded(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: <Widget>[
                         Text(
-                          subtitle!,
+                          title,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: const TextStyle(
-                            color: AppColors.white54,
-                            fontSize: 12,
-                            fontWeight: FontWeight.w700,
+                            color: AppColors.white,
+                            fontSize: 20,
+                            fontWeight: FontWeight.w900,
+                            letterSpacing: -0.5,
                           ),
                         ),
+                        if (subtitle != null) ...<Widget>[
+                          const SizedBox(height: 3),
+                          Text(
+                            subtitle!,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              color: AppColors.white54,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ],
                       ],
-                    ],
+                    ),
                   ),
-                ),
-                if (trailing != null) ...<Widget>[
-                  const SizedBox(width: 12),
-                  trailing!,
+                  if (trailing != null) ...<Widget>[
+                    const SizedBox(width: 12),
+                    Flexible(
+                      flex: 0,
+                      child: trailing!,
+                    ),
+                  ],
                 ],
-              ],
+              ),
             ),
           ),
         ),

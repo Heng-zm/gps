@@ -183,28 +183,34 @@ class SettingsService extends ChangeNotifier {
     _isLoading = true;
 
     try {
-      _prefs ??= await SharedPreferences.getInstance();
+      final SharedPreferences prefs = await _getPrefs();
 
-      final SharedPreferences prefs = _prefs!;
-
-      _useKmh = prefs.getBool(_prefUseKmh) ?? false;
-      _keepScreenOn = prefs.getBool(_prefKeepScreenOn) ?? true;
-      _autoSaveTrips = prefs.getBool(_prefAutoSave) ?? true;
-      _showWeather = prefs.getBool(_prefWeather) ?? true;
-      _speedAlertEnabled = prefs.getBool(_prefAlertEnabled) ?? false;
-      _speedAlertMph = _sanitizeSpeedAlertMph(
-        prefs.getDouble(_prefAlertMph) ?? _defaultSpeedAlertMph,
+      _useKmh = _readBool(prefs, _prefUseKmh, fallback: false);
+      _keepScreenOn = _readBool(prefs, _prefKeepScreenOn, fallback: true);
+      _autoSaveTrips = _readBool(prefs, _prefAutoSave, fallback: true);
+      _showWeather = _readBool(prefs, _prefWeather, fallback: true);
+      _speedAlertEnabled = _readBool(
+        prefs,
+        _prefAlertEnabled,
+        fallback: false,
       );
-      _showAltitude = prefs.getBool(_prefAltitude) ?? true;
-      _showHeading = prefs.getBool(_prefHeading) ?? true;
+      _speedAlertMph = _sanitizeSpeedAlertMph(
+        _readDouble(
+          prefs,
+          _prefAlertMph,
+          fallback: _defaultSpeedAlertMph,
+        ),
+      );
+      _showAltitude = _readBool(prefs, _prefAltitude, fallback: true);
+      _showHeading = _readBool(prefs, _prefHeading, fallback: true);
       _gpsAccuracyMode = _sanitizeGpsAccuracyMode(
-        prefs.getInt(_prefGpsMode) ?? 0,
+        _readInt(prefs, _prefGpsMode, fallback: 0),
       );
       _mapStyle = _parseMapStyleIndex(
-        prefs.getInt(_prefMapStyle) ?? AppMapStyle.dark.index,
+        _readInt(prefs, _prefMapStyle, fallback: AppMapStyle.dark.index),
       );
-      _locationPuckStyle = LocationPuckStyleX.fromStorageKey(
-        prefs.getString(_prefLocationPuckStyle),
+      _locationPuckStyle = _parseLocationPuckStyle(
+        _readString(prefs, _prefLocationPuckStyle),
       );
 
       _isLoaded = true;
@@ -520,7 +526,80 @@ class SettingsService extends ChangeNotifier {
   }
 
   // ───────────────────────────────────────────────────────────────────────────
-  // Sanitizers
+  // Safe SharedPreferences Readers
+  // ───────────────────────────────────────────────────────────────────────────
+
+  static bool _readBool(
+    SharedPreferences prefs,
+    String key, {
+    required bool fallback,
+  }) {
+    try {
+      final Object? value = prefs.get(key);
+      if (value is bool) return value;
+      if (value is String) {
+        final String normalized = value.trim().toLowerCase();
+        if (normalized == 'true' || normalized == '1') return true;
+        if (normalized == 'false' || normalized == '0') return false;
+      }
+    } catch (e, st) {
+      debugPrint('SettingsService bool read error for $key: $e\n$st');
+    }
+
+    return fallback;
+  }
+
+  static int _readInt(
+    SharedPreferences prefs,
+    String key, {
+    required int fallback,
+  }) {
+    try {
+      final Object? value = prefs.get(key);
+      if (value is int) return value;
+      if (value is double && value.isFinite) return value.round();
+      if (value is String) return int.tryParse(value.trim()) ?? fallback;
+    } catch (e, st) {
+      debugPrint('SettingsService int read error for $key: $e\n$st');
+    }
+
+    return fallback;
+  }
+
+  static double _readDouble(
+    SharedPreferences prefs,
+    String key, {
+    required double fallback,
+  }) {
+    try {
+      final Object? value = prefs.get(key);
+      if (value is double && value.isFinite) return value;
+      if (value is int) return value.toDouble();
+      if (value is String) {
+        final double? parsed = double.tryParse(value.trim());
+        if (parsed != null && parsed.isFinite) return parsed;
+      }
+    } catch (e, st) {
+      debugPrint('SettingsService double read error for $key: $e\n$st');
+    }
+
+    return fallback;
+  }
+
+  static String? _readString(SharedPreferences prefs, String key) {
+    try {
+      final Object? value = prefs.get(key);
+      if (value == null) return null;
+      if (value is String) return value;
+      return value.toString();
+    } catch (e, st) {
+      debugPrint('SettingsService string read error for $key: $e\n$st');
+      return null;
+    }
+  }
+
+  // ───────────────────────────────────────────────────────────────────────────
+  // Sanitizers / Parsers
   // ───────────────────────────────────────────────────────────────────────────
 
   static double _safeFinite(double value) {
@@ -540,12 +619,16 @@ class SettingsService extends ChangeNotifier {
   }
 
   static int _sanitizeGpsAccuracyMode(int value) {
-    return value.clamp(0, 2);
+    return value.clamp(0, 2).toInt();
   }
 
   static AppMapStyle _parseMapStyleIndex(int index) {
-    final int safeIndex = index.clamp(0, AppMapStyle.values.length - 1);
+    final int safeIndex = index.clamp(0, AppMapStyle.values.length - 1).toInt();
     return AppMapStyle.values[safeIndex];
+  }
+
+  static LocationPuckStyle _parseLocationPuckStyle(String? value) {
+    return LocationPuckStyle.fromStorageKey(value);
   }
 
   void _resetInMemoryDefaults() {

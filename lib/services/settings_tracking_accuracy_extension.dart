@@ -5,18 +5,18 @@ extension SettingsServiceTrackingAccuracyX on SettingsService {
   TrackingAccuracyMode get trackingAccuracyMode {
     final int mode = gpsAccuracyMode;
 
-    if (mode <= 0) return TrackingAccuracyMode.batterySaver;
+    if (mode <= 0) return TrackingAccuracyMode.highAccuracy;
     if (mode == 1) return TrackingAccuracyMode.balanced;
-    return TrackingAccuracyMode.highAccuracy;
+    return TrackingAccuracyMode.batterySaver;
   }
 
   Future<void> setTrackingAccuracyMode(
     TrackingAccuracyMode mode,
   ) async {
     final int value = switch (mode) {
-      TrackingAccuracyMode.batterySaver => 0,
+      TrackingAccuracyMode.highAccuracy => 0,
       TrackingAccuracyMode.balanced => 1,
-      TrackingAccuracyMode.highAccuracy => 2,
+      TrackingAccuracyMode.batterySaver => 2,
     };
 
     await setGpsAccuracyMode(value);

@@ -43,6 +43,11 @@ extension _MapScreenReplayControls on _MapScreenState {
                     ),
                   ),
                   _ReplaySpeedChip(
+                    label: _replayCameraMode.label,
+                    onTap: _cycleReplayCameraMode,
+                  ),
+                  const SizedBox(width: 7),
+                  _ReplaySpeedChip(
                     label: '${_replaySpeed.toStringAsFixed(_replaySpeed == 0.5 ? 1 : 0)}x',
                     onTap: () {
                       final double next = _replaySpeed == 0.5
@@ -77,14 +82,14 @@ extension _MapScreenReplayControls on _MapScreenState {
                   ),
                 ),
                 child: Slider(
-                  value: progress.clamp(0.0, 1.0),
+                  value: progress.clamp(0.0, 1.0).toDouble(),
                   min: 0.0,
                   max: 1.0,
                   activeColor: _kBlueSoft,
                   inactiveColor: Colors.white.withValues(alpha: 0.13),
                   onChanged: (double value) {
                     final int nextIndex =
-                        (value * (total - 1)).round().clamp(0, total - 1);
+                        (value * (total - 1)).round().clamp(0, total - 1).toInt();
                     _setReplayIndex(nextIndex, moveCamera: true);
                   },
                 ),

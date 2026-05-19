@@ -93,11 +93,33 @@ extension Mapbox3DModeX on Mapbox3DMode {
   String get storageKey => name;
 
   static Mapbox3DMode fromStorageKey(String? value) {
+    final String normalized = (value ?? '').trim().toLowerCase();
+
     for (final Mapbox3DMode mode in Mapbox3DMode.values) {
-      if (mode.storageKey == value) return mode;
+      if (mode.storageKey.toLowerCase() == normalized ||
+          mode.label.toLowerCase() == normalized) {
+        return mode;
+      }
     }
 
-    return Mapbox3DMode.flat;
+    switch (normalized) {
+      case 'soft':
+      case 'soft3d':
+      case 'soft_3d':
+        return Mapbox3DMode.soft3D;
+      case 'full':
+      case 'full3d':
+      case 'full_3d':
+        return Mapbox3DMode.full3D;
+      case 'nav':
+      case 'navigation':
+      case 'navigation3d':
+      case 'navigation_3d':
+        return Mapbox3DMode.navigation3D;
+      case 'flat':
+      default:
+        return Mapbox3DMode.flat;
+    }
   }
 }
 
@@ -112,9 +134,15 @@ class Mapbox3DConfig {
   final double bearing;
   final double baseZoom;
 
-  double get pitch => mode.pitch;
+  double get pitch => mode.pitch.clamp(0.0, 85.0).toDouble();
 
-  double get zoom => baseZoom + mode.zoomBoost;
+  double get zoom => (baseZoom + mode.zoomBoost).clamp(0.0, 22.0).toDouble();
+
+  double get safeBearing {
+    if (!bearing.isFinite) return 0.0;
+    final double normalized = bearing % 360.0;
+    return normalized < 0 ? normalized + 360.0 : normalized;
+  }
 
   mb.CameraOptions camera({
     required double latitude,
@@ -126,7 +154,19 @@ class Mapbox3DConfig {
       ),
       zoom: zoom,
       pitch: pitch,
-      bearing: bearing,
+      bearing: safeBearing,
+    );
+  }
+
+  Mapbox3DConfig copyWith({
+    Mapbox3DMode? mode,
+    double? bearing,
+    double? baseZoom,
+  }) {
+    return Mapbox3DConfig(
+      mode: mode ?? this.mode,
+      bearing: bearing ?? this.bearing,
+      baseZoom: baseZoom ?? this.baseZoom,
     );
   }
 }

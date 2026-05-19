@@ -2,18 +2,8 @@ import 'package:flutter/material.dart';
 
 /// Immutable weather data model.
 /// Values are always in the user's preferred unit system
-/// (metric or imperial) as returned by [WeatherService].
+/// (metric or imperial) as returned by WeatherService.
 class WeatherData {
-  final double temperature;
-  final double feelsLike;
-  final String condition;
-  final double windSpeed;
-  final int humidity;
-  final double forecastLater;
-  final double forecastEvening;
-  final double forecastNight;
-  final int precipProbabilityPct;
-
   const WeatherData({
     required this.temperature,
     required this.feelsLike,
@@ -26,14 +16,18 @@ class WeatherData {
     this.precipProbabilityPct = 0,
   });
 
-  // ── Derived helpers ───────────────────────────────────────────────────────
+  final double temperature;
+  final double feelsLike;
+  final String condition;
+  final double windSpeed;
+  final int humidity;
+  final double forecastLater;
+  final double forecastEvening;
+  final double forecastNight;
+  final int precipProbabilityPct;
 
-  /// Lowercase condition for pattern matching — computed once.
   String get _c => condition.toLowerCase();
 
-  // ── Icon ──────────────────────────────────────────────────────────────────
-
-  /// Returns an emoji icon that best represents the current condition.
   String get icon {
     if (_c.contains('thunder')) return '⛈️';
     if (_c.contains('snow') ||
@@ -54,90 +48,82 @@ class WeatherData {
     return '🌤️';
   }
 
-  // ── Accent color ──────────────────────────────────────────────────────────
-
-  /// UI accent color tuned to the gold palette.
-  /// Severe conditions use warning/cool tones; calm/clear uses gold.
   Color get accentColor {
-    if (_c.contains('thunder')) return const Color(0xFFE8412A); // red-alert
+    if (_c.contains('thunder')) return const Color(0xFFE8412A);
     if (_c.contains('snow') ||
         _c.contains('blizzard') ||
         _c.contains('sleet') ||
-        _c.contains('ice')) return const Color(0xFFADDEFF); // icy blue
-    if (_c.contains('freezing')) return const Color(0xFFADDEFF);
+        _c.contains('ice') ||
+        _c.contains('freezing')) {
+      return const Color(0xFFADDEFF);
+    }
     if (_c.contains('rain') ||
         _c.contains('shower') ||
         _c.contains('drizzle')) {
-      return const Color(0xFF4A9EFF); // rain blue
+      return const Color(0xFF4A9EFF);
     }
     if (_c.contains('fog') ||
         _c.contains('mist') ||
         _c.contains('haze') ||
-        _c.contains('overcast')) return const Color(0xFF8899AA); // grey
+        _c.contains('overcast')) {
+      return const Color(0xFF8899AA);
+    }
     if (_c.contains('clear') || _c.contains('sunny')) {
-      return const Color(0xFFEDD068); // gold-bright
+      return const Color(0xFFEDD068);
     }
     if (_c.contains('partly') || _c.contains('few')) {
-      return const Color(0xFFD4A843); // gold-mid
+      return const Color(0xFFD4A843);
     }
-    return const Color(0xFFD4A843); // gold-mid default
+    return const Color(0xFFD4A843);
   }
 
-  // ── Precipitation ─────────────────────────────────────────────────────────
+  int get safeHumidity => humidity.clamp(0, 100).toInt();
 
-  /// True when rain probability is meaningful (> 20 %).
-  bool get hasPrecipRisk => precipProbabilityPct > 20;
+  int get safePrecipProbabilityPct =>
+      precipProbabilityPct.clamp(0, 100).toInt();
 
-  /// Short human label for precipitation probability.
+  bool get hasPrecipRisk => safePrecipProbabilityPct > 20;
+
   String get precipLabel {
-    if (precipProbabilityPct == 0) return 'No rain';
-    if (precipProbabilityPct <= 20) return 'Unlikely';
-    if (precipProbabilityPct <= 50) return 'Possible';
-    if (precipProbabilityPct <= 80) return 'Likely';
+    final int precip = safePrecipProbabilityPct;
+    if (precip == 0) return 'No rain';
+    if (precip <= 20) return 'Unlikely';
+    if (precip <= 50) return 'Possible';
+    if (precip <= 80) return 'Likely';
     return 'Certain';
   }
 
-  // ── Wind ─────────────────────────────────────────────────────────────────
-
-  /// Beaufort-inspired wind description (works for both km/h and mph
-  /// since thresholds are chosen to be sensible in both systems).
   String get windDescription {
-    if (windSpeed < 1) return 'Calm';
-    if (windSpeed < 10) return 'Light Breeze';
-    if (windSpeed < 25) return 'Moderate';
-    if (windSpeed < 40) return 'Fresh Wind';
-    if (windSpeed < 60) return 'Strong Wind';
+    final double wind = _safeNonNegative(windSpeed);
+    if (wind < 1) return 'Calm';
+    if (wind < 10) return 'Light Breeze';
+    if (wind < 25) return 'Moderate';
+    if (wind < 40) return 'Fresh Wind';
+    if (wind < 60) return 'Strong Wind';
     return 'High Winds';
   }
 
-  /// Wind icon
   String get windIcon {
-    if (windSpeed < 1) return '🍃';
-    if (windSpeed < 10) return '🌬️';
-    if (windSpeed < 40) return '💨';
+    final double wind = _safeNonNegative(windSpeed);
+    if (wind < 1) return '🍃';
+    if (wind < 10) return '🌬️';
+    if (wind < 40) return '💨';
     return '🌪️';
   }
 
-  // ── Temperature ───────────────────────────────────────────────────────────
+  String get tempDisplay => '${_safeFinite(temperature).round()}°';
 
-  /// Formatted temperature string, e.g. "23°"
-  String get tempDisplay => '${temperature.round()}°';
+  String get feelsLikeDisplay => 'Feels ${_safeFinite(feelsLike).round()}°';
 
-  /// Formatted feels-like string, e.g. "Feels 21°"
-  String get feelsLikeDisplay => 'Feels ${feelsLike.round()}°';
-
-  /// True when the temperature delta between now and later is notable (≥ 3°).
   bool get tempChanging => (forecastLater - temperature).abs() >= 3;
 
-  /// Direction of temperature change: +1 warming, -1 cooling, 0 stable.
   int get tempTrend {
-    final delta = forecastLater - temperature;
+    final double delta = _safeFinite(forecastLater) - _safeFinite(temperature);
     if (delta > 1.5) return 1;
     if (delta < -1.5) return -1;
     return 0;
   }
 
-  /// Human summary of the temperature trend.
   String get tempTrendLabel {
     return switch (tempTrend) {
       1 => 'Warming up',
@@ -146,9 +132,6 @@ class WeatherData {
     };
   }
 
-  // ── Severity ──────────────────────────────────────────────────────────────
-
-  /// Severity level: 0 = fine, 1 = caution, 2 = warning.
   int get severity {
     if (_c.contains('thunder') || _c.contains('blizzard')) return 2;
     if (_c.contains('snow') ||
@@ -159,10 +142,8 @@ class WeatherData {
     return 0;
   }
 
-  /// True if driving conditions may be affected.
   bool get isDrivingCaution => severity > 0;
 
-  /// Short advisory string for the dashboard.
   String get drivingAdvisory {
     if (_c.contains('thunder')) return 'Seek shelter — storm risk';
     if (_c.contains('blizzard')) return 'Avoid driving — blizzard';
@@ -171,14 +152,78 @@ class WeatherData {
     }
     if (_c.contains('freezing')) return 'Black ice risk';
     if (_c.contains('fog') || _c.contains('mist')) return 'Reduced visibility';
-    if (hasPrecipRisk && precipProbabilityPct > 50) {
+    if (hasPrecipRisk && safePrecipProbabilityPct > 50) {
       return 'Wet roads — drive carefully';
     }
-    if (windSpeed >= 60) return 'High crosswind alert';
+    if (_safeNonNegative(windSpeed) >= 60) return 'High crosswind alert';
     return 'Conditions look fine';
   }
 
-  // ── Equality & debugging ──────────────────────────────────────────────────
+  Map<String, dynamic> toJson() {
+    return <String, dynamic>{
+      'temperature': _safeFinite(temperature),
+      'feelsLike': _safeFinite(feelsLike),
+      'condition': condition,
+      'windSpeed': _safeNonNegative(windSpeed),
+      'humidity': safeHumidity,
+      'forecastLater': _safeFinite(forecastLater),
+      'forecastEvening': _safeFinite(forecastEvening),
+      'forecastNight': _safeFinite(forecastNight),
+      'precipProbabilityPct': safePrecipProbabilityPct,
+    };
+  }
+
+  factory WeatherData.fromJson(Map<String, dynamic> json) {
+    return WeatherData(
+      temperature: _readDouble(json['temperature'] ?? json['temp']),
+      feelsLike: _readDouble(json['feelsLike'] ?? json['feels_like']),
+      condition: json['condition']?.toString() ?? 'Unknown',
+      windSpeed: _safeNonNegative(
+        _readDouble(json['windSpeed'] ?? json['wind_speed']),
+      ),
+      humidity: _readInt(json['humidity']).clamp(0, 100).toInt(),
+      forecastLater: _readDouble(json['forecastLater']),
+      forecastEvening: _readDouble(json['forecastEvening']),
+      forecastNight: _readDouble(json['forecastNight']),
+      precipProbabilityPct:
+          _readInt(json['precipProbabilityPct'] ?? json['precip'])
+              .clamp(0, 100)
+              .toInt(),
+    );
+  }
+
+  static WeatherData? tryFromJson(Object? raw) {
+    if (raw is! Map) return null;
+    try {
+      return WeatherData.fromJson(Map<String, dynamic>.from(raw));
+    } catch (_) {
+      return null;
+    }
+  }
+
+  WeatherData copyWith({
+    double? temperature,
+    double? feelsLike,
+    String? condition,
+    double? windSpeed,
+    int? humidity,
+    double? forecastLater,
+    double? forecastEvening,
+    double? forecastNight,
+    int? precipProbabilityPct,
+  }) {
+    return WeatherData(
+      temperature: temperature ?? this.temperature,
+      feelsLike: feelsLike ?? this.feelsLike,
+      condition: condition ?? this.condition,
+      windSpeed: windSpeed ?? this.windSpeed,
+      humidity: humidity ?? this.humidity,
+      forecastLater: forecastLater ?? this.forecastLater,
+      forecastEvening: forecastEvening ?? this.forecastEvening,
+      forecastNight: forecastNight ?? this.forecastNight,
+      precipProbabilityPct: precipProbabilityPct ?? this.precipProbabilityPct,
+    );
+  }
 
   @override
   bool operator ==(Object other) =>
@@ -210,34 +255,35 @@ class WeatherData {
   @override
   String toString() => 'WeatherData('
       'condition: $condition, '
-      'temp: ${temperature.toStringAsFixed(1)}°, '
-      'feelsLike: ${feelsLike.toStringAsFixed(1)}°, '
-      'wind: ${windSpeed.toStringAsFixed(1)}, '
-      'humidity: $humidity%, '
-      'precip: $precipProbabilityPct%)';
+      'temp: ${_safeFinite(temperature).toStringAsFixed(1)}°, '
+      'feelsLike: ${_safeFinite(feelsLike).toStringAsFixed(1)}°, '
+      'wind: ${_safeFinite(windSpeed).toStringAsFixed(1)}, '
+      'humidity: $safeHumidity%, '
+      'precip: $safePrecipProbabilityPct%)';
+}
 
-  /// Creates a copy with selected fields overridden.
-  WeatherData copyWith({
-    double? temperature,
-    double? feelsLike,
-    String? condition,
-    double? windSpeed,
-    int? humidity,
-    double? forecastLater,
-    double? forecastEvening,
-    double? forecastNight,
-    int? precipProbabilityPct,
-  }) {
-    return WeatherData(
-      temperature: temperature ?? this.temperature,
-      feelsLike: feelsLike ?? this.feelsLike,
-      condition: condition ?? this.condition,
-      windSpeed: windSpeed ?? this.windSpeed,
-      humidity: humidity ?? this.humidity,
-      forecastLater: forecastLater ?? this.forecastLater,
-      forecastEvening: forecastEvening ?? this.forecastEvening,
-      forecastNight: forecastNight ?? this.forecastNight,
-      precipProbabilityPct: precipProbabilityPct ?? this.precipProbabilityPct,
-    );
+double _readDouble(Object? value) {
+  if (value is num) {
+    final double parsed = value.toDouble();
+    return parsed.isFinite ? parsed : 0.0;
   }
+  if (value is String) {
+    final double? parsed = double.tryParse(value.trim());
+    return parsed != null && parsed.isFinite ? parsed : 0.0;
+  }
+  return 0.0;
+}
+
+int _readInt(Object? value) {
+  if (value is int) return value;
+  if (value is num) return value.toInt();
+  if (value is String) return int.tryParse(value.trim()) ?? 0;
+  return 0;
+}
+
+double _safeFinite(double value) => value.isFinite ? value : 0.0;
+
+double _safeNonNegative(double value) {
+  if (!value.isFinite) return 0.0;
+  return value < 0.0 ? 0.0 : value;
 }

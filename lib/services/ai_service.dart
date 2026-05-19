@@ -509,7 +509,7 @@ Tip: Keep GPS accuracy below ±20m and avoid long idle time for a cleaner route 
     if (ctx.stoppedRatio > 0.45) score -= 8;
     if (ctx.routeQualityScore < 70) score -= 10;
 
-    return score.clamp(0, 100);
+    return score.clamp(0, 100).toInt();
   }
 
   int _estimateEfficiencyScore(TripSummary summary, _TripAiContext ctx) {
@@ -520,7 +520,7 @@ Tip: Keep GPS accuracy below ±20m and avoid long idle time for a cleaner route 
     if (summary.avgSpeedMph <= 1.0 && summary.distanceMiles > 0.2) score -= 18;
     if (ctx.routeQualityScore < 60) score -= 8;
 
-    return score.clamp(0, 100);
+    return score.clamp(0, 100).toInt();
   }
 
   String _formatWind(double windSpeed, SettingsService settings) {

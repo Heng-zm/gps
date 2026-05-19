@@ -10,6 +10,7 @@ import 'package:geolocator/geolocator.dart';
 import 'package:latlong2/latlong.dart';
 
 import '../models/trip_data.dart';
+import 'settings_service.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // GPS SERVICE  — v2 (optimized)
@@ -27,13 +28,17 @@ class GpsService {
   final Stopwatch _tripSw = Stopwatch();
   final Stopwatch _stoppedSw = Stopwatch();
 
+  // Monotonic clock used for all inter-point timing math. Unlike DateTime.now(),
+  // this cannot jump backwards/forwards when the OS syncs the system clock.
+  final Stopwatch _tickSw = Stopwatch();
+
   // ── position state ────────────────────────────────────────────────────────
   Position? _lastRawPos;
   LatLng? _lastEmittedSmoothedPos;
   LatLng? _lastStoredSmoothedPos;
 
-  DateTime? _lastProcessedAt;
-  DateTime? _lastStoredAt; // [FIX-7] monotonic wall-clock for storage interval
+  int? _lastProcessedMs;
+  int? _lastStoredMs;
   double? _lastValidAltM;
 
   // ── accumulators ──────────────────────────────────────────────────────────
@@ -59,10 +64,8 @@ class GpsService {
   bool _startLock = false; // [ROB-1] prevents concurrent startTracking
   bool _isAutoPaused = false;
   DateTime? _tripStartTime;
-  DateTime? _slowSince;
-  DateTime? _moveSince;
-  DateTime? _autoPauseStartedAt;
-  Duration _autoPausedAccumulated = Duration.zero;
+  int? _slowSinceMs;
+  int? _moveSinceMs;
   int _rejectedJumpCount = 0;
 
   // ── cached location settings [PERF-2] ────────────────────────────────────
@@ -110,9 +113,9 @@ class GpsService {
   Stream<TripPoint>? get pointStream => _pointCtrl?.stream;
 
   Duration get currentAutoPausedTime {
-    final DateTime? startedAt = _autoPauseStartedAt;
-    if (!_isAutoPaused || startedAt == null) return _autoPausedAccumulated;
-    return _autoPausedAccumulated + DateTime.now().difference(startedAt);
+    // Kept for UI compatibility. Stopped time is now the single source of truth
+    // for idle / auto-pause accumulation.
+    return _stoppedSw.elapsed;
   }
 
   int get rejectedJumpCount => _rejectedJumpCount;
@@ -200,6 +203,8 @@ class GpsService {
       _isTracking = true;
       _tripStartTime = DateTime.now();
       _tripSw.start();
+      _tickSw.start();
+      _cachedLocationSettings = null; // Pick up the latest GPS accuracy setting.
 
       _positionSubscription();
     } catch (e, st) {
@@ -207,6 +212,12 @@ class GpsService {
       _isTracking = false;
       _tripStartTime = null;
       _tripSw
+        ..stop()
+        ..reset();
+      _stoppedSw
+        ..stop()
+        ..reset();
+      _tickSw
         ..stop()
         ..reset();
       await _cancelSub();
@@ -238,12 +249,13 @@ class GpsService {
   Future<TripSummary?> stopTracking() async {
     if (!_isTracking) return null;
     if (_isAutoPaused) {
-      _exitAutoPause(DateTime.now());
+      _exitAutoPause();
     }
     _isTracking = false;
 
     _tripSw.stop();
     _stoppedSw.stop();
+    _tickSw.stop();
 
     // [FIX-1] Cancel stream first so no late points corrupt the summary
     await _cancelSub();
@@ -297,19 +309,20 @@ class GpsService {
     _stoppedSw
       ..stop()
       ..reset();
+    _tickSw
+      ..stop()
+      ..reset();
 
     _lastRawPos = null;
     _lastEmittedSmoothedPos = null;
     _lastStoredSmoothedPos = null;
-    _lastProcessedAt = null;
-    _lastStoredAt = null;
+    _lastProcessedMs = null;
+    _lastStoredMs = null;
     _lastValidAltM = null;
 
     _isAutoPaused = false;
-    _slowSince = null;
-    _moveSince = null;
-    _autoPauseStartedAt = null;
-    _autoPausedAccumulated = Duration.zero;
+    _slowSinceMs = null;
+    _moveSinceMs = null;
     _rejectedJumpCount = 0;
 
     _kLat = null;
@@ -335,29 +348,34 @@ class GpsService {
   }
 
   LocationSettings _buildLocationSettings() {
+    final int mode = SettingsService.instance.gpsAccuracyMode;
+    final LocationAccuracy accuracy = _accuracyForMode(mode);
+    final int distanceFilter = _distanceFilterForMode(mode);
+    final Duration androidInterval = _androidIntervalForMode(mode);
+
     if (kIsWeb) {
-      return const LocationSettings(
-        accuracy: LocationAccuracy.high,
-        distanceFilter: 2,
+      return LocationSettings(
+        accuracy: mode == 2 ? LocationAccuracy.medium : LocationAccuracy.high,
+        distanceFilter: math.max(2, distanceFilter).toInt(),
       );
     }
 
     switch (defaultTargetPlatform) {
       case TargetPlatform.iOS:
         return AppleSettings(
-          accuracy: LocationAccuracy.bestForNavigation,
+          accuracy: accuracy,
           activityType: ActivityType.automotiveNavigation,
-          pauseLocationUpdatesAutomatically: false,
+          pauseLocationUpdatesAutomatically: mode == 2,
           allowBackgroundLocationUpdates: true,
           showBackgroundLocationIndicator: true,
-          distanceFilter: 1,
+          distanceFilter: distanceFilter,
         );
 
       case TargetPlatform.android:
         return AndroidSettings(
-          accuracy: LocationAccuracy.bestForNavigation,
-          intervalDuration: const Duration(milliseconds: 800),
-          distanceFilter: 1,
+          accuracy: accuracy,
+          intervalDuration: androidInterval,
+          distanceFilter: distanceFilter,
           foregroundNotificationConfig: const ForegroundNotificationConfig(
             notificationTitle: 'TrackPro AI Active',
             notificationText: 'Tracking your journey in real-time',
@@ -366,10 +384,43 @@ class GpsService {
         );
 
       default:
-        return const LocationSettings(
-          accuracy: LocationAccuracy.high,
-          distanceFilter: 2,
+        return LocationSettings(
+          accuracy: mode == 2 ? LocationAccuracy.medium : LocationAccuracy.high,
+          distanceFilter: math.max(2, distanceFilter).toInt(),
         );
+    }
+  }
+
+  static LocationAccuracy _accuracyForMode(int mode) {
+    switch (mode) {
+      case 2:
+        return LocationAccuracy.medium;
+      case 1:
+        return LocationAccuracy.high;
+      default:
+        return LocationAccuracy.bestForNavigation;
+    }
+  }
+
+  static int _distanceFilterForMode(int mode) {
+    switch (mode) {
+      case 2:
+        return 10;
+      case 1:
+        return 4;
+      default:
+        return 1;
+    }
+  }
+
+  static Duration _androidIntervalForMode(int mode) {
+    switch (mode) {
+      case 2:
+        return const Duration(seconds: 4);
+      case 1:
+        return const Duration(milliseconds: 1500);
+      default:
+        return const Duration(milliseconds: 800);
     }
   }
 
@@ -380,12 +431,13 @@ class GpsService {
   void _handlePosition(Position pos) {
     if (!_isTracking) return;
 
-    final DateTime now = DateTime.now();
+    final int nowMs = _tickSw.elapsedMilliseconds;
+    final DateTime wallNow = DateTime.now();
 
-    // Throttle noisy platforms before expensive work.
-    final DateTime? previousProcessedAt = _lastProcessedAt;
-    if (previousProcessedAt != null &&
-        now.difference(previousProcessedAt).inMilliseconds < _kMinProcessMs) {
+    // Throttle noisy platforms before expensive work using monotonic time.
+    final int? previousProcessedMs = _lastProcessedMs;
+    if (previousProcessedMs != null &&
+        nowMs - previousProcessedMs < _kMinProcessMs) {
       return;
     }
 
@@ -393,20 +445,22 @@ class GpsService {
 
     // Point-jump detection must run BEFORE Kalman smoothing so a bad GPS fix
     // cannot poison the smoothing state or inflate distance/speed.
-    if (_isLikelyJump(pos, now, previousProcessedAt)) {
+    if (_isLikelyJump(pos, nowMs, previousProcessedMs)) {
       _rejectedJumpCount++;
       return;
     }
 
     // From here the fix is accepted as a processed GPS update.
-    _lastProcessedAt = now;
+    _lastProcessedMs = nowMs;
 
-    // [FIX-5] Sanitise potentially-zero/null OEM timestamp.
-    final DateTime timestamp = _sanitiseTimestamp(pos.timestamp, now);
+    // Sanitise potentially-zero/null OEM timestamp for persisted route data.
+    // This is intentionally separate from monotonic timing math.
+    final DateTime timestamp = _sanitiseTimestamp(pos.timestamp, wallNow);
 
     final LatLng smoothed = _kalmanSmooth(pos);
 
-    // Distance since the last accepted/emitted point. Used for trip distance.
+    // Distance since the last accepted/emitted point. This affects total trip
+    // distance, so keep the more accurate geodesic calculation here.
     final double gapM = _lastEmittedSmoothedPos == null
         ? 0.0
         : Geolocator.distanceBetween(
@@ -416,11 +470,11 @@ class GpsService {
             smoothed.longitude,
           );
 
-    // Distance since the last stored point. Used for storage gating so many
-    // tiny 1–2m updates can still accumulate into a stored track point.
+    // Distance since the last stored point. This only gates storage thresholds,
+    // so the fast approximation avoids another geodesic calculation per tick.
     final double storageGapM = _lastStoredSmoothedPos == null
         ? double.infinity
-        : Geolocator.distanceBetween(
+        : _fastDistanceM(
             _lastStoredSmoothedPos!.latitude,
             _lastStoredSmoothedPos!.longitude,
             smoothed.latitude,
@@ -429,15 +483,14 @@ class GpsService {
 
     final double rawMph = _clampedSpeedMph(
       pos,
-      smoothed,
       gapM,
-      now,
-      previousProcessedAt,
+      nowMs,
+      previousProcessedMs,
     );
     final double smoothMph = _speedBuf.push(rawMph);
     final double altFt = pos.altitude * _kMToFt;
 
-    _updateAutoPause(rawMph, now);
+    _updateAutoPause(rawMph, nowMs);
 
     if (!_isAutoPaused) {
       _updatePeaks(rawMph, altFt);
@@ -455,9 +508,9 @@ class GpsService {
       accuracyMeters: pos.accuracy,
     );
 
-    if (_shouldStore(storageGapM, now)) {
+    if (_shouldStore(storageGapM, nowMs)) {
       _points.add(point);
-      _lastStoredAt = now;
+      _lastStoredMs = nowMs;
       _lastStoredSmoothedPos = smoothed;
     }
 
@@ -494,13 +547,13 @@ class GpsService {
 
   bool _isLikelyJump(
     Position pos,
-    DateTime now,
-    DateTime? previousProcessedAt,
+    int nowMs,
+    int? previousProcessedMs,
   ) {
     final Position? previous = _lastRawPos;
-    if (previous == null || previousProcessedAt == null) return false;
+    if (previous == null || previousProcessedMs == null) return false;
 
-    final double rawGapM = Geolocator.distanceBetween(
+    final double rawGapM = _fastDistanceM(
       previous.latitude,
       previous.longitude,
       pos.latitude,
@@ -509,16 +562,8 @@ class GpsService {
 
     if (!rawGapM.isFinite || rawGapM < _kJumpMinDistanceM) return false;
 
-    final DateTime previousTime = _sanitiseTimestamp(
-      previous.timestamp,
-      previousProcessedAt,
-    );
-    final DateTime currentTime = _sanitiseTimestamp(pos.timestamp, now);
-    final int deltaMs = currentTime.difference(previousTime).inMilliseconds;
-    final double deltaSeconds = (deltaMs > 0
-            ? deltaMs
-            : now.difference(previousProcessedAt).inMilliseconds) /
-        1000.0;
+    final int deltaMs = nowMs - previousProcessedMs;
+    final double deltaSeconds = deltaMs / 1000.0;
     if (!deltaSeconds.isFinite || deltaSeconds <= 0.25) return false;
 
     final double previousAccuracy =
@@ -576,20 +621,22 @@ class GpsService {
   // SPEED
   // ─────────────────────────────────────────────────────────────────────────
 
-  /// [PERF-3] Accepts pre-computed gapM to avoid a duplicate distanceBetween.
+  /// Accepts pre-computed gapM to avoid duplicate distanceBetween calls.
+  /// Uses monotonic elapsed milliseconds to avoid system clock / NTP drift.
   double _clampedSpeedMph(
     Position pos,
-    LatLng smoothed,
     double gapM,
-    DateTime now,
-    DateTime? previousProcessedAt,
+    int nowMs,
+    int? previousProcessedMs,
   ) {
     double mps = pos.speed.isFinite && pos.speed >= 0.0 ? pos.speed : 0.0;
 
-    // Derive speed from displacement if sensor reports zero
-    if (mps <= 0.0 && _lastRawPos != null && gapM > 0.0) {
-      final int deltaMs =
-          now.difference(previousProcessedAt ?? now).inMilliseconds;
+    // Derive speed from displacement if sensor reports zero.
+    if (mps <= 0.0 &&
+        _lastRawPos != null &&
+        gapM > 0.0 &&
+        previousProcessedMs != null) {
+      final int deltaMs = nowMs - previousProcessedMs;
       if (deltaMs > 100) {
         mps = gapM / (deltaMs / 1000.0);
       }
@@ -602,56 +649,49 @@ class GpsService {
   // AUTO PAUSE / AUTO RESUME
   // ─────────────────────────────────────────────────────────────────────────
 
-  void _updateAutoPause(double rawMph, DateTime now) {
+  void _updateAutoPause(double rawMph, int nowMs) {
     if (!_isTracking) return;
 
     if (rawMph <= _kAutoPauseEnterMph) {
-      _slowSince ??= now;
-      _moveSince = null;
+      _slowSinceMs ??= nowMs;
+      _moveSinceMs = null;
     } else if (rawMph >= _kAutoPauseResumeMph) {
-      _moveSince ??= now;
-      _slowSince = null;
+      _moveSinceMs ??= nowMs;
+      _slowSinceMs = null;
     } else {
-      _slowSince = null;
-      _moveSince = null;
+      _slowSinceMs = null;
+      _moveSinceMs = null;
     }
 
     if (!_isAutoPaused &&
-        _slowSince != null &&
-        now.difference(_slowSince!) >= _kAutoPauseEnterDelay) {
-      _enterAutoPause(now);
+        _slowSinceMs != null &&
+        nowMs - _slowSinceMs! >= _kAutoPauseEnterDelay.inMilliseconds) {
+      _enterAutoPause(nowMs);
       return;
     }
 
     if (_isAutoPaused &&
-        _moveSince != null &&
-        now.difference(_moveSince!) >= _kAutoPauseResumeDelay) {
-      _exitAutoPause(now);
+        _moveSinceMs != null &&
+        nowMs - _moveSinceMs! >= _kAutoPauseResumeDelay.inMilliseconds) {
+      _exitAutoPause();
     }
   }
 
-  void _enterAutoPause(DateTime now) {
+  void _enterAutoPause(int nowMs) {
     if (_isAutoPaused) return;
 
     _isAutoPaused = true;
-    _autoPauseStartedAt = now;
-    _moveSince = null;
+    _moveSinceMs = null;
 
     if (!_stoppedSw.isRunning) _stoppedSw.start();
   }
 
-  void _exitAutoPause(DateTime now) {
+  void _exitAutoPause() {
     if (!_isAutoPaused) return;
 
-    final DateTime? startedAt = _autoPauseStartedAt;
-    if (startedAt != null) {
-      _autoPausedAccumulated += now.difference(startedAt);
-    }
-
     _isAutoPaused = false;
-    _autoPauseStartedAt = null;
-    _slowSince = null;
-    _moveSince = null;
+    _slowSinceMs = null;
+    _moveSinceMs = null;
 
     if (_stoppedSw.isRunning) _stoppedSw.stop();
   }
@@ -711,7 +751,7 @@ class GpsService {
   // STORAGE GATE  [FIX-7]
   // ─────────────────────────────────────────────────────────────────────────
 
-  bool _shouldStore(double gapM, DateTime now) {
+  bool _shouldStore(double gapM, int nowMs) {
     if (_points.isEmpty) return true;
 
     final double minDistance =
@@ -721,9 +761,9 @@ class GpsService {
 
     final bool distTrigger = gapM.isFinite && gapM >= minDistance;
 
-    final DateTime? lastAt = _lastStoredAt;
+    final int? lastMs = _lastStoredMs;
     final bool timeTrigger =
-        lastAt == null || now.difference(lastAt).inSeconds >= minSeconds;
+        lastMs == null || nowMs - lastMs >= minSeconds * 1000;
 
     return distTrigger || timeTrigger;
   }
@@ -762,9 +802,11 @@ class GpsService {
     // Kalman gain
     final double K = pPred / (pPred + R);
 
-    // Update state
+    // Update state. Longitude uses the shortest angular delta so crossing
+    // the antimeridian (180 / -180) does not pull the filter across the globe.
+    final double lngDelta = (pos.longitude - _kLng! + 180.0) % 360.0 - 180.0;
     _kLat = _kLat! + K * (pos.latitude - _kLat!);
-    _kLng = _kLng! + K * (pos.longitude - _kLng!);
+    _kLng = _normaliseLongitude(_kLng! + K * lngDelta);
     _kP = (1.0 - K) * pPred;
 
     return LatLng(_kLat!, _kLng!);
@@ -773,6 +815,36 @@ class GpsService {
   // ─────────────────────────────────────────────────────────────────────────
   // HELPERS
   // ─────────────────────────────────────────────────────────────────────────
+
+  static double _fastDistanceM(
+    double lat1,
+    double lng1,
+    double lat2,
+    double lng2,
+  ) {
+    if (!lat1.isFinite || !lng1.isFinite || !lat2.isFinite || !lng2.isFinite) {
+      return double.infinity;
+    }
+
+    // Fast equirectangular approximation. Accurate enough for small threshold
+    // checks and much cheaper than full geodesic distance.
+    const double earthRadiusM = 6371008.8;
+    final double lat1Rad = lat1 * math.pi / 180.0;
+    final double lat2Rad = lat2 * math.pi / 180.0;
+    final double dLat = lat2Rad - lat1Rad;
+    final double dLngDeg = (lng2 - lng1 + 180.0) % 360.0 - 180.0;
+    final double dLng = dLngDeg * math.pi / 180.0;
+    final double x = dLng * math.cos((lat1Rad + lat2Rad) * 0.5);
+    return earthRadiusM * math.sqrt(x * x + dLat * dLat);
+  }
+
+  static double _normaliseLongitude(double longitude) {
+    final double normalized = (longitude + 180.0) % 360.0 - 180.0;
+    // Preserve +180 for inputs that land exactly on the antimeridian instead
+    // of returning -180 for every positive wrap.
+    if (normalized == -180.0 && longitude > 0.0) return 180.0;
+    return normalized;
+  }
 
   /// [FIX-5] Some OEM drivers return epoch-zero for pos.timestamp.
   static DateTime _sanitiseTimestamp(DateTime? ts, DateTime fallback) {
@@ -820,11 +892,12 @@ class GpsService {
 
   Future<void> dispose() async {
     if (_isAutoPaused) {
-      _exitAutoPause(DateTime.now());
+      _exitAutoPause();
     }
     _isTracking = false;
     _tripSw.stop();
     _stoppedSw.stop();
+    _tickSw.stop();
     await _cancelSub();
     await _closeCtrl();
     _tripStartTime = null;

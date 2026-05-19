@@ -21,16 +21,19 @@ extension _MapScreenMarkerMethods on _MapScreenState {
     if (!widget.isLive && _route.validPoints.length > 1) {
       markers.add(_endMarker(_route.validPoints.last.position));
       final int safeReplayIndex =
-          _replayIndex.clamp(0, _route.validPoints.length - 1);
+          _replayIndex.clamp(0, _route.validPoints.length - 1).toInt();
       markers.add(_replayMarker(_route.validPoints[safeReplayIndex].position));
     } else if (widget.isLive) {
       markers.add(_liveMarker(_route.validPoints.last.position));
     }
 
     if (_showSpeedGradient && _route.validPoints.length > 10) {
+      const int maxSpeedTags = 8;
       final int step =
-          (_route.validPoints.length / 8).ceil().clamp(25, 80).toInt();
+          (_route.validPoints.length / maxSpeedTags).ceil().clamp(12, 140).toInt();
+
       for (int i = step; i < _route.validPoints.length - 2; i += step) {
+        if (markers.length > maxSpeedTags + 4) break;
         markers.add(_speedTagMarker(_route.validPoints[i]));
       }
     }
@@ -68,7 +71,7 @@ extension _MapScreenMarkerMethods on _MapScreenState {
   }
 
   fm.Marker _replayMarker(LatLng position) {
-    final int safeIndex = _replayIndex.clamp(0, _route.validPoints.length - 1);
+    final int safeIndex = _replayIndex.clamp(0, _route.validPoints.length - 1).toInt();
     final double bearing = safeIndex > 0
         ? _bearingOrZero(
             _route.validPoints[safeIndex - 1].position,
@@ -182,7 +185,7 @@ class _MapLocationPuck extends StatelessWidget {
       animation: pulseController,
       builder: (_, __) {
         final double pulse = pulseController.value;
-        final double pulseOpacity = (1.0 - pulse).clamp(0.0, 1.0);
+        final double pulseOpacity = (1.0 - pulse).clamp(0.0, 1.0).toDouble();
 
         return SizedBox(
           width: 92,
@@ -352,7 +355,7 @@ class _MapVehicleMarker extends StatelessWidget {
       animation: pulseController,
       builder: (_, __) {
         final double pulse = pulseController.value;
-        final double opacity = (1.0 - pulse).clamp(0.0, 1.0);
+        final double opacity = (1.0 - pulse).clamp(0.0, 1.0).toDouble();
         return SizedBox(
           width: 96,
           height: 96,

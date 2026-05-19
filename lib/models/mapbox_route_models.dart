@@ -5,11 +5,6 @@ import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart' as mb;
 
 import '../services/settings_service.dart';
 
-/// Runtime engine selection for Mapbox rendering.
-///
-/// - [auto]: Native Mapbox on mobile, Flutter/web fallback on web.
-/// - [native]: Force native Mapbox when supported.
-/// - [webFallback]: Force tile fallback renderer.
 enum MapboxRuntimeMode {
   auto,
   native,
@@ -60,12 +55,24 @@ extension MapboxRuntimeModeX on MapboxRuntimeMode {
         return MapboxRuntimeMode.auto;
     }
   }
+
+  String get storageKey => name;
+
+  static MapboxRuntimeMode fromStorageKey(String? value) {
+    final String normalized = (value ?? '').trim().toLowerCase();
+    for (final MapboxRuntimeMode mode in MapboxRuntimeMode.values) {
+      if (mode.storageKey.toLowerCase() == normalized ||
+          mode.label.toLowerCase() == normalized) {
+        return mode;
+      }
+    }
+    if (normalized == 'fallback' || normalized == 'web_fallback') {
+      return MapboxRuntimeMode.webFallback;
+    }
+    return MapboxRuntimeMode.auto;
+  }
 }
 
-/// Mapbox Standard style light presets.
-///
-/// These are used with:
-/// `map.style.setStyleImportConfigProperty('basemap', 'lightPreset', value)`.
 enum MapboxStandardPreset {
   day,
   dusk,
@@ -125,9 +132,22 @@ extension MapboxStandardPresetX on MapboxStandardPreset {
         return MapboxStandardPreset.day;
     }
   }
+
+  String get storageKey => name;
+
+  static MapboxStandardPreset fromStorageKey(String? value) {
+    final String normalized = (value ?? '').trim().toLowerCase();
+    for (final MapboxStandardPreset preset in MapboxStandardPreset.values) {
+      if (preset.storageKey.toLowerCase() == normalized ||
+          preset.label.toLowerCase() == normalized ||
+          preset.mapboxValue.toLowerCase() == normalized) {
+        return preset;
+      }
+    }
+    return MapboxStandardPreset.day;
+  }
 }
 
-/// Mapbox Directions API travel profiles.
 enum DirectionsProfile {
   drivingTraffic,
   driving,
@@ -199,14 +219,37 @@ extension DirectionsProfileX on DirectionsProfile {
         return DirectionsProfile.drivingTraffic;
     }
   }
+
+  String get storageKey => name;
+
+  static DirectionsProfile fromStorageKey(String? value) {
+    final String normalized = (value ?? '').trim().toLowerCase();
+    for (final DirectionsProfile profile in DirectionsProfile.values) {
+      if (profile.storageKey.toLowerCase() == normalized ||
+          profile.label.toLowerCase() == normalized ||
+          profile.shortLabel.toLowerCase() == normalized ||
+          profile.apiProfile.toLowerCase() == normalized) {
+        return profile;
+      }
+    }
+    switch (normalized) {
+      case 'traffic':
+      case 'driving-traffic':
+      case 'drive+traffic':
+        return DirectionsProfile.drivingTraffic;
+      case 'walk':
+        return DirectionsProfile.walking;
+      case 'bike':
+      case 'bicycle':
+        return DirectionsProfile.cycling;
+      case 'drive':
+      case 'car':
+      default:
+        return DirectionsProfile.driving;
+    }
+  }
 }
 
-/// A planned route returned from Mapbox Directions API.
-///
-/// Keep this model UI-safe and immutable. It can be shared by:
-/// - tracking screen
-/// - map screen
-/// - route planner sheet
 class PlannedRoute {
   const PlannedRoute({
     required this.points,
@@ -222,9 +265,15 @@ class PlannedRoute {
 
   bool get isValid => points.length >= 2;
 
-  double get distanceKm => distanceMeters / 1000.0;
+  double get safeDistanceMeters =>
+      distanceMeters.isFinite && distanceMeters > 0 ? distanceMeters : 0.0;
 
-  double get distanceMiles => distanceMeters / 1609.344;
+  double get safeDurationSeconds =>
+      durationSeconds.isFinite && durationSeconds > 0 ? durationSeconds : 0.0;
+
+  double get distanceKm => safeDistanceMeters / 1000.0;
+
+  double get distanceMiles => safeDistanceMeters / 1609.344;
 
   String get distanceLabelMetric {
     final double km = distanceKm;
@@ -234,17 +283,12 @@ class PlannedRoute {
   }
 
   String distanceLabel(SettingsService settings) {
-    final double miles = distanceMiles;
-    final double displayDistance = settings.toDisplayDistance(
-      miles.isFinite && miles >= 0.0 ? miles : 0.0,
-    );
+    final double displayDistance = settings.toDisplayDistance(distanceMiles);
     return '${displayDistance.toStringAsFixed(1)} ${settings.distanceUnit}';
   }
 
   String durationLabel() {
-    final int total = durationSeconds.isFinite
-        ? durationSeconds.round().clamp(0, 1 << 31)
-        : 0;
+    final int total = safeDurationSeconds.round().clamp(0, 1 << 31).toInt();
     final int hours = total ~/ 3600;
     final int minutes = (total % 3600) ~/ 60;
 
@@ -268,9 +312,63 @@ class PlannedRoute {
       profile: profile ?? this.profile,
     );
   }
+
+  Map<String, dynamic> toJson() {
+    return <String, dynamic>{
+      'points': points
+          .where(isValidLatLng)
+          .map((LatLng point) => <String, double>{
+                'lat': point.latitude,
+                'lng': point.longitude,
+              })
+          .toList(growable: false),
+      'distanceMeters': safeDistanceMeters,
+      'durationSeconds': safeDurationSeconds,
+      'profile': profile.storageKey,
+    };
+  }
+
+  static PlannedRoute? tryFromJson(Object? raw) {
+    if (raw is! Map) return null;
+
+    final Map<String, dynamic> json = Map<String, dynamic>.from(raw);
+    final List<LatLng> parsedPoints = _parsePoints(json['points']);
+
+    final PlannedRoute route = PlannedRoute(
+      points: List<LatLng>.unmodifiable(parsedPoints),
+      distanceMeters: _readDouble(json['distanceMeters'] ?? json['distance']),
+      durationSeconds: _readDouble(json['durationSeconds'] ?? json['duration']),
+      profile: DirectionsProfileX.fromStorageKey(json['profile']?.toString()),
+    );
+
+    return route.isValid ? route : null;
+  }
+
+  static List<LatLng> _parsePoints(Object? raw) {
+    if (raw is! List) return const <LatLng>[];
+
+    final List<LatLng> points = <LatLng>[];
+
+    for (final Object? item in raw) {
+      if (item is Map) {
+        final LatLng point = LatLng(
+          _readDouble(item['lat'] ?? item['latitude']),
+          _readDouble(item['lng'] ?? item['lon'] ?? item['longitude']),
+        );
+        if (isValidLatLng(point)) points.add(point);
+      } else if (item is List && item.length >= 2) {
+        final LatLng point = LatLng(
+          _readDouble(item[1]),
+          _readDouble(item[0]),
+        );
+        if (isValidLatLng(point)) points.add(point);
+      }
+    }
+
+    return points;
+  }
 }
 
-/// Geocoding result from Mapbox Search / Geocoding API.
 class MapboxPlaceResult {
   const MapboxPlaceResult({
     required this.name,
@@ -283,10 +381,34 @@ class MapboxPlaceResult {
   final LatLng position;
 
   bool get isValid => isValidLatLng(position);
+
+  Map<String, dynamic> toJson() {
+    return <String, dynamic>{
+      'name': name,
+      'address': address,
+      'lat': position.latitude,
+      'lng': position.longitude,
+    };
+  }
+
+  static MapboxPlaceResult? tryFromJson(Object? raw) {
+    if (raw is! Map) return null;
+
+    final LatLng point = LatLng(
+      _readDouble(raw['lat'] ?? raw['latitude']),
+      _readDouble(raw['lng'] ?? raw['lon'] ?? raw['longitude']),
+    );
+
+    if (!isValidLatLng(point)) return null;
+
+    return MapboxPlaceResult(
+      name: raw['name']?.toString() ?? 'Pinned location',
+      address: raw['address']?.toString() ?? '',
+      position: point,
+    );
+  }
 }
 
-/// Helper for the shared route planner widget.
-/// Keeps the widget generic-friendly without duplicating summary formatting.
 class PlannedRouteSummary {
   const PlannedRouteSummary({
     required this.distanceLabel,
@@ -312,9 +434,6 @@ class PlannedRouteSummary {
   final String profileLabel;
 }
 
-/// Convert shared enums into route planner options.
-///
-/// Use these with `RoutePlannerSheet`.
 class MapboxRoutePlannerOptions {
   const MapboxRoutePlannerOptions._();
 
@@ -322,15 +441,6 @@ class MapboxRoutePlannerOptions {
     return List<T>.unmodifiable(items);
   }
 
-  /// Use inside screens after importing `route_planner_sheet.dart`.
-  ///
-  /// Example:
-  /// ```dart
-  /// profileOptions: MapboxRoutePlannerOptions.profileOptions,
-  /// ```
-  ///
-  /// This getter is intentionally dynamic-free at runtime, but kept here as
-  /// helper data for screens that use the shared route planner widget.
   static List<MapboxRuntimeMode> get runtimeModes {
     return const <MapboxRuntimeMode>[
       MapboxRuntimeMode.auto,
@@ -358,16 +468,14 @@ class MapboxRoutePlannerOptions {
   }
 }
 
-/// Mapbox style helper.
-///
-/// Uses Mapbox Standard by default and Standard Satellite for satellite mode.
 String mapboxStandardStyleUri({
   required bool satellite,
 }) {
-  return satellite ? mb.MapboxStyles.STANDARD_SATELLITE : mb.MapboxStyles.STANDARD;
+  return satellite
+      ? mb.MapboxStyles.STANDARD_SATELLITE
+      : mb.MapboxStyles.STANDARD;
 }
 
-/// Coordinate validation shared by route planner and map screens.
 bool isValidLatLng(LatLng point) {
   return point.latitude.isFinite &&
       point.longitude.isFinite &&
@@ -377,9 +485,6 @@ bool isValidLatLng(LatLng point) {
       point.longitude <= 180.0;
 }
 
-/// Parses user-pasted coordinates like:
-/// - `11.5564, 104.9282`
-/// - `11.5564 104.9282`
 LatLng? tryParseLatLng(String input) {
   final RegExpMatch? match = RegExp(
     r'^\s*(-?\d+(?:\.\d+)?)\s*[, ]\s*(-?\d+(?:\.\d+)?)\s*$',
@@ -394,4 +499,18 @@ LatLng? tryParseLatLng(String input) {
 
   final LatLng point = LatLng(lat, lng);
   return isValidLatLng(point) ? point : null;
+}
+
+double _readDouble(Object? value) {
+  if (value is num) {
+    final double parsed = value.toDouble();
+    return parsed.isFinite ? parsed : 0.0;
+  }
+
+  if (value is String) {
+    final double? parsed = double.tryParse(value.trim());
+    return parsed != null && parsed.isFinite ? parsed : 0.0;
+  }
+
+  return 0.0;
 }

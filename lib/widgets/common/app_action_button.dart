@@ -1,9 +1,12 @@
+import 'dart:math' as math;
+
 import 'package:flutter/cupertino.dart';
+import 'package:flutter/material.dart';
 
 import '../../theme/app_theme.dart';
 import '../../utils/app_haptics.dart';
 
-class AppActionButton extends StatelessWidget {
+class AppActionButton extends StatefulWidget {
   const AppActionButton({
     super.key,
     required this.label,
@@ -11,7 +14,12 @@ class AppActionButton extends StatelessWidget {
     this.icon,
     this.primary = false,
     this.enabled = true,
+    this.isLoading = false,
     this.height = 52,
+    this.minWidth = 88,
+    this.semanticHint,
+    this.color,
+    this.textColor = AppColors.white,
   });
 
   final String label;
@@ -19,75 +27,132 @@ class AppActionButton extends StatelessWidget {
   final IconData? icon;
   final bool primary;
   final bool enabled;
+  final bool isLoading;
   final double height;
+  final double minWidth;
+  final String? semanticHint;
+  final Color? color;
+  final Color textColor;
+
+  @override
+  State<AppActionButton> createState() => _AppActionButtonState();
+}
+
+class _AppActionButtonState extends State<AppActionButton> {
+  bool _pressed = false;
+
+  bool get _active => widget.enabled && widget.onTap != null && !widget.isLoading;
+
+  void _setPressed(bool value) {
+    if (!mounted || _pressed == value) return;
+    setState(() => _pressed = value);
+  }
+
+  void _handleTap() {
+    if (!_active) return;
+    AppHaptics.select();
+    widget.onTap!();
+  }
 
   @override
   Widget build(BuildContext context) {
-    final bool active = enabled && onTap != null;
+    final double resolvedHeight = math.max(44.0, widget.height);
+    final double resolvedMinWidth = math.max(44.0, widget.minWidth);
 
     return Semantics(
       button: true,
-      enabled: active,
-      label: label,
-      child: CupertinoButton(
-        padding: EdgeInsets.zero,
-        minSize: 0,
-        onPressed: active
-            ? () {
-                AppHaptics.select();
-                onTap!();
-              }
-            : null,
-        child: AnimatedOpacity(
-          duration: const Duration(milliseconds: 180),
-          opacity: active ? 1.0 : 0.45,
-          child: Container(
-            height: height,
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            decoration: BoxDecoration(
-              gradient: primary ? AppColors.blueButtonGradient : null,
-              color: primary ? null : AppColors.white.withValues(alpha: 0.07),
-              borderRadius: BorderRadius.circular(18),
-              border: Border.all(
-                color: primary
-                    ? AppColors.blueSoft.withValues(alpha: 0.18)
-                    : AppColors.white.withValues(alpha: 0.10),
-              ),
-              boxShadow: primary
-                  ? <BoxShadow>[
-                      BoxShadow(
-                        color: AppColors.blue.withValues(alpha: 0.28),
-                        blurRadius: 18,
-                        offset: const Offset(0, 8),
-                      ),
-                    ]
-                  : null,
-            ),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: <Widget>[
-                if (icon != null) ...<Widget>[
-                  Icon(
-                    icon,
-                    color: AppColors.white,
-                    size: 17,
+      enabled: _active || widget.isLoading,
+      label: widget.label,
+      hint: widget.semanticHint,
+      child: MouseRegion(
+        cursor: _active ? SystemMouseCursors.click : SystemMouseCursors.basic,
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTapDown: _active ? (_) => _setPressed(true) : null,
+          onTapCancel: _active ? () => _setPressed(false) : null,
+          onTapUp: _active
+              ? (_) {
+                  _setPressed(false);
+                  _handleTap();
+                }
+              : null,
+          child: AnimatedScale(
+            duration: const Duration(milliseconds: 110),
+            scale: _pressed ? 0.975 : 1.0,
+            curve: Curves.easeOut,
+            child: AnimatedOpacity(
+              duration: const Duration(milliseconds: 180),
+              opacity: _active || widget.isLoading ? 1.0 : 0.45,
+              child: ConstrainedBox(
+                constraints: BoxConstraints(
+                  minHeight: resolvedHeight,
+                  minWidth: resolvedMinWidth,
+                ),
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    gradient:
+                        widget.primary ? AppColors.blueButtonGradient : null,
+                    color: widget.primary
+                        ? null
+                        : (widget.color ??
+                            AppColors.white.withValues(alpha: 0.075)),
+                    borderRadius: BorderRadius.circular(18),
+                    border: Border.all(
+                      color: widget.primary
+                          ? AppColors.blueSoft.withValues(alpha: 0.20)
+                          : AppColors.white.withValues(alpha: 0.10),
+                    ),
+                    boxShadow: widget.primary
+                        ? <BoxShadow>[
+                            BoxShadow(
+                              color: AppColors.blue.withValues(alpha: 0.28),
+                              blurRadius: 18,
+                              offset: const Offset(0, 8),
+                            ),
+                          ]
+                        : null,
                   ),
-                  const SizedBox(width: 8),
-                ],
-                Flexible(
-                  child: Text(
-                    label,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      color: AppColors.white,
-                      fontSize: 13,
-                      fontWeight: FontWeight.w900,
-                      letterSpacing: 0.2,
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 14),
+                    child: SizedBox(
+                      height: resolvedHeight,
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        mainAxisSize: MainAxisSize.min,
+                        children: <Widget>[
+                          if (widget.isLoading)
+                            const CupertinoActivityIndicator(
+                              color: AppColors.white,
+                              radius: 8,
+                            )
+                          else if (widget.icon != null)
+                            Icon(
+                              widget.icon,
+                              color: widget.textColor,
+                              size: 17,
+                            ),
+                          if (widget.isLoading || widget.icon != null)
+                            const SizedBox(width: 8),
+                          Flexible(
+                            child: Text(
+                              widget.label,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              textAlign: TextAlign.center,
+                              style: TextStyle(
+                                color: widget.textColor,
+                                fontSize: 13,
+                                fontWeight: FontWeight.w900,
+                                letterSpacing: 0.2,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
                   ),
                 ),
-              ],
+              ),
             ),
           ),
         ),

@@ -14,6 +14,7 @@ class AppGlassCard extends StatelessWidget {
     this.borderColor,
     this.blur = 16,
     this.shadow = true,
+    this.clip = true,
   });
 
   final Widget child;
@@ -23,36 +24,46 @@ class AppGlassCard extends StatelessWidget {
   final Color? borderColor;
   final double blur;
   final bool shadow;
+  final bool clip;
 
   @override
   Widget build(BuildContext context) {
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(borderRadius),
-      child: BackdropFilter(
-        filter: ui.ImageFilter.blur(sigmaX: blur, sigmaY: blur),
-        child: DecoratedBox(
-          decoration: BoxDecoration(
-            color: color ?? AppColors.card.withValues(alpha: 0.88),
-            borderRadius: BorderRadius.circular(borderRadius),
-            border: Border.all(
-              color: borderColor ?? AppColors.border.withValues(alpha: 0.78),
-            ),
-            boxShadow: shadow
-                ? <BoxShadow>[
-                    BoxShadow(
-                      color: AppColors.black.withValues(alpha: 0.24),
-                      blurRadius: 20,
-                      offset: const Offset(0, 8),
-                    ),
-                  ]
-                : null,
-          ),
-          child: Padding(
-            padding: padding,
-            child: child,
-          ),
+    final double radius = borderRadius.clamp(0.0, 80.0).toDouble();
+    final Widget content = DecoratedBox(
+      decoration: BoxDecoration(
+        color: color ?? AppColors.card.withValues(alpha: 0.88),
+        borderRadius: BorderRadius.circular(radius),
+        border: Border.all(
+          color: borderColor ?? AppColors.border.withValues(alpha: 0.78),
         ),
+        boxShadow: shadow
+            ? <BoxShadow>[
+                BoxShadow(
+                  color: AppColors.black.withValues(alpha: 0.24),
+                  blurRadius: 20,
+                  offset: const Offset(0, 8),
+                ),
+              ]
+            : null,
       ),
+      child: Padding(
+        padding: padding,
+        child: child,
+      ),
+    );
+
+    final Widget blurred = blur <= 0
+        ? content
+        : BackdropFilter(
+            filter: ui.ImageFilter.blur(sigmaX: blur, sigmaY: blur),
+            child: content,
+          );
+
+    if (!clip) return blurred;
+
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(radius),
+      child: blurred,
     );
   }
 }

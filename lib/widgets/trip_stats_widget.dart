@@ -62,7 +62,7 @@ class TripStatsWidget extends StatelessWidget {
     final int total = math.max(0, tripTime.inSeconds);
     if (total == 0) return 0.0;
 
-    final int stopped = stoppedTime.inSeconds.clamp(0, total);
+    final int stopped = stoppedTime.inSeconds.clamp(0, total).toInt();
     return stopped / total;
   }
 
@@ -976,9 +976,9 @@ class _RouteQuality {
 
     int score = 100;
     if (points.length < 10) score -= 16;
-    score -= (weakAccuracy * 4).clamp(0, 30);
-    score -= (duplicateLike * 2).clamp(0, 18);
-    score = score.clamp(0, 100);
+    score -= (weakAccuracy * 4).clamp(0, 30).toInt();
+    score -= (duplicateLike * 2).clamp(0, 18).toInt();
+    score = score.clamp(0, 100).toInt();
 
     final Color color;
     if (score >= 85) {

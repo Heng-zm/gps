@@ -13,15 +13,25 @@ const _kBarRadius = 36.0;
 const _kItemCount = 3;
 
 class AppShell extends StatefulWidget {
-  const AppShell({super.key});
+  const AppShell({
+    super.key,
+    this.pages,
+    this.initialIndex = 0,
+    this.onTabChanged,
+  });
+
+  final List<Widget>? pages;
+  final int initialIndex;
+  final ValueChanged<int>? onTabChanged;
+
   @override
   State<AppShell> createState() => _AppShellState();
 }
 
 class _AppShellState extends State<AppShell>
     with SingleTickerProviderStateMixin {
-  int _current = 0;
-  int _previous = 0;
+  late int _current;
+  late int _previous;
 
   late final AnimationController _ctrl = AnimationController(
     vsync: this,
@@ -33,11 +43,26 @@ class _AppShellState extends State<AppShell>
     curve: Curves.easeOutBack,
   );
 
-  final List<Widget> _pages = const [
-    _PlaceholderPage(label: 'TRACK', icon: CupertinoIcons.speedometer),
-    _PlaceholderPage(label: 'HISTORY', icon: CupertinoIcons.clock_fill),
-    _PlaceholderPage(label: 'SETTINGS', icon: CupertinoIcons.settings_solid),
-  ];
+  List<Widget> get _pages {
+    final List<Widget>? customPages = widget.pages;
+    if (customPages != null && customPages.length == _kItemCount) {
+      return customPages;
+    }
+
+    return const <Widget>[
+      _PlaceholderPage(label: 'TRACK', icon: CupertinoIcons.speedometer),
+      _PlaceholderPage(label: 'HISTORY', icon: CupertinoIcons.clock_fill),
+      _PlaceholderPage(label: 'SETTINGS', icon: CupertinoIcons.settings_solid),
+    ];
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    final int safeInitial = widget.initialIndex.clamp(0, _kItemCount - 1).toInt();
+    _current = safeInitial;
+    _previous = safeInitial;
+  }
 
   @override
   void dispose() {
@@ -46,12 +71,16 @@ class _AppShellState extends State<AppShell>
   }
 
   void _onTap(int index) {
-    if (_current == index) return;
+    if (_current == index) {
+      HapticFeedback.lightImpact();
+      return;
+    }
     HapticFeedback.selectionClick();
     setState(() {
       _previous = _current;
       _current = index;
     });
+    widget.onTabChanged?.call(index);
     _ctrl.forward(from: 0.0);
   }
 
@@ -59,10 +88,11 @@ class _AppShellState extends State<AppShell>
   Widget build(BuildContext context) {
     final mq = MediaQuery.of(context);
     final bottomPad = mq.padding.bottom;
-    const barMargin = 16.0;
+    final bool compact = mq.size.width < 390;
+    final double barMargin = compact ? 10.0 : 16.0;
 
-    // Calculate precise padding so pages don't overlap the bar
-    final totalBarHeight = _kBarHeight + bottomPad + barMargin;
+    // Calculate precise padding so pages don't overlap the bar.
+    final double totalBarHeight = _kBarHeight + bottomPad + barMargin + 12.0;
 
     return Scaffold(
       backgroundColor: Colors.black,
@@ -86,8 +116,8 @@ class _AppShellState extends State<AppShell>
 
           // 2. Liquid Glass Navigation Bar
           Positioned(
-            left: 16,
-            right: 16,
+            left: compact ? 10 : 16,
+            right: compact ? 10 : 16,
             bottom: bottomPad + 12,
             child: Center(
               child: ConstrainedBox(
@@ -281,10 +311,17 @@ class _NavItem extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      behavior: HitTestBehavior.opaque,
-      child: Column(
+    return Semantics(
+      button: true,
+      selected: active,
+      label: label,
+      child: GestureDetector(
+        onTap: onTap,
+        behavior: HitTestBehavior.opaque,
+        child: SizedBox(
+          width: 88,
+          height: _kBarHeight,
+          child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
           Icon(icon,
@@ -308,6 +345,8 @@ class _NavItem extends StatelessWidget {
                 color: _kGoldMid, borderRadius: BorderRadius.circular(1)),
           )
         ],
+          ),
+        ),
       ),
     );
   }

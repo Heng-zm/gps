@@ -1,4 +1,5 @@
 import 'package:flutter/cupertino.dart';
+import 'package:flutter/material.dart';
 
 import '../../theme/app_theme.dart';
 import '../../utils/app_haptics.dart';
@@ -25,30 +26,41 @@ class AppIconButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final double resolvedSize = size.clamp(40.0, 72.0).toDouble();
+
     return Semantics(
       button: true,
       label: semanticLabel,
       enabled: onTap != null,
       child: CupertinoButton(
         padding: EdgeInsets.zero,
-        minSize: 0,
+        minSize: resolvedSize,
+        pressedOpacity: 0.82,
         onPressed: onTap == null
             ? null
             : () {
                 AppHaptics.select();
                 onTap!();
               },
-        child: Opacity(
-          opacity: onTap == null ? 0.45 : 1,
+        child: AnimatedOpacity(
+          duration: const Duration(milliseconds: 160),
+          opacity: onTap == null ? 0.45 : 1.0,
           child: Container(
-            width: size,
-            height: size,
+            width: resolvedSize,
+            height: resolvedSize,
             decoration: BoxDecoration(
               shape: BoxShape.circle,
               color: backgroundColor ?? AppColors.white.withValues(alpha: 0.06),
               border: Border.all(
                 color: AppColors.white.withValues(alpha: 0.09),
               ),
+              boxShadow: <BoxShadow>[
+                BoxShadow(
+                  color: AppColors.black.withValues(alpha: 0.18),
+                  blurRadius: 14,
+                  offset: const Offset(0, 6),
+                ),
+              ],
             ),
             child: Icon(icon, color: color, size: iconSize),
           ),

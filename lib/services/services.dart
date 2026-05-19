@@ -1,4 +1,11 @@
 export 'gps_service.dart';
 export 'weather_service.dart';
 export 'settings_service.dart';
+export 'settings_tracking_accuracy_extension.dart';
 export 'ai_service.dart';
+export 'location_permission_service.dart';
+export 'offline_sync_queue.dart';
+export 'trip_export_service.dart';
+export 'mapbox_directions_service.dart';
+export 'mapbox_geocoding_service.dart';
+export 'mapbox_3d_service.dart';

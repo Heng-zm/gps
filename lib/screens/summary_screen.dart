@@ -1,11 +1,7 @@
-// ignore_for_file: unused_element
-
 import 'dart:convert';
 import 'dart:math' as math;
-import 'dart:ui' as ui;
-
-import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/cupertino.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -33,7 +29,6 @@ import 'map/map_screen.dart';
 // SUMMARY SCREEN — Fixed + Optimized Premium UI
 // ═══════════════════════════════════════════════════════════════════════════════
 
-const Color _kBg = Color(0xFF070707);
 const Color _kCard = Color(0xFF111111);
 const Color _kBorder = Color(0x14FFFFFF);
 const Color _kTeal = Color(0xFF4ECDC4);
@@ -44,8 +39,83 @@ const Color _kPurple = Color(0xFFA855F7);
 const Color _kRed = Color(0xFFE74C3C);
 const Color _kGreen = Color(0xFF27AE60);
 
-const int _kMaxChartSamples = 70;
 const int _kMaxLocalHistoryItems = 100;
+const int _kJsonComputeThreshold = 30;
+const double _kCoordinateTolerance = 0.00001;
+
+bool _sameCoordinate(double a, double b) {
+  return (a - b).abs() < _kCoordinateTolerance;
+}
+
+bool _tripHistoryContainsIdSync(List<String> items, String id) {
+  if (id.isEmpty) return false;
+
+  for (final String item in items) {
+    try {
+      final Object? decoded = jsonDecode(item);
+      if (decoded is Map && decoded['id']?.toString() == id) {
+        return true;
+      }
+    } catch (_) {
+      // Ignore legacy/corrupted entries.
+    }
+  }
+
+  return false;
+}
+
+bool _tripHistoryContainsIdWorker(Map<String, Object?> args) {
+  final Object? rawItems = args['items'];
+  final Object? rawId = args['id'];
+
+  if (rawItems is! List || rawId is! String) return false;
+
+  return _tripHistoryContainsIdSync(rawItems.cast<String>(), rawId);
+}
+
+List<String> _buildLocalMirrorHistorySync({
+  required List<String> existing,
+  required Map<String, dynamic> payload,
+  required int limit,
+}) {
+  final String id = payload['id']?.toString() ?? '';
+  final String encodedPayload = jsonEncode(payload);
+  final List<String> next = <String>[encodedPayload];
+
+  for (final String item in existing) {
+    if (next.length >= limit) break;
+
+    try {
+      final Object? decoded = jsonDecode(item);
+      if (decoded is Map && decoded['id']?.toString() == id) {
+        continue;
+      }
+    } catch (_) {
+      // Keep legacy/corrupted entries at the end so the app never destroys
+      // user history during a cache update.
+    }
+
+    next.add(item);
+  }
+
+  return next;
+}
+
+List<String> _buildLocalMirrorHistoryWorker(Map<String, Object?> args) {
+  final Object? rawExisting = args['existing'];
+  final Object? rawPayload = args['payload'];
+  final Object? rawLimit = args['limit'];
+
+  if (rawExisting is! List || rawPayload is! Map || rawLimit is! int) {
+    return const <String>[];
+  }
+
+  return _buildLocalMirrorHistorySync(
+    existing: rawExisting.cast<String>(),
+    payload: Map<String, dynamic>.from(rawPayload),
+    limit: rawLimit,
+  );
+}
 
 class _RouteQualitySnapshot {
   const _RouteQualitySnapshot({
@@ -90,8 +160,8 @@ class _RouteQualitySnapshot {
 
       if (lastLat != null &&
           lastLng != null &&
-          lastLat == lat &&
-          lastLng == lng) {
+          _sameCoordinate(lastLat, lat) &&
+          _sameCoordinate(lastLng, lng)) {
         duplicateLike++;
       }
 
@@ -105,14 +175,14 @@ class _RouteQualitySnapshot {
     int score = 100;
     if (points.length < 10) score -= 18;
     if (points.length < 5) score -= 20;
-    score -= (weakAccuracy * 4).clamp(0, 28);
-    score -= (duplicateLike * 3).clamp(0, 18);
+    score -= (weakAccuracy * 4).clamp(0, 28).toInt();
+    score -= (duplicateLike * 3).clamp(0, 18).toInt();
 
     if (avgAccuracy > 10) score -= 6;
     if (avgAccuracy > 20) score -= 10;
     if (avgAccuracy > 35) score -= 14;
 
-    score = score.clamp(0, 100);
+    score = score.clamp(0, 100).toInt();
 
     final String label;
     final Color color;
@@ -212,15 +282,15 @@ class _SummaryScreenState extends State<SummaryScreen> {
           prefs.getStringList('trips') ??
           <String>[];
 
-      final bool alreadySaved = existing.any((String item) {
-        try {
-          final Object? decoded = jsonDecode(item);
-          if (decoded is! Map) return false;
-          return decoded['id']?.toString() == widget.summary.id;
-        } catch (_) {
-          return false;
-        }
-      });
+      final bool alreadySaved = existing.length > _kJsonComputeThreshold
+          ? await compute<Map<String, Object?>, bool>(
+              _tripHistoryContainsIdWorker,
+              <String, Object?>{
+                'items': existing,
+                'id': widget.summary.id,
+              },
+            )
+          : _tripHistoryContainsIdSync(existing, widget.summary.id);
 
       if (!mounted) return;
       setState(() => _isSaved = alreadySaved);
@@ -328,15 +398,24 @@ class _SummaryScreenState extends State<SummaryScreen> {
       color: _kBlue,
     );
 
-    final OfflineSyncResult result = await OfflineSyncQueue.instance.syncNow();
+    try {
+      final OfflineSyncResult result = await OfflineSyncQueue.instance.syncNow();
 
-    if (!mounted) return;
+      if (!mounted) return;
 
-    _showSnack(
-      message: result.message,
-      color: result.hasPending ? _kGold : _kGreen,
-      darkText: true,
-    );
+      _showSnack(
+        message: result.message,
+        color: result.hasPending ? _kGold : _kGreen,
+        darkText: true,
+      );
+    } catch (error, stackTrace) {
+      debugPrint('Offline sync failed: $error\n$stackTrace');
+      if (!mounted) return;
+      _showSnack(
+        message: 'Offline sync failed. Check your connection.',
+        color: _kRed,
+      );
+    }
   }
 
   Future<void> _saveLocalMirror(Map<String, dynamic> payload) async {
@@ -347,25 +426,27 @@ class _SummaryScreenState extends State<SummaryScreen> {
         prefs.getStringList('trips') ??
         <String>[];
 
-    final String id = payload['id']?.toString() ?? '';
-    final String encodedPayload = jsonEncode(payload);
-    final List<String> next = <String>[encodedPayload];
+    final int routePointCount = payload['route_points'] is List
+        ? (payload['route_points'] as List).length
+        : 0;
 
-    for (final String item in existing) {
-      if (next.length >= _kMaxLocalHistoryItems) break;
+    final bool useBackgroundIsolate =
+        existing.length > _kJsonComputeThreshold || routePointCount > 250;
 
-      try {
-        final Object? decoded = jsonDecode(item);
-        if (decoded is Map && decoded['id']?.toString() == id) {
-          continue;
-        }
-      } catch (_) {
-        // Keep legacy/corrupted entries at the end so the app never destroys
-        // user history during a cache update.
-      }
-
-      next.add(item);
-    }
+    final List<String> next = useBackgroundIsolate
+        ? await compute<Map<String, Object?>, List<String>>(
+            _buildLocalMirrorHistoryWorker,
+            <String, Object?>{
+              'existing': existing,
+              'payload': payload,
+              'limit': _kMaxLocalHistoryItems,
+            },
+          )
+        : _buildLocalMirrorHistorySync(
+            existing: existing,
+            payload: payload,
+            limit: _kMaxLocalHistoryItems,
+          );
 
     await prefs.setStringList('trip_history', next);
 
@@ -392,8 +473,8 @@ class _SummaryScreenState extends State<SummaryScreen> {
     // route_points is JSONB, so extra fields are safe and make replay/export
     // better without changing the saved_trips table columns.
     return <String, dynamic>{
-      'lat': _safeDouble(point.position.latitude),
-      'lng': _safeDouble(point.position.longitude),
+      'lat': _safeCoordinate(point.position.latitude),
+      'lng': _safeCoordinate(point.position.longitude),
       'spd': _safeDouble(point.speedMph),
       'altFt': _safeDouble(point.altitudeFt),
       'time': point.timestamp.millisecondsSinceEpoch,
@@ -599,6 +680,13 @@ Date: ${widget.summary.date}
         .where((double value) => value.isFinite)
         .toList(growable: false);
 
+    final double safeBottom = MediaQuery.paddingOf(context).bottom;
+    const double fabHeight = 56.0;
+    const double fabBottomGap = 18.0;
+    const double afterFabContentGap = 24.0;
+    final double listBottomPadding =
+        safeBottom + fabHeight + fabBottomGap + afterFabContentGap;
+
     return AnnotatedRegion<SystemUiOverlayStyle>(
       value: SystemUiOverlayStyle.light,
       child: AppPageShell(
@@ -617,7 +705,7 @@ Date: ${widget.summary.date}
           children: <Widget>[
             ListView(
               physics: const BouncingScrollPhysics(),
-              padding: const EdgeInsets.fromLTRB(16, 4, 16, 118),
+              padding: EdgeInsets.fromLTRB(16, 4, 16, listBottomPadding),
               children: <Widget>[
                 _SummaryHeroRedesign(
                   distance: distance,
@@ -643,8 +731,8 @@ Date: ${widget.summary.date}
                     const SizedBox(width: 10),
                     Expanded(
                       child: AppActionButton(
-                        label: 'Replay',
-                        icon: CupertinoIcons.play_circle_fill,
+                        label: 'Map Replay',
+                        icon: CupertinoIcons.play_rectangle_fill,
                         onTap: _openMap,
                       ),
                     ),
@@ -866,7 +954,7 @@ Date: ${widget.summary.date}
             ),
             Positioned(
               right: 18,
-              bottom: 18,
+              bottom: math.max(18.0, safeBottom + 12.0),
               child: _AiFab(onTap: _openAiCoach),
             ),
           ],
@@ -894,8 +982,8 @@ Date: ${widget.summary.date}
       if (!ok) continue;
       if (lastLat != null &&
           lastLng != null &&
-          lastLat == lat &&
-          lastLng == lng &&
+          _sameCoordinate(lastLat, lat) &&
+          _sameCoordinate(lastLng, lng) &&
           valid.isNotEmpty) {
         continue;
       }
@@ -911,6 +999,11 @@ Date: ${widget.summary.date}
   static double _safeDouble(double value) {
     if (!value.isFinite) return 0.0;
     return value < 0.0 ? 0.0 : value;
+  }
+
+  static double _safeCoordinate(double value) {
+    if (!value.isFinite) return 0.0;
+    return value;
   }
 
   String _formatAltitude(double altitudeFt) {
@@ -934,22 +1027,6 @@ Date: ${widget.summary.date}
     return '${m.toString().padLeft(2, '0')}:'
         '${s.toString().padLeft(2, '0')}';
   }
-
-  static String _paceLabel(double avgSpeed) {
-    if (avgSpeed <= 0.5) return 'IDLE';
-    if (avgSpeed < 15) return 'SLOW';
-    if (avgSpeed < 45) return 'CITY';
-    if (avgSpeed < 85) return 'CRUISE';
-    return 'FAST';
-  }
-
-  static Color _paceColor(double avgSpeed) {
-    if (avgSpeed <= 0.5) return Colors.white38;
-    if (avgSpeed < 15) return _kTeal;
-    if (avgSpeed < 45) return _kGreen;
-    if (avgSpeed < 85) return _kGold;
-    return _kRed;
-  }
 }
 
 // Reusable widgets
@@ -971,7 +1048,7 @@ class _SummaryHeroRedesign extends StatelessWidget {
       'Dec',
     ];
 
-    final int monthIndex = date.month.clamp(1, 12) - 1;
+    final int monthIndex = date.month.clamp(1, 12).toInt() - 1;
     final String month = months[monthIndex];
     final String hour = date.hour.toString().padLeft(2, '0');
     final String minute = date.minute.toString().padLeft(2, '0');
@@ -1152,295 +1229,6 @@ class _SummaryEmptyNote extends StatelessWidget {
   }
 }
 
-class _SummaryAppBar extends StatelessWidget {
-  const _SummaryAppBar({
-    required this.onBack,
-    required this.onMap,
-    required this.onCopy,
-    required this.pointCount,
-  });
-
-  final VoidCallback onBack;
-  final VoidCallback onMap;
-  final VoidCallback onCopy;
-  final int pointCount;
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 10, 16, 8),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(24),
-        child: BackdropFilter(
-          filter: ui.ImageFilter.blur(sigmaX: 18, sigmaY: 18),
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-            decoration: BoxDecoration(
-              color: Colors.white.withValues(alpha: 0.075),
-              borderRadius: BorderRadius.circular(24),
-              border: Border.all(
-                color: Colors.white.withValues(alpha: 0.09),
-              ),
-              boxShadow: <BoxShadow>[
-                BoxShadow(
-                  color: Colors.black.withValues(alpha: 0.22),
-                  blurRadius: 18,
-                  offset: const Offset(0, 8),
-                ),
-              ],
-            ),
-            child: Row(
-              children: <Widget>[
-                _RoundIconButton(
-                  icon: CupertinoIcons.chevron_back,
-                  onTap: onBack,
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: <Widget>[
-                      const _SafeText(
-                        'SESSION OVERVIEW',
-                        maxLines: 1,
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontSize: 14,
-                          fontWeight: FontWeight.w900,
-                          letterSpacing: 1.0,
-                        ),
-                      ),
-                      const SizedBox(height: 3),
-                      _SafeText(
-                        '$pointCount points · analytics · export',
-                        maxLines: 1,
-                        style: TextStyle(
-                          color: Colors.white.withValues(alpha: 0.46),
-                          fontSize: 11,
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(width: 8),
-                _HeaderMiniButton(
-                  icon: CupertinoIcons.doc_on_doc,
-                  onTap: onCopy,
-                ),
-                const SizedBox(width: 8),
-                _HeaderMiniButton(
-                  icon: CupertinoIcons.map_fill,
-                  onTap: onMap,
-                  color: _kTeal,
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _HeaderMiniButton extends StatelessWidget {
-  const _HeaderMiniButton({
-    required this.icon,
-    required this.onTap,
-    this.color = Colors.white,
-  });
-
-  final IconData icon;
-  final VoidCallback onTap;
-  final Color color;
-
-  @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: () {
-        HapticFeedback.selectionClick();
-        onTap();
-      },
-      behavior: HitTestBehavior.opaque,
-      child: Container(
-        width: 42,
-        height: 42,
-        decoration: BoxDecoration(
-          color: color.withValues(alpha: 0.1),
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: color.withValues(alpha: 0.16)),
-        ),
-        child: Icon(icon, color: color, size: 17),
-      ),
-    );
-  }
-}
-
-class _HeroDistanceCard extends StatelessWidget {
-  const _HeroDistanceCard({
-    required this.distance,
-    required this.unit,
-    required this.date,
-    required this.duration,
-    required this.pointCount,
-  });
-
-  final double distance;
-  final String unit;
-  final DateTime date;
-  final String duration;
-  final int pointCount;
-
-  @override
-  Widget build(BuildContext context) {
-    return RepaintBoundary(
-      child: _GlassCard(
-        padding: const EdgeInsets.all(22),
-        radius: 30,
-        borderColor: _kTeal.withValues(alpha: 0.13),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: <Widget>[
-            Row(
-              children: <Widget>[
-                const _IconBadge(
-                  icon: CupertinoIcons.location_fill,
-                  color: _kTeal,
-                ),
-                const SizedBox(width: 10),
-                const Expanded(
-                  child: _SafeText(
-                    'TOTAL DISTANCE',
-                    maxLines: 1,
-                    style: TextStyle(
-                      color: _kTeal,
-                      fontSize: 11,
-                      fontWeight: FontWeight.w900,
-                      letterSpacing: 1.5,
-                    ),
-                  ),
-                ),
-                _SmallPill(
-                  text: '${date.month}/${date.day}/${date.year}',
-                  color: _kGold,
-                ),
-              ],
-            ),
-            const SizedBox(height: 18),
-            FittedBox(
-              fit: BoxFit.scaleDown,
-              alignment: Alignment.centerLeft,
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.baseline,
-                textBaseline: TextBaseline.alphabetic,
-                children: <Widget>[
-                  Text(
-                    distance.toStringAsFixed(2),
-                    maxLines: 1,
-                    overflow: TextOverflow.clip,
-                    softWrap: false,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 58,
-                      fontWeight: FontWeight.w300,
-                      height: 0.95,
-                      letterSpacing: -2,
-                      fontFeatures: <ui.FontFeature>[
-                        ui.FontFeature.tabularFigures(),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  Text(
-                    unit,
-                    maxLines: 1,
-                    overflow: TextOverflow.clip,
-                    softWrap: false,
-                    style: const TextStyle(
-                      color: _kTeal,
-                      fontSize: 20,
-                      fontWeight: FontWeight.w900,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 18),
-            Row(
-              children: <Widget>[
-                Expanded(
-                  child: _MiniMetric(
-                    label: 'DURATION',
-                    value: duration,
-                    color: _kGold,
-                  ),
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: _MiniMetric(
-                    label: 'ROUTE POINTS',
-                    value: '$pointCount',
-                    color: _kBlue,
-                  ),
-                ),
-              ],
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _MiniMetric extends StatelessWidget {
-  const _MiniMetric({
-    required this.label,
-    required this.value,
-    required this.color,
-  });
-
-  final String label;
-  final String value;
-  final Color color;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
-      decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.08),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: color.withValues(alpha: 0.14)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: <Widget>[
-          _SafeText(
-            label,
-            maxLines: 1,
-            style: TextStyle(
-              color: color.withValues(alpha: 0.75),
-              fontSize: 9,
-              fontWeight: FontWeight.w900,
-              letterSpacing: 0.9,
-            ),
-          ),
-          const SizedBox(height: 5),
-          _SafeText(
-            value,
-            maxLines: 1,
-            style: const TextStyle(
-              color: Colors.white,
-              fontSize: 15,
-              fontWeight: FontWeight.w900,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
 class _SaveTripResult {
   const _SaveTripResult({
     required this.savedLocally,
@@ -1565,465 +1353,6 @@ class _MiniSyncButton extends StatelessWidget {
   }
 }
 
-class _QuickActionsRow extends StatelessWidget {
-  const _QuickActionsRow({
-    required this.onMap,
-    required this.onCopy,
-    required this.onExportFiles,
-    required this.onToggleCharts,
-    required this.chartsVisible,
-  });
-
-  final VoidCallback onMap;
-  final VoidCallback onCopy;
-  final VoidCallback onExportFiles;
-  final VoidCallback onToggleCharts;
-  final bool chartsVisible;
-
-  @override
-  Widget build(BuildContext context) {
-    final List<_ActionData> actions = <_ActionData>[
-      _ActionData(
-        icon: CupertinoIcons.map_fill,
-        label: 'MAP',
-        color: _kTeal,
-        onTap: onMap,
-      ),
-      _ActionData(
-        icon: CupertinoIcons.doc_on_doc,
-        label: 'COPY',
-        color: _kGold,
-        onTap: onCopy,
-      ),
-      _ActionData(
-        icon: CupertinoIcons.arrow_down_doc_fill,
-        label: 'EXPORT',
-        color: _kGreen,
-        onTap: onExportFiles,
-      ),
-      _ActionData(
-        icon: chartsVisible
-            ? CupertinoIcons.chart_bar_fill
-            : CupertinoIcons.chart_bar,
-        label: chartsVisible ? 'CHARTS' : 'HIDDEN',
-        color: _kBlue,
-        onTap: onToggleCharts,
-      ),
-    ];
-
-    return LayoutBuilder(
-      builder: (BuildContext context, BoxConstraints constraints) {
-        final bool compact = constraints.maxWidth < 360;
-        final double spacing = compact ? 8 : 10;
-        final double itemWidth = (constraints.maxWidth - spacing) / 2;
-
-        return Wrap(
-          spacing: spacing,
-          runSpacing: spacing,
-          children: actions.map((action) {
-            return SizedBox(
-              width: itemWidth,
-              child: _ActionChipButton(
-                icon: action.icon,
-                label: action.label,
-                color: action.color,
-                onTap: action.onTap,
-                compact: compact,
-              ),
-            );
-          }).toList(growable: false),
-        );
-      },
-    );
-  }
-}
-
-class _ActionData {
-  const _ActionData({
-    required this.icon,
-    required this.label,
-    required this.color,
-    required this.onTap,
-  });
-
-  final IconData icon;
-  final String label;
-  final Color color;
-  final VoidCallback onTap;
-}
-
-class _ActionChipButton extends StatelessWidget {
-  const _ActionChipButton({
-    required this.icon,
-    required this.label,
-    required this.color,
-    required this.onTap,
-    this.compact = false,
-  });
-
-  final IconData icon;
-  final String label;
-  final Color color;
-  final VoidCallback onTap;
-  final bool compact;
-
-  @override
-  Widget build(BuildContext context) {
-    return Semantics(
-      button: true,
-      label: label,
-      child: GestureDetector(
-        onTap: () {
-          HapticFeedback.selectionClick();
-          onTap();
-        },
-        behavior: HitTestBehavior.opaque,
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 180),
-          height: compact ? 42 : 46,
-          decoration: BoxDecoration(
-            color: color.withValues(alpha: 0.10),
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: color.withValues(alpha: 0.18)),
-            boxShadow: <BoxShadow>[
-              BoxShadow(
-                color: color.withValues(alpha: 0.06),
-                blurRadius: 12,
-                offset: const Offset(0, 6),
-              ),
-            ],
-          ),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: <Widget>[
-              Icon(icon, color: color, size: compact ? 14 : 15),
-              const SizedBox(width: 7),
-              Flexible(
-                child: _SafeText(
-                  label,
-                  maxLines: 1,
-                  style: TextStyle(
-                    color: color,
-                    fontSize: compact ? 10 : 11,
-                    fontWeight: FontWeight.w900,
-                    letterSpacing: compact ? 0.4 : 0.7,
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _SectionCard extends StatelessWidget {
-  const _SectionCard({
-    required this.title,
-    required this.icon,
-    required this.children,
-  });
-
-  final String title;
-  final IconData icon;
-  final List<Widget> children;
-
-  @override
-  Widget build(BuildContext context) {
-    return _GlassCard(
-      padding: const EdgeInsets.all(18),
-      radius: 24,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: <Widget>[
-          Row(
-            children: <Widget>[
-              Icon(icon, color: _kTeal, size: 15),
-              const SizedBox(width: 8),
-              Expanded(
-                child: _SafeText(
-                  title,
-                  maxLines: 1,
-                  style: const TextStyle(
-                    color: _kTeal,
-                    fontSize: 10,
-                    fontWeight: FontWeight.w900,
-                    letterSpacing: 1.4,
-                  ),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 16),
-          ...children,
-        ],
-      ),
-    );
-  }
-}
-
-class _StatBox extends StatelessWidget {
-  const _StatBox({
-    required this.label,
-    required this.value,
-    required this.icon,
-    required this.color,
-    this.large = false,
-    this.wide = false,
-  });
-
-  final String label;
-  final String value;
-  final IconData icon;
-  final Color color;
-  final bool large;
-  final bool wide;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: wide ? double.infinity : null,
-      padding: EdgeInsets.all(large ? 17 : 15),
-      decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.075),
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: color.withValues(alpha: 0.13)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: <Widget>[
-          Row(
-            children: <Widget>[
-              Icon(icon, color: color, size: 14),
-              const SizedBox(width: 7),
-              Expanded(
-                child: _SafeText(
-                  label,
-                  maxLines: 1,
-                  style: TextStyle(
-                    color: color.withValues(alpha: 0.85),
-                    fontSize: 9,
-                    fontWeight: FontWeight.w900,
-                    letterSpacing: 0.8,
-                  ),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 9),
-          FittedBox(
-            fit: BoxFit.scaleDown,
-            alignment: Alignment.centerLeft,
-            child: Text(
-              value,
-              maxLines: 1,
-              overflow: TextOverflow.clip,
-              softWrap: false,
-              style: TextStyle(
-                color: Colors.white,
-                fontSize: large ? 26 : 18,
-                fontWeight: FontWeight.w900,
-                height: 1,
-                letterSpacing: -0.5,
-                fontFeatures: const <ui.FontFeature>[
-                  ui.FontFeature.tabularFigures(),
-                ],
-                shadows: <Shadow>[
-                  Shadow(
-                    color: color.withValues(alpha: 0.18),
-                    blurRadius: 10,
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _ChartHeader extends StatelessWidget {
-  const _ChartHeader({
-    required this.title,
-    required this.color,
-    required this.unit,
-  });
-
-  final String title;
-  final Color color;
-  final String unit;
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      children: <Widget>[
-        _SafeText(
-          title.toUpperCase(),
-          maxLines: 1,
-          style: TextStyle(
-            color: color.withValues(alpha: 0.78),
-            fontSize: 10,
-            fontWeight: FontWeight.w900,
-            letterSpacing: 1.2,
-          ),
-        ),
-        const Spacer(),
-        _SmallPill(text: unit.toUpperCase(), color: color),
-      ],
-    );
-  }
-}
-
-class _PerformanceChart extends StatelessWidget {
-  const _PerformanceChart({
-    required this.points,
-    required this.getValue,
-    required this.color,
-  });
-
-  final List<TripPoint> points;
-  final double Function(TripPoint) getValue;
-  final Color color;
-
-  @override
-  Widget build(BuildContext context) {
-    final List<FlSpot> spots = _buildSpots();
-
-    if (spots.length < 2) {
-      return _ChartEmptyState(color: color);
-    }
-
-    final double maxY = spots
-        .map((FlSpot spot) => spot.y)
-        .fold<double>(0.0, math.max)
-        .clamp(1.0, double.infinity)
-        .toDouble();
-
-    return RepaintBoundary(
-      child: SizedBox(
-        height: 112,
-        child: LineChart(
-          LineChartData(
-            minY: 0,
-            maxY: maxY * 1.12,
-            gridData: FlGridData(
-              show: true,
-              drawVerticalLine: false,
-              horizontalInterval: math.max(1.0, maxY / 3.0),
-              getDrawingHorizontalLine: (_) {
-                return FlLine(
-                  color: Colors.white.withValues(alpha: 0.05),
-                  strokeWidth: 1,
-                );
-              },
-            ),
-            titlesData: const FlTitlesData(show: false),
-            borderData: FlBorderData(show: false),
-            lineTouchData: LineTouchData(
-              enabled: true,
-              touchTooltipData: LineTouchTooltipData(
-                getTooltipItems: (List<LineBarSpot> touchedSpots) {
-                  return touchedSpots.map((LineBarSpot spot) {
-                    return LineTooltipItem(
-                      spot.y.toStringAsFixed(0),
-                      const TextStyle(
-                        color: Colors.white,
-                        fontWeight: FontWeight.w900,
-                        fontSize: 12,
-                      ),
-                    );
-                  }).toList();
-                },
-              ),
-            ),
-            lineBarsData: <LineChartBarData>[
-              LineChartBarData(
-                spots: spots,
-                isCurved: true,
-                curveSmoothness: 0.32,
-                preventCurveOverShooting: true,
-                color: color,
-                barWidth: 3,
-                isStrokeCapRound: true,
-                dotData: const FlDotData(show: false),
-                belowBarData: BarAreaData(
-                  show: true,
-                  gradient: LinearGradient(
-                    colors: <Color>[
-                      color.withValues(alpha: 0.22),
-                      color.withValues(alpha: 0.0),
-                    ],
-                    begin: Alignment.topCenter,
-                    end: Alignment.bottomCenter,
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  List<FlSpot> _buildSpots() {
-    if (points.isEmpty) return const <FlSpot>[];
-
-    final int sampleRate = (points.length / _kMaxChartSamples)
-        .ceil()
-        .clamp(1, math.max(1, points.length))
-        .toInt();
-
-    final List<FlSpot> spots = <FlSpot>[];
-
-    for (int i = 0; i < points.length; i += sampleRate) {
-      final double value = getValue(points[i]);
-      if (!value.isFinite) continue;
-
-      spots.add(
-        FlSpot(
-          spots.length.toDouble(),
-          value < 0 ? 0.0 : value,
-        ),
-      );
-    }
-
-    return List<FlSpot>.unmodifiable(spots);
-  }
-}
-
-class _ChartEmptyState extends StatelessWidget {
-  const _ChartEmptyState({
-    required this.color,
-  });
-
-  final Color color;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      height: 92,
-      alignment: Alignment.center,
-      decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.06),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: color.withValues(alpha: 0.12)),
-      ),
-      child: _SafeText(
-        'Not enough data for chart',
-        maxLines: 1,
-        textAlign: TextAlign.center,
-        style: TextStyle(
-          color: Colors.white.withValues(alpha: 0.42),
-          fontSize: 12,
-          fontWeight: FontWeight.w700,
-        ),
-      ),
-    );
-  }
-}
-
 class _RouteInsightStrip extends StatelessWidget {
   const _RouteInsightStrip({
     required this.distance,
@@ -2075,132 +1404,6 @@ class _RouteInsightStrip extends StatelessWidget {
             ),
           ),
         ],
-      ),
-    );
-  }
-}
-
-class _SaveButton extends StatelessWidget {
-  const _SaveButton({
-    required this.isSaving,
-    required this.isSaved,
-    required this.onTap,
-  });
-
-  final bool isSaving;
-  final bool isSaved;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final Color color = isSaved ? _kGreen : _kTeal;
-
-    return SizedBox(
-      width: double.infinity,
-      child: CupertinoButton(
-        padding: EdgeInsets.zero,
-        borderRadius: BorderRadius.circular(22),
-        onPressed: isSaving || isSaved ? null : onTap,
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 220),
-          width: double.infinity,
-          height: 56,
-          decoration: BoxDecoration(
-            gradient: isSaved
-                ? null
-                : const LinearGradient(
-                    colors: <Color>[
-                      _kTeal,
-                      Color(0xFF3DBDB5),
-                    ],
-                  ),
-            color: isSaved ? _kGreen.withValues(alpha: 0.12) : null,
-            borderRadius: BorderRadius.circular(22),
-            border: Border.all(
-              color: color.withValues(alpha: isSaved ? 0.32 : 0.0),
-            ),
-            boxShadow: isSaved
-                ? null
-                : <BoxShadow>[
-                    BoxShadow(
-                      color: _kTeal.withValues(alpha: 0.25),
-                      blurRadius: 18,
-                      offset: const Offset(0, 8),
-                    ),
-                  ],
-          ),
-          child: Center(
-            child: isSaving
-                ? const CupertinoActivityIndicator(color: Colors.black)
-                : FittedBox(
-                    fit: BoxFit.scaleDown,
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: <Widget>[
-                        Icon(
-                          isSaved
-                              ? CupertinoIcons.check_mark_circled_solid
-                              : CupertinoIcons.cloud_upload_fill,
-                          color: isSaved ? _kGreen : Colors.black,
-                          size: 18,
-                        ),
-                        const SizedBox(width: 10),
-                        Text(
-                          isSaved ? 'TRIP SAVED' : 'SAVE TO HISTORY',
-                          maxLines: 1,
-                          overflow: TextOverflow.clip,
-                          softWrap: false,
-                          style: TextStyle(
-                            color: isSaved ? _kGreen : Colors.black,
-                            fontSize: 14,
-                            fontWeight: FontWeight.w900,
-                            letterSpacing: 1.1,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _DismissButton extends StatelessWidget {
-  const _DismissButton({
-    required this.onTap,
-  });
-
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return SizedBox(
-      width: double.infinity,
-      child: CupertinoButton(
-        padding: EdgeInsets.zero,
-        borderRadius: BorderRadius.circular(22),
-        onPressed: onTap,
-        child: Container(
-          height: 54,
-          alignment: Alignment.center,
-          decoration: BoxDecoration(
-            color: Colors.white.withValues(alpha: 0.055),
-            borderRadius: BorderRadius.circular(22),
-            border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
-          ),
-          child: const _SafeText(
-            'DISMISS',
-            maxLines: 1,
-            style: TextStyle(
-              color: Colors.white,
-              fontSize: 14,
-              fontWeight: FontWeight.w900,
-              letterSpacing: 1.8,
-            ),
-          ),
-        ),
       ),
     );
   }
@@ -2277,93 +1480,6 @@ class _GlassCard extends StatelessWidget {
         ],
       ),
       child: child,
-    );
-  }
-}
-
-class _RoundIconButton extends StatelessWidget {
-  const _RoundIconButton({
-    required this.icon,
-    required this.onTap,
-  });
-
-  final IconData icon;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: () {
-        HapticFeedback.lightImpact();
-        onTap();
-      },
-      behavior: HitTestBehavior.opaque,
-      child: Container(
-        width: 42,
-        height: 42,
-        decoration: BoxDecoration(
-          color: Colors.white.withValues(alpha: 0.08),
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
-        ),
-        child: Icon(icon, color: Colors.white, size: 19),
-      ),
-    );
-  }
-}
-
-class _IconBadge extends StatelessWidget {
-  const _IconBadge({
-    required this.icon,
-    required this.color,
-  });
-
-  final IconData icon;
-  final Color color;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: 34,
-      height: 34,
-      decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.11),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: color.withValues(alpha: 0.18)),
-      ),
-      child: Icon(icon, color: color, size: 16),
-    );
-  }
-}
-
-class _SmallPill extends StatelessWidget {
-  const _SmallPill({
-    required this.text,
-    required this.color,
-  });
-
-  final String text;
-  final Color color;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
-      decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.1),
-        borderRadius: BorderRadius.circular(99),
-        border: Border.all(color: color.withValues(alpha: 0.16)),
-      ),
-      child: _SafeText(
-        text,
-        maxLines: 1,
-        style: TextStyle(
-          color: color,
-          fontSize: 9,
-          fontWeight: FontWeight.w900,
-          letterSpacing: 0.8,
-        ),
-      ),
     );
   }
 }

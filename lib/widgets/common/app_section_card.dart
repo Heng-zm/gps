@@ -40,8 +40,8 @@ class AppSectionCard extends StatelessWidget {
                 children: <Widget>[
                   if (icon != null) ...<Widget>[
                     Container(
-                      width: 28,
-                      height: 28,
+                      width: 30,
+                      height: 30,
                       decoration: BoxDecoration(
                         shape: BoxShape.circle,
                         color: iconColor.withValues(alpha: 0.12),
@@ -84,7 +84,13 @@ class AppSectionCard extends StatelessWidget {
                       ],
                     ),
                   ),
-                  if (trailing != null) trailing!,
+                  if (trailing != null) ...<Widget>[
+                    const SizedBox(width: 8),
+                    Flexible(
+                      flex: 0,
+                      child: trailing!,
+                    ),
+                  ],
                 ],
               ),
             ),

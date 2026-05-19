@@ -8,6 +8,7 @@ import 'package:flutter/cupertino.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:battery_plus/battery_plus.dart';
 import 'package:flutter_compass/flutter_compass.dart';
 import 'package:flutter_map/flutter_map.dart' as fm;
 import 'package:geolocator/geolocator.dart';
@@ -26,6 +27,7 @@ import '../../widgets/speedometer_widget.dart';
 import '../../widgets/weather_widget.dart';
 import '../map/map_screen.dart';
 import '../summary_screen.dart';
+import 'tracking_ar_camera_screen.dart';
 
 import '../../widgets/route_planner_sheet.dart';
 import '../../theme/app_theme.dart';
@@ -103,7 +105,7 @@ extension _MapFollowModeLabel on _MapFollowMode {
       case _MapFollowMode.headingUp:
         return 'HEADING';
       case _MapFollowMode.northUp:
-        return 'NORTH';
+        return 'COMPASS';
       case _MapFollowMode.freeView:
         return 'FREE';
     }
@@ -116,7 +118,7 @@ extension _MapFollowModeLabel on _MapFollowMode {
       case _MapFollowMode.headingUp:
         return 'Rotates with route';
       case _MapFollowMode.northUp:
-        return 'North locked';
+        return 'Hybrid heading';
       case _MapFollowMode.freeView:
         return 'Camera paused';
     }
@@ -150,9 +152,68 @@ extension _MapFollowModeLabel on _MapFollowMode {
 }
 
 
+enum _TrackingPerformanceMode {
+  battery,
+  balanced,
+  performance,
+}
 
+extension _TrackingPerformanceModeX on _TrackingPerformanceMode {
+  String get label {
+    switch (this) {
+      case _TrackingPerformanceMode.battery:
+        return 'BATTERY';
+      case _TrackingPerformanceMode.balanced:
+        return 'BALANCED';
+      case _TrackingPerformanceMode.performance:
+        return 'PERFORMANCE';
+    }
+  }
 
+  IconData get icon {
+    switch (this) {
+      case _TrackingPerformanceMode.battery:
+        return CupertinoIcons.battery_25;
+      case _TrackingPerformanceMode.balanced:
+        return CupertinoIcons.speedometer;
+      case _TrackingPerformanceMode.performance:
+        return CupertinoIcons.bolt_fill;
+    }
+  }
 
+  Duration get cameraThrottle {
+    switch (this) {
+      case _TrackingPerformanceMode.battery:
+        return const Duration(milliseconds: 900);
+      case _TrackingPerformanceMode.balanced:
+        return const Duration(milliseconds: 520);
+      case _TrackingPerformanceMode.performance:
+        return const Duration(milliseconds: 260);
+    }
+  }
+
+  int get routeRenderLimit {
+    switch (this) {
+      case _TrackingPerformanceMode.battery:
+        return 420;
+      case _TrackingPerformanceMode.balanced:
+        return 900;
+      case _TrackingPerformanceMode.performance:
+        return 1600;
+    }
+  }
+
+  _TrackingPerformanceMode get next {
+    switch (this) {
+      case _TrackingPerformanceMode.battery:
+        return _TrackingPerformanceMode.balanced;
+      case _TrackingPerformanceMode.balanced:
+        return _TrackingPerformanceMode.performance;
+      case _TrackingPerformanceMode.performance:
+        return _TrackingPerformanceMode.battery;
+    }
+  }
+}
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // MAIN SCREEN
@@ -170,6 +231,7 @@ class _TrackingScreenState extends State<TrackingScreen>
   final GpsService _gps = GpsService.instance;
   final WeatherService _weather = WeatherService.instance;
   final SettingsService _settings = SettingsService.instance;
+  final Battery _battery = Battery();
 
   final ValueNotifier<int> _tickN = ValueNotifier<int>(0);
   final ValueNotifier<double> _speedN = ValueNotifier<double>(0.0);
@@ -183,6 +245,8 @@ class _TrackingScreenState extends State<TrackingScreen>
   final ValueNotifier<bool> _wxLoadingN = ValueNotifier<bool>(false);
   final ValueNotifier<int> _elapsedN = ValueNotifier<int>(0);
   final ValueNotifier<int?> _batteryN = ValueNotifier<int?>(null);
+  final ValueNotifier<BatteryState?> _batteryStateN =
+      ValueNotifier<BatteryState?>(null);
   final ValueNotifier<double> _maxSpeedN = ValueNotifier<double>(0.0);
   final ValueNotifier<double> _accuracyN = ValueNotifier<double>(40.0);
   final ValueNotifier<_MapFollowMode> _followModeN =
@@ -197,6 +261,9 @@ class _TrackingScreenState extends State<TrackingScreen>
   final ValueNotifier<PlannedRoute?> _plannedRouteN =
       ValueNotifier<PlannedRoute?>(null);
   final ValueNotifier<bool> _directionsLoadingN = ValueNotifier<bool>(false);
+  final ValueNotifier<_TrackingPerformanceMode> _performanceModeN =
+      ValueNotifier<_TrackingPerformanceMode>(_TrackingPerformanceMode.balanced);
+  final ValueNotifier<String> _coachTipN = ValueNotifier<String>('Ready');
 
   bool _mapReady = false;
   bool _handlingAction = false;
@@ -208,6 +275,10 @@ class _TrackingScreenState extends State<TrackingScreen>
   DateTime? _lastActionAt;
   DateTime? _lastMapMoveAt;
   LatLng? _lastMapPos;
+  double _hybridHeadingDeg = 0.0;
+  double _lastCompassRawDeg = 0.0;
+  int _compassJumpCount = 0;
+  DateTime? _lastCompassWarningAt;
   int _weatherRequestToken = 0;
   int _autoPauseSlowTicks = 0;
   int _autoPauseMoveTicks = 0;
@@ -219,9 +290,7 @@ class _TrackingScreenState extends State<TrackingScreen>
   late final ScrollController _scrollController;
   StreamSubscription<TripPoint>? _pointSub;
   StreamSubscription<CompassEvent>? _compassSub;
-
-  static const MethodChannel _batteryChannel =
-      MethodChannel('trackpro/battery');
+  StreamSubscription<BatteryState>? _batteryStateSub;
 
   @override
   void initState() {
@@ -233,6 +302,7 @@ class _TrackingScreenState extends State<TrackingScreen>
     _hydrateInitialGpsState();
     _initCompass();
     _startTickTimer();
+    _initBatteryPlus();
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!_disposed) unawaited(_pollBattery());
@@ -264,6 +334,79 @@ class _TrackingScreenState extends State<TrackingScreen>
     }
   }
 
+  double _normHeading(double value) {
+    if (!value.isFinite) return 0.0;
+    final double normalized = value % 360.0;
+    return normalized < 0.0 ? normalized + 360.0 : normalized;
+  }
+
+  double _headingDelta(double from, double to) {
+    double delta = _normHeading(to) - _normHeading(from);
+    if (delta > 180.0) delta -= 360.0;
+    if (delta < -180.0) delta += 360.0;
+    return delta;
+  }
+
+  double _lerpHeading(double from, double to, double t) {
+    final double safeT = t.clamp(0.0, 1.0).toDouble();
+    return _normHeading(_normHeading(from) + _headingDelta(from, to) * safeT);
+  }
+
+  double _smoothHeading({
+    required double current,
+    required double target,
+    double factor = 0.18,
+  }) {
+    return _lerpHeading(current, target, factor);
+  }
+
+  bool _isCompassUnstable({
+    required double previous,
+    required double current,
+  }) {
+    if (!previous.isFinite || !current.isFinite) return false;
+    return _headingDelta(previous, current).abs() > 48.0;
+  }
+
+  double _hybridHeading({
+    required double compassHeading,
+    required double travelHeading,
+    required double speedMph,
+  }) {
+    final double safeCompass = _normHeading(compassHeading);
+    final double safeTravel = _normHeading(travelHeading);
+    final double safeSpeed = _safeSpeed(speedMph);
+
+    // Low speed: compass is better because GPS course is noisy.
+    if (safeSpeed < 2.0) return safeCompass;
+
+    // Walking/slow moto: blend compass and GPS course.
+    if (safeSpeed < 6.0) {
+      final double t = ((safeSpeed - 2.0) / 4.0).clamp(0.0, 1.0).toDouble();
+      return _lerpHeading(safeCompass, safeTravel, 0.35 + t * 0.35);
+    }
+
+    // Riding/driving: GPS travel heading is more stable than magnetometer.
+    return safeTravel;
+  }
+
+  void _updateHybridHeading({double? speedMph}) {
+    final double next = _hybridHeading(
+      compassHeading: _compassN.value,
+      travelHeading: _travelHdgN.value,
+      speedMph: speedMph ?? _speedN.value,
+    );
+
+    final double smoothed = _smoothHeading(
+      current: _hybridHeadingDeg,
+      target: next,
+      factor: _safeSpeed(speedMph ?? _speedN.value) < 2.0 ? 0.14 : 0.24,
+    );
+
+    _hybridHeadingDeg = smoothed;
+    _setN(_travelHdgN, smoothed);
+  }
+
   void _initCompass() {
     try {
       final stream = FlutterCompass.events;
@@ -276,12 +419,36 @@ class _TrackingScreenState extends State<TrackingScreen>
           final heading = event.heading;
           if (heading == null || !heading.isFinite) return;
 
-          final current = _compassN.value;
-          double delta = heading - (current % 360.0);
-          if (delta > 180.0) delta -= 360.0;
-          if (delta < -180.0) delta += 360.0;
+          final double normalizedHeading = _normHeading(heading);
+          final bool unstable = _isCompassUnstable(
+            previous: _lastCompassRawDeg,
+            current: normalizedHeading,
+          );
+          _lastCompassRawDeg = normalizedHeading;
 
-          _setN(_compassN, current + delta);
+          if (unstable) {
+            _compassJumpCount++;
+            final DateTime now = DateTime.now();
+            final DateTime? lastWarning = _lastCompassWarningAt;
+            if (_compassJumpCount >= 3 &&
+                (lastWarning == null ||
+                    now.difference(lastWarning) > const Duration(seconds: 12))) {
+              _lastCompassWarningAt = now;
+              _setN(_coachTipN, 'Compass unstable · move phone in figure-8');
+            }
+          } else {
+            _compassJumpCount = math.max(0, _compassJumpCount - 1);
+          }
+
+          final double current = _compassN.value;
+          final double smoothedCompass = _smoothHeading(
+            current: current,
+            target: normalizedHeading,
+            factor: 0.22,
+          );
+
+          _setN(_compassN, smoothedCompass);
+          _updateHybridHeading();
         },
         onError: (Object error, StackTrace stackTrace) {
           debugPrint('Compass error: $error\n$stackTrace');
@@ -319,23 +486,86 @@ class _TrackingScreenState extends State<TrackingScreen>
     });
   }
 
+
+  void _initBatteryPlus() {
+    unawaited(_batteryStateSub?.cancel());
+
+    try {
+      _batteryStateSub = _battery.onBatteryStateChanged.listen(
+        (BatteryState state) {
+          if (!mounted || _disposed) return;
+          _setN(_batteryStateN, state);
+          unawaited(_pollBattery());
+        },
+        onError: (Object error, StackTrace stackTrace) {
+          debugPrint('Battery state stream error: $error\n$stackTrace');
+        },
+        cancelOnError: false,
+      );
+    } catch (error, stackTrace) {
+      debugPrint('Battery state stream init failed: $error\n$stackTrace');
+    }
+  }
+
   Future<void> _pollBattery() async {
     if (!mounted || _disposed) return;
 
     try {
-      final int? level =
-          await _batteryChannel.invokeMethod<int>('getBatteryLevel');
-
+      final int level = await _battery.batteryLevel;
       if (!mounted || _disposed) return;
-      _setN(_batteryN, level?.clamp(0, 100).toInt());
-    } on MissingPluginException {
-      if (mounted && !_disposed) _setN(_batteryN, null);
+
+      _setN(_batteryN, level.clamp(0, 100).toInt());
+
+      try {
+        final BatteryState state = await _battery.batteryState;
+        if (!mounted || _disposed) return;
+        _setN(_batteryStateN, state);
+      } catch (_) {
+        // Some platforms support level but may not return state reliably.
+      }
     } on PlatformException catch (error) {
-      debugPrint('Battery platform error: ${error.message}');
-      if (mounted && !_disposed) _setN(_batteryN, null);
+      debugPrint('battery_plus platform error: ${error.message}');
+      if (mounted && !_disposed) {
+        _setN(_batteryN, null);
+        _setN(_batteryStateN, null);
+      }
     } catch (error, stackTrace) {
-      debugPrint('Battery poll error: $error\n$stackTrace');
-      if (mounted && !_disposed) _setN(_batteryN, null);
+      debugPrint('battery_plus poll error: $error\n$stackTrace');
+      if (mounted && !_disposed) {
+        _setN(_batteryN, null);
+        _setN(_batteryStateN, null);
+      }
+    }
+  }
+
+  void _cyclePerformanceMode() {
+    HapticFeedback.selectionClick();
+    final _TrackingPerformanceMode next = _performanceModeN.value.next;
+    _setN(_performanceModeN, next);
+    _setN(_coachTipN, 'Map mode: ${next.label}');
+  }
+
+  void _updateCoachTip({
+    required double speedMph,
+    required double accuracy,
+    required bool autoPaused,
+  }) {
+    String next = 'Route ready';
+
+    if (autoPaused) {
+      next = 'Auto paused · move to resume';
+    } else if (!accuracy.isFinite || accuracy >= 35.0) {
+      next = 'Weak GPS · move outdoors';
+    } else if (speedMph > _settings.speedAlertMph) {
+      next = 'Speed alert · slow down';
+    } else if (_trackingN.value && speedMph < 1.0) {
+      next = 'Standing by · GPS stable';
+    } else if (_trackingN.value) {
+      next = 'Tracking smoothly';
+    }
+
+    if (_coachTipN.value != next) {
+      _setN(_coachTipN, next);
     }
   }
 
@@ -354,6 +584,7 @@ class _TrackingScreenState extends State<TrackingScreen>
     _signalDebounce?.cancel();
     unawaited(_pointSub?.cancel());
     unawaited(_compassSub?.cancel());
+    unawaited(_batteryStateSub?.cancel());
 
     _scrollController.dispose();
     _mapController.dispose();
@@ -369,6 +600,7 @@ class _TrackingScreenState extends State<TrackingScreen>
     _wxLoadingN.dispose();
     _elapsedN.dispose();
     _batteryN.dispose();
+    _batteryStateN.dispose();
     _maxSpeedN.dispose();
     _accuracyN.dispose();
     _followModeN.dispose();
@@ -379,6 +611,8 @@ class _TrackingScreenState extends State<TrackingScreen>
     _mapRuntimeModeN.dispose();
     _plannedRouteN.dispose();
     _directionsLoadingN.dispose();
+    _performanceModeN.dispose();
+    _coachTipN.dispose();
 
     super.dispose();
   }
@@ -417,6 +651,11 @@ class _TrackingScreenState extends State<TrackingScreen>
 
     _updateTravelHeading(point);
     _updateSignal(point);
+    _updateCoachTip(
+      speedMph: speed,
+      accuracy: _accuracyN.value,
+      autoPaused: _autoPausedN.value,
+    );
     _updateMapCamera(point);
 
     _polylinePointCount = _gps.currentPoints.length;
@@ -459,27 +698,26 @@ class _TrackingScreenState extends State<TrackingScreen>
   }
 
   void _updateTravelHeading(TripPoint point) {
-    if (point.speedMph <= _kMinHeadingMph) return;
+    final LatLng? previous = _lastMapPos;
+    if (previous != null && _isValidLL(previous)) {
+      final double distance = _distanceCalc.as(
+        LengthUnit.Meter,
+        previous,
+        point.position,
+      );
 
-    final points = _gps.currentPoints;
-    if (points.length < 2) return;
+      if (distance >= _kMapMoveDist) {
+        final double rawBearing = _distanceCalc.bearing(previous, point.position);
+        final double smoothedTravel = _smoothHeading(
+          current: _travelHdgN.value,
+          target: rawBearing,
+          factor: _safeSpeed(point.speedMph) < 6.0 ? 0.18 : 0.32,
+        );
+        _setN(_travelHdgN, smoothedTravel);
+      }
+    }
 
-    final LatLng previous = points[points.length - 2].position;
-    final LatLng current = points.last.position;
-
-    if (!_isValidLL(previous) || !_isValidLL(current)) return;
-
-    final double bearing = _distanceCalc.bearing(previous, current);
-    if (!bearing.isFinite) return;
-
-    final double normalized = _normDeg(bearing);
-    final double old = _normDeg(_travelHdgN.value);
-
-    double delta = normalized - old;
-    if (delta > 180.0) delta -= 360.0;
-    if (delta < -180.0) delta += 360.0;
-
-    _setN(_travelHdgN, _travelHdgN.value + delta);
+    _updateHybridHeading(speedMph: point.speedMph);
   }
 
   void _updateSignal(TripPoint point) {
@@ -562,29 +800,16 @@ class _TrackingScreenState extends State<TrackingScreen>
 
   void _cycleMapFollowMode() {
     HapticFeedback.selectionClick();
-
     final _MapFollowMode next = _followModeN.value.next;
     _setN(_followModeN, next);
 
-    if (!_mapReady || !_usesFlutterMapFallback) return;
-
-    try {
-      if (next == _MapFollowMode.followMe || next == _MapFollowMode.northUp) {
-        _mapController.rotate(0.0);
-      }
-
-      final LatLng? position = _posN.value;
-      if (next != _MapFollowMode.freeView &&
-          position != null &&
-          _isValidLL(position)) {
-        final double zoom = _mapController.camera.zoom.isFinite
-            ? _mapController.camera.zoom
-            : _kDefaultZoom;
-        _mapController.move(position, zoom);
-      }
-    } catch (error) {
-      debugPrint('Map follow mode change error: $error');
-    }
+    final String tip = switch (next) {
+      _MapFollowMode.followMe => 'Follow mode · centered on you',
+      _MapFollowMode.headingUp => 'Heading mode · travel direction up',
+      _MapFollowMode.northUp => 'Compass mode · hybrid heading',
+      _MapFollowMode.freeView => 'Free view · move map by hand',
+    };
+    _setN(_coachTipN, tip);
   }
 
   // ── Weather ────────────────────────────────────────────────────────────────
@@ -864,6 +1089,27 @@ class _TrackingScreenState extends State<TrackingScreen>
     );
   }
 
+  void _openArRouteCamera() {
+    HapticFeedback.mediumImpact();
+
+    Navigator.of(context).push(
+      CupertinoPageRoute<void>(
+        builder: (_) => TrackingArCameraScreen(
+          speedN: _speedN,
+          compassN: _compassN,
+          headingN: _travelHdgN,
+          accuracyN: _accuracyN,
+          batteryN: _batteryN,
+          batteryStateN: _batteryStateN,
+          coachTipN: _coachTipN,
+          posN: _posN,
+          plannedRouteN: _plannedRouteN,
+          settings: _settings,
+        ),
+      ),
+    );
+  }
+
   void _openMapboxControls() {
     HapticFeedback.lightImpact();
 
@@ -1039,7 +1285,6 @@ class _TrackingScreenState extends State<TrackingScreen>
     }
   }
 
-
   void _showSnack(String message) {
     if (!mounted || _disposed) return;
 
@@ -1120,6 +1365,7 @@ class _TrackingScreenState extends State<TrackingScreen>
                 presetN: _mapPresetN,
                 runtimeModeN: _mapRuntimeModeN,
                 plannedRouteN: _plannedRouteN,
+                performanceModeN: _performanceModeN,
                 polylineCount: () => _polylinePointCount,
                 onMapReady: _markMapReady,
               ),
@@ -1132,8 +1378,12 @@ class _TrackingScreenState extends State<TrackingScreen>
               tickN: _tickN,
               signalN: _signalN,
               batteryN: _batteryN,
+              batteryStateN: _batteryStateN,
               accuracyN: _accuracyN,
               autoPausedN: _autoPausedN,
+              performanceModeN: _performanceModeN,
+              coachTipN: _coachTipN,
+              onPerformanceTap: _cyclePerformanceMode,
               settings: _settings,
             ),
             _MapFirstSpeedHud(
@@ -1160,9 +1410,12 @@ class _TrackingScreenState extends State<TrackingScreen>
               onAction: _handleAction,
               onMapTap: _openMap,
               onAiTap: _openAiAssistant,
+              onArTap: _openArRouteCamera,
               onWeatherTap: _openFullWeather,
               onMapboxTap: _openMapboxControls,
               onFollowModeTap: _cycleMapFollowMode,
+              performanceModeN: _performanceModeN,
+              onPerformanceTap: _cyclePerformanceMode,
             ),
           ],
         ),

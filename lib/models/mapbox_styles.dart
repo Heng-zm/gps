@@ -1,16 +1,15 @@
 import 'package:flutter/cupertino.dart';
+import 'package:flutter/material.dart';
 
 enum MapboxVisualStyle {
   standard,
   standardSatellite,
-
   streets,
   outdoors,
   light,
   dark,
   satellite,
   satelliteStreets,
-
   navigationDay,
   navigationNight,
 }
@@ -69,25 +68,25 @@ extension MapboxVisualStyleX on MapboxVisualStyle {
   String get description {
     switch (this) {
       case MapboxVisualStyle.standard:
-        return 'Default configurable basemap with real-time 3D elements and automatically updated data.';
+        return 'Default configurable basemap with modern 3D elements.';
       case MapboxVisualStyle.standardSatellite:
         return 'Satellite imagery blended with Mapbox Standard 3D layers.';
       case MapboxVisualStyle.streets:
-        return 'Comprehensive general-purpose map with excellent readability for road networks and transit.';
+        return 'Comprehensive general-purpose road map.';
       case MapboxVisualStyle.outdoors:
-        return 'Optimized for hiking, biking and fitness tracking with terrain contours and land use.';
+        return 'Optimized for hiking, biking and fitness tracking.';
       case MapboxVisualStyle.light:
-        return 'Subtle low-contrast grayscale map for bright data visualization overlays.';
+        return 'Subtle low-contrast grayscale map.';
       case MapboxVisualStyle.dark:
-        return 'Dark variant of Light style for night use and dark UI designs.';
+        return 'Dark map for night use and dark UI.';
       case MapboxVisualStyle.satellite:
-        return 'Pure global aerial photography with no roads or labels.';
+        return 'Pure aerial photography without roads or labels.';
       case MapboxVisualStyle.satelliteStreets:
-        return 'High-resolution satellite imagery with major roads and geographic labels.';
+        return 'Satellite imagery with major roads and labels.';
       case MapboxVisualStyle.navigationDay:
         return 'High-contrast style optimized for daytime driving.';
       case MapboxVisualStyle.navigationNight:
-        return 'Dark navigation style tailored for in-app dashboard illumination.';
+        return 'Dark navigation style for dashboard use.';
     }
   }
 
@@ -135,7 +134,6 @@ extension MapboxVisualStyleX on MapboxVisualStyle {
       case MapboxVisualStyle.satelliteStreets:
         return CupertinoIcons.map_pin_ellipse;
       case MapboxVisualStyle.navigationDay:
-        return CupertinoIcons.car_detailed;
       case MapboxVisualStyle.navigationNight:
         return CupertinoIcons.car_detailed;
     }
@@ -197,20 +195,57 @@ extension MapboxVisualStyleX on MapboxVisualStyle {
     }
   }
 
-  /// Use with flutter_map Mapbox raster fallback.
-  String rasterTilesUrl(String accessToken) {
+  bool get isDark {
+    switch (this) {
+      case MapboxVisualStyle.dark:
+      case MapboxVisualStyle.navigationNight:
+        return true;
+      default:
+        return false;
+    }
+  }
+
+  String rasterTilesUrl(String accessToken, {int tileSize = 512}) {
+    final String token = Uri.encodeComponent(accessToken.trim());
     final String stylePath = styleUri.replaceFirst('mapbox://styles/', '');
-    return 'https://api.mapbox.com/styles/v1/$stylePath/tiles/256/{z}/{x}/{y}@2x?access_token=$accessToken';
+    final int safeTileSize = tileSize == 256 ? 256 : 512;
+    return 'https://api.mapbox.com/styles/v1/$stylePath/tiles/'
+        '$safeTileSize/{z}/{x}/{y}@2x?access_token=$token';
   }
 
   String get storageKey => name;
 
   static MapboxVisualStyle fromStorageKey(String? value) {
+    final String normalized = (value ?? '').trim().toLowerCase();
+
     for (final MapboxVisualStyle style in MapboxVisualStyle.values) {
-      if (style.storageKey == value) return style;
+      if (style.storageKey.toLowerCase() == normalized ||
+          style.label.toLowerCase() == normalized ||
+          style.shortLabel.toLowerCase() == normalized) {
+        return style;
+      }
     }
 
-    return MapboxVisualStyle.standard;
+    switch (normalized) {
+      case 'standard-satellite':
+      case 'stdsat':
+      case 'std_sat':
+        return MapboxVisualStyle.standardSatellite;
+      case 'sat':
+        return MapboxVisualStyle.satellite;
+      case 'sat-road':
+      case 'sat+road':
+      case 'satellite-streets':
+        return MapboxVisualStyle.satelliteStreets;
+      case 'navday':
+      case 'navigation-day':
+        return MapboxVisualStyle.navigationDay;
+      case 'navnight':
+      case 'navigation-night':
+        return MapboxVisualStyle.navigationNight;
+      default:
+        return MapboxVisualStyle.standard;
+    }
   }
 }
 

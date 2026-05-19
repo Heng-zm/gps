@@ -22,7 +22,12 @@ class AppErrorBanner {
           behavior: SnackBarBehavior.floating,
           backgroundColor: AppColors.card,
           elevation: 12,
-          margin: const EdgeInsets.all(16),
+          margin: EdgeInsets.fromLTRB(
+            16,
+            16,
+            16,
+            16 + MediaQuery.paddingOf(context).bottom,
+          ),
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(18),
             side: BorderSide(color: color.withValues(alpha: 0.35)),

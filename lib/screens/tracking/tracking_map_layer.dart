@@ -20,6 +20,7 @@ class _FullScreenLiveMap extends StatefulWidget {
     required this.presetN,
     required this.runtimeModeN,
     required this.plannedRouteN,
+    required this.performanceModeN,
     required this.polylineCount,
     required this.onMapReady,
   });
@@ -37,6 +38,7 @@ class _FullScreenLiveMap extends StatefulWidget {
   final ValueNotifier<MapboxStandardPreset> presetN;
   final ValueNotifier<MapboxRuntimeMode> runtimeModeN;
   final ValueNotifier<PlannedRoute?> plannedRouteN;
+  final ValueNotifier<_TrackingPerformanceMode> performanceModeN;
   final int Function() polylineCount;
   final VoidCallback onMapReady;
 
@@ -68,6 +70,7 @@ class _FullScreenLiveMapState extends State<_FullScreenLiveMap> {
     widget.presetN.addListener(_onMapboxPresetChanged);
     widget.runtimeModeN.addListener(_onMapRuntimeChanged);
     widget.plannedRouteN.addListener(_onPlannedRouteChanged);
+    widget.performanceModeN.addListener(_onPerformanceModeChanged);
   }
 
   @override
@@ -80,12 +83,17 @@ class _FullScreenLiveMapState extends State<_FullScreenLiveMap> {
 
   @override
   void dispose() {
+    unawaited(_routeOuterManager?.deleteAll());
+    unawaited(_routeCoreManager?.deleteAll());
+    unawaited(_plannedOuterManager?.deleteAll());
+    unawaited(_plannedCoreManager?.deleteAll());
     widget.posN.removeListener(_onLiveMapInputChanged);
     widget.headingN.removeListener(_onLiveMapInputChanged);
     widget.followModeN.removeListener(_onFollowModeChanged);
     widget.presetN.removeListener(_onMapboxPresetChanged);
     widget.runtimeModeN.removeListener(_onMapRuntimeChanged);
     widget.plannedRouteN.removeListener(_onPlannedRouteChanged);
+    widget.performanceModeN.removeListener(_onPerformanceModeChanged);
     super.dispose();
   }
 
@@ -203,6 +211,12 @@ class _FullScreenLiveMapState extends State<_FullScreenLiveMap> {
     if (mounted) setState(() {});
   }
 
+  void _onPerformanceModeChanged() {
+    _lastRouteCount = -1;
+    _lastRouteSignature = 0;
+    unawaited(_rebuildRouteAnnotations(force: true));
+  }
+
   void _onPlannedRouteChanged() {
     unawaited(_rebuildPlannedRouteAnnotations(force: true));
   }
@@ -230,15 +244,25 @@ class _FullScreenLiveMapState extends State<_FullScreenLiveMap> {
     final DateTime? last = _lastCameraAt;
     if (!force &&
         last != null &&
-        now.difference(last) < const Duration(milliseconds: 520)) {
+        now.difference(last) < widget.performanceModeN.value.cameraThrottle) {
       return;
     }
     _lastCameraAt = now;
 
+    final bool rotatesWithHeading =
+        mode == _MapFollowMode.headingUp || mode == _MapFollowMode.northUp;
     final double bearing =
-        mode == _MapFollowMode.headingUp ? -_normDeg(widget.headingN.value) : 0;
-    final double pitch = mode == _MapFollowMode.headingUp ? 50.0 : 0.0;
-    final double zoom = mode == _MapFollowMode.headingUp ? 17.2 : 16.3;
+        rotatesWithHeading ? -_normDeg(widget.headingN.value) : 0.0;
+    final double pitch = mode == _MapFollowMode.headingUp
+        ? 50.0
+        : mode == _MapFollowMode.northUp
+            ? 28.0
+            : 0.0;
+    final double zoom = mode == _MapFollowMode.headingUp
+        ? 17.2
+        : mode == _MapFollowMode.northUp
+            ? 16.8
+            : 16.3;
 
     try {
       await map.easeTo(
@@ -288,8 +312,14 @@ class _FullScreenLiveMapState extends State<_FullScreenLiveMap> {
         .where(_isValid)
         .toList(growable: false);
 
-    final List<LatLng> renderPoints = safePoints.length > 900
-        ? simplifyPolyline(safePoints, epsilon: 0.00004)
+    final int renderLimit = widget.performanceModeN.value.routeRenderLimit;
+    final List<LatLng> renderPoints = safePoints.length > renderLimit
+        ? simplifyPolyline(
+            safePoints,
+            epsilon: widget.performanceModeN.value == _TrackingPerformanceMode.battery
+                ? 0.00007
+                : 0.00004,
+          )
         : safePoints;
 
     final List<mb.Position> coordinates = renderPoints

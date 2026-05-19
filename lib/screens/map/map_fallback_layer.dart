@@ -4,6 +4,8 @@ part of 'map_screen.dart';
 // FLUTTER MAP FALLBACK LAYER
 // ─────────────────────────────────────────────────────────────────────────────
 
+const int _kMaxSpeedGradientSegments = 420;
+
 // ─────────────────────────────────────────────────────────────────────────────
 // FLUTTER MAP LAYER
 // ─────────────────────────────────────────────────────────────────────────────
@@ -51,7 +53,7 @@ class _FlutterMapLayer extends StatelessWidget {
         ),
         fm.Polyline(
           points: route.points,
-          color: _kBlue.withValues(alpha: 0.94),
+          color: mapStyle.routeColor.withValues(alpha: 0.94),
           strokeWidth: 5.4,
           strokeCap: StrokeCap.round,
           strokeJoin: StrokeJoin.round,
@@ -79,14 +81,14 @@ class _FlutterMapLayer extends StatelessWidget {
         ),
         fm.Polyline(
           points: route.smoothedPoints,
-          color: const Color(0xFF3B22FF).withValues(alpha: 0.94),
+          color: mapStyle.routeColor.withValues(alpha: 0.94),
           strokeWidth: 8.8,
           strokeCap: StrokeCap.round,
           strokeJoin: StrokeJoin.round,
         ),
         fm.Polyline(
           points: route.smoothedPoints,
-          color: const Color(0xFF1600B8).withValues(alpha: 0.95),
+          color: mapStyle.isSatellite ? _kBlue.withValues(alpha: 0.95) : _kBlueDeep.withValues(alpha: 0.95),
           strokeWidth: 5.8,
           strokeCap: StrokeCap.round,
           strokeJoin: StrokeJoin.round,
@@ -99,7 +101,12 @@ class _FlutterMapLayer extends StatelessWidget {
     // FIX: Build all polylines in one pass with pre-allocated capacity.
     final List<fm.Polyline> polylines = <fm.Polyline>[];
 
-    for (int i = 0; i < route.speedSegments.length; i++) {
+    final int count = route.speedSegments.length;
+    final int step = count <= _kMaxSpeedGradientSegments
+        ? 1
+        : (count / _kMaxSpeedGradientSegments).ceil().clamp(1, 9999).toInt();
+
+    for (int i = 0; i < count; i += step) {
       final _SpeedSegment seg = route.speedSegments[i];
       if (seg.points.length < 2) continue;
 

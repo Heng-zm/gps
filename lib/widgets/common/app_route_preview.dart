@@ -12,23 +12,47 @@ class AppRoutePreview extends StatelessWidget {
     required this.points,
     this.height = 90,
     this.color = AppColors.blueSoft,
+    this.maxRenderPoints = 180,
   });
 
   final List<LatLng> points;
   final double height;
   final Color color;
+  final int maxRenderPoints;
 
   @override
   Widget build(BuildContext context) {
+    final List<LatLng> safePoints = _downsampleValid(points, maxRenderPoints);
+
     return RepaintBoundary(
       child: SizedBox(
-        height: height,
+        height: height.clamp(48.0, 240.0).toDouble(),
         width: double.infinity,
         child: CustomPaint(
-          painter: _RoutePreviewPainter(points: points, color: color),
+          isComplex: true,
+          painter: _RoutePreviewPainter(points: safePoints, color: color),
         ),
       ),
     );
+  }
+
+  static List<LatLng> _downsampleValid(List<LatLng> source, int maxPoints) {
+    final List<LatLng> valid = source
+        .where((LatLng point) =>
+            point.latitude.isFinite &&
+            point.longitude.isFinite &&
+            point.latitude.abs() <= 90 &&
+            point.longitude.abs() <= 180)
+        .toList(growable: false);
+
+    final int safeMax = maxPoints.clamp(16, 600).toInt();
+    if (valid.length <= safeMax) return valid;
+
+    return List<LatLng>.generate(safeMax, (int index) {
+      final int sourceIndex =
+          ((index / (safeMax - 1)) * (valid.length - 1)).round();
+      return valid[sourceIndex];
+    }, growable: false);
   }
 }
 
@@ -48,9 +72,10 @@ class _RoutePreviewPainter extends CustomPainter {
       const Radius.circular(18),
     );
 
-    final Paint bgPaint = Paint()
-      ..color = AppColors.white.withValues(alpha: 0.055);
-    canvas.drawRRect(bg, bgPaint);
+    canvas.drawRRect(
+      bg,
+      Paint()..color = AppColors.white.withValues(alpha: 0.055),
+    );
 
     if (points.length < 2 || size.width <= 0 || size.height <= 0) return;
 
@@ -68,15 +93,18 @@ class _RoutePreviewPainter extends CustomPainter {
 
     final double latRange = math.max(0.000001, maxLat - minLat);
     final double lngRange = math.max(0.000001, maxLng - minLng);
-    const double pad = 14;
+    const double pad = 14.0;
 
     Offset project(LatLng point) {
-      final double x = pad + ((point.longitude - minLng) / lngRange) * (size.width - pad * 2);
-      final double y = pad + ((maxLat - point.latitude) / latRange) * (size.height - pad * 2);
+      final double x =
+          pad + ((point.longitude - minLng) / lngRange) * (size.width - pad * 2);
+      final double y =
+          pad + ((maxLat - point.latitude) / latRange) * (size.height - pad * 2);
       return Offset(x, y);
     }
 
-    final ui.Path path = ui.Path()..moveTo(project(points.first).dx, project(points.first).dy);
+    final Offset firstPoint = project(points.first);
+    final ui.Path path = ui.Path()..moveTo(firstPoint.dx, firstPoint.dy);
     for (int i = 1; i < points.length; i++) {
       final Offset p = project(points[i]);
       path.lineTo(p.dx, p.dy);
@@ -97,10 +125,14 @@ class _RoutePreviewPainter extends CustomPainter {
       ..strokeCap = StrokeCap.round
       ..strokeJoin = StrokeJoin.round;
     canvas.drawPath(path, line);
+
+    final Paint dot = Paint()..color = color;
+    canvas.drawCircle(project(points.first), 3.5, dot);
+    canvas.drawCircle(project(points.last), 4.0, dot);
   }
 
   @override
   bool shouldRepaint(covariant _RoutePreviewPainter oldDelegate) {
-    return oldDelegate.points != points || oldDelegate.color != color;
+    return oldDelegate.color != color || oldDelegate.points != points;
   }
 }

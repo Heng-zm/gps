@@ -23,7 +23,7 @@ class _SafeText extends StatelessWidget {
       child: Text(
         data,
         maxLines: maxLines,
-        overflow: TextOverflow.clip,
+        overflow: TextOverflow.ellipsis,
         softWrap: false,
         style: style,
       ),
@@ -408,11 +408,13 @@ class _StatusRow extends StatelessWidget {
   const _StatusRow({
     required this.signalN,
     required this.batteryN,
+    this.batteryStateN,
     required this.accuracyN,
   });
 
   final ValueNotifier<int> signalN;
   final ValueNotifier<int?> batteryN;
+  final ValueNotifier<BatteryState?>? batteryStateN;
   final ValueNotifier<double> accuracyN;
 
   @override
@@ -425,7 +427,7 @@ class _StatusRow extends StatelessWidget {
             child: ValueListenableBuilder<int>(
               valueListenable: signalN,
               builder: (_, int strength, __) {
-                final int signal = strength.clamp(0, 4);
+                final int signal = strength.clamp(0, 4).toInt();
 
                 return ValueListenableBuilder<double>(
                   valueListenable: accuracyN,
@@ -449,11 +451,31 @@ class _StatusRow extends StatelessWidget {
             child: ValueListenableBuilder<int?>(
               valueListenable: batteryN,
               builder: (_, int? percent, __) {
-                return _StatusChip(
-                  label: 'BATTERY',
-                  leading: _BatteryIcon(percent: percent),
-                  value: percent == null ? '--%' : '$percent%',
-                  valueColor: _batteryColor(percent),
+                final ValueNotifier<BatteryState?>? stateNotifier =
+                    batteryStateN;
+
+                if (stateNotifier == null) {
+                  return _StatusChip(
+                    label: 'BATTERY',
+                    leading: _BatteryIcon(percent: percent),
+                    value: percent == null ? '--%' : '$percent%',
+                    valueColor: _batteryColor(percent, null),
+                  );
+                }
+
+                return ValueListenableBuilder<BatteryState?>(
+                  valueListenable: stateNotifier,
+                  builder: (_, BatteryState? state, __) {
+                    final bool charging = state == BatteryState.charging ||
+                        state == BatteryState.full;
+
+                    return _StatusChip(
+                      label: charging ? 'CHARGING' : 'BATTERY',
+                      leading: _BatteryIcon(percent: percent, state: state),
+                      value: percent == null ? '--%' : '$percent%',
+                      valueColor: _batteryColor(percent, state),
+                    );
+                  },
                 );
               },
             ),
@@ -469,7 +491,10 @@ class _StatusRow extends StatelessWidget {
     return _kRed;
   }
 
-  static Color _batteryColor(int? percent) {
+  static Color _batteryColor(int? percent, BatteryState? state) {
+    if (state == BatteryState.charging || state == BatteryState.full) {
+      return _kBlueSoft;
+    }
     if (percent == null) return _kTextMuted;
     if (percent > 40) return _kGreen;
     if (percent > 20) return const Color(0xFFFFCC00);
@@ -672,9 +697,9 @@ class _RouteQuality {
     required double speedMph,
     required bool hasPosition,
   }) {
-    final int safeSignal = signal.clamp(0, 4);
+    final int safeSignal = signal.clamp(0, 4).toInt();
     final double safeAccuracy =
-        accuracy.isFinite ? accuracy.clamp(5.0, 40.0) : 40.0;
+        accuracy.isFinite ? accuracy.clamp(5.0, 40.0).toDouble() : 40.0;
 
     if (!tracking) {
       return const _RouteQuality(
@@ -2331,9 +2356,13 @@ class _SignalBars extends StatelessWidget {
 }
 
 class _BatteryIcon extends StatelessWidget {
-  const _BatteryIcon({required this.percent});
+  const _BatteryIcon({
+    required this.percent,
+    this.state,
+  });
 
   final int? percent;
+  final BatteryState? state;
 
   Color get _color {
     final int? value = percent;

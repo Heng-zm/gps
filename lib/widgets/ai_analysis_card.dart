@@ -160,8 +160,10 @@ class _AiAnalysisCardState extends State<AiAnalysisCard>
         thinkingStatus: _thinkingStatus,
         pulseTarget: _pulseTarget,
         shimmerCtrl: _shimmerCtrl,
-        onPulseEnd: () =>
-            setState(() => _pulseTarget = _pulseTarget == 1.2 ? 0.8 : 1.2),
+        onPulseEnd: () {
+            if (!mounted) return;
+            setState(() => _pulseTarget = _pulseTarget == 1.2 ? 0.8 : 1.2);
+          },
       );
     }
     if (_errorMessage != null) {

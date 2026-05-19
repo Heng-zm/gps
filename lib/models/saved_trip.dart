@@ -41,11 +41,13 @@ class SavedRoutePoint {
 
   Map<String, dynamic> toJson() {
     return <String, dynamic>{
-      'lat': _safeDouble(lat),
-      'lng': _safeDouble(lng),
-      'spd': _safeDouble(speedMph),
+      // Coordinates can be negative. Do not use non-negative sanitizers here.
+      'lat': _safeFinite(lat),
+      'lng': _safeFinite(lng),
+      'spd': _safeNonNegative(speedMph),
       if (altitudeFt.isFinite && altitudeFt != 0.0) 'altFt': altitudeFt,
       if (timestamp != null) 'time': timestamp!.millisecondsSinceEpoch,
+      if (timestamp != null) 'timestamp': timestamp!.toUtc().toIso8601String(),
       if (accuracyMeters.isFinite && accuracyMeters > 0.0)
         'acc': accuracyMeters,
     };
@@ -54,18 +56,18 @@ class SavedRoutePoint {
   TripPoint toTripPoint() {
     return TripPoint(
       position: position,
-      speedMph: _safeDouble(speedMph),
-      altitudeFt: _safeDouble(altitudeFt),
+      speedMph: _safeNonNegative(speedMph),
+      altitudeFt: _safeFinite(altitudeFt),
       timestamp: timestamp ?? DateTime.now(),
-      accuracyMeters: _safeDouble(accuracyMeters),
+      accuracyMeters: _safeNonNegative(accuracyMeters),
     );
   }
 
   static SavedRoutePoint? tryFromJson(Object? raw) {
     if (raw is! Map) return null;
 
-    final double lat = _toDouble(raw['lat']);
-    final double lng = _toDouble(raw['lng']);
+    final double lat = _toDouble(raw['lat'] ?? raw['latitude']);
+    final double lng = _toDouble(raw['lng'] ?? raw['lon'] ?? raw['longitude']);
     final double speed = _toDouble(
       raw['spd'] ?? raw['speedMph'] ?? raw['speed'] ?? raw['speed_mph'],
     );
@@ -85,10 +87,10 @@ class SavedRoutePoint {
     final SavedRoutePoint point = SavedRoutePoint(
       lat: lat,
       lng: lng,
-      speedMph: speed,
-      altitudeFt: altitude,
+      speedMph: _safeNonNegative(speed),
+      altitudeFt: _safeFinite(altitude),
       timestamp: timestamp,
-      accuracyMeters: accuracy,
+      accuracyMeters: _safeNonNegative(accuracy),
     );
 
     return point.isValid ? point : null;
@@ -117,8 +119,7 @@ class SavedTrip {
   final double altitudeGainFt;
   final List<SavedRoutePoint> routePoints;
 
-  /// PERFORMANCE: Pre-calculate formatters so they do not run repeatedly during
-  /// history list scrolling.
+  /// Pre-calculated formatters to avoid repeated work during history scrolling.
   late final String formattedDate =
       DateFormat('MMM d, yyyy · h:mm a').format(date);
 
@@ -137,20 +138,16 @@ class SavedTrip {
         .toList(growable: false);
   }
 
-  /// Converts model to JSON for Supabase insertion.
-  ///
-  /// Must match this Supabase schema exactly:
-  /// id, date, distanceMiles, maxSpeedMph, avgSpeedMph,
-  /// totalTimeSeconds, altitudeGainFt, route_points
   Map<String, dynamic> toJson() {
     return <String, dynamic>{
       'id': id,
       'date': date.millisecondsSinceEpoch,
-      'distanceMiles': _safeDouble(distanceMiles),
-      'maxSpeedMph': _safeDouble(maxSpeedMph),
-      'avgSpeedMph': _safeDouble(avgSpeedMph),
+      'dateIso': date.toUtc().toIso8601String(),
+      'distanceMiles': _safeNonNegative(distanceMiles),
+      'maxSpeedMph': _safeNonNegative(maxSpeedMph),
+      'avgSpeedMph': _safeNonNegative(avgSpeedMph),
       'totalTimeSeconds': totalTime.inSeconds < 0 ? 0 : totalTime.inSeconds,
-      'altitudeGainFt': _safeDouble(altitudeGainFt),
+      'altitudeGainFt': _safeNonNegative(altitudeGainFt),
       'route_points': routePoints
           .where((SavedRoutePoint point) => point.isValid)
           .map((SavedRoutePoint point) => point.toJson())
@@ -158,10 +155,6 @@ class SavedTrip {
     };
   }
 
-  /// Creates a model from Supabase JSON response.
-  ///
-  /// Uses [num] parsing to handle int/double mismatches from PostgreSQL.
-  /// Returns null when id/date is invalid to avoid broken Jan-1-1970 records.
   static SavedTrip? tryFromJson(Map<String, dynamic> json) {
     final String id = json['id']?.toString().trim() ?? '';
     if (id.isEmpty) {
@@ -169,7 +162,7 @@ class SavedTrip {
       return null;
     }
 
-    final int? rawDate = _tryDateMillis(json['date']);
+    final int? rawDate = _tryDateMillis(json['date'] ?? json['dateIso']);
     if (rawDate == null || rawDate <= 0) {
       debugPrint('SavedTrip.tryFromJson: missing or zero date, skipping.');
       return null;
@@ -178,18 +171,17 @@ class SavedTrip {
     return SavedTrip(
       id: id,
       date: DateTime.fromMillisecondsSinceEpoch(rawDate),
-      distanceMiles: _toDouble(json['distanceMiles']),
-      maxSpeedMph: _toDouble(json['maxSpeedMph']),
-      avgSpeedMph: _toDouble(json['avgSpeedMph']),
+      distanceMiles: _safeNonNegative(_toDouble(json['distanceMiles'])),
+      maxSpeedMph: _safeNonNegative(_toDouble(json['maxSpeedMph'])),
+      avgSpeedMph: _safeNonNegative(_toDouble(json['avgSpeedMph'])),
       totalTime: Duration(
-        seconds: _toInt(json['totalTimeSeconds']),
+        seconds: _toInt(json['totalTimeSeconds']).clamp(0, 1 << 31).toInt(),
       ),
-      altitudeGainFt: _toDouble(json['altitudeGainFt']),
+      altitudeGainFt: _safeNonNegative(_toDouble(json['altitudeGainFt'])),
       routePoints: _parseRoutePoints(json['route_points']),
     );
   }
 
-  /// Optional helper if you want to create a saved trip from a TripSummary.
   factory SavedTrip.fromSummary(TripSummary summary) {
     final List<SavedRoutePoint> points = summary.points
         .map((TripPoint point) {
@@ -208,18 +200,16 @@ class SavedTrip {
     return SavedTrip(
       id: summary.id,
       date: summary.date,
-      distanceMiles: _safeDouble(summary.distanceMiles),
-      maxSpeedMph: _safeDouble(summary.maxSpeedMph),
-      avgSpeedMph: _safeDouble(summary.avgSpeedMph),
+      distanceMiles: _safeNonNegative(summary.distanceMiles),
+      maxSpeedMph: _safeNonNegative(summary.maxSpeedMph),
+      avgSpeedMph: _safeNonNegative(summary.avgSpeedMph),
       totalTime:
           summary.totalTime.isNegative ? Duration.zero : summary.totalTime,
-      altitudeGainFt: _safeDouble(summary.altitudeGainFt),
+      altitudeGainFt: _safeNonNegative(summary.altitudeGainFt),
       routePoints: points,
     );
   }
 
-  /// Shows seconds when duration is under 1 minute so a 45-second trip no longer
-  /// displays as "0m".
   String _calculateFormattedDuration() {
     final Duration safe = totalTime.isNegative ? Duration.zero : totalTime;
 
@@ -227,14 +217,8 @@ class SavedTrip {
     final int m = safe.inMinutes.remainder(60);
     final int s = safe.inSeconds.remainder(60);
 
-    if (h > 0) {
-      return '${h}h ${m.toString().padLeft(2, '0')}m';
-    }
-
-    if (m > 0) {
-      return '${m}m ${s.toString().padLeft(2, '0')}s';
-    }
-
+    if (h > 0) return '${h}h ${m.toString().padLeft(2, '0')}m';
+    if (m > 0) return '${m}m ${s.toString().padLeft(2, '0')}s';
     return '${s}s';
   }
 
@@ -242,8 +226,6 @@ class SavedTrip {
   // STATIC SUPABASE METHODS
   // ───────────────────────────────────────────────────────────────────────────
 
-  /// Uses upsert so saving the same trip ID twice updates the existing record
-  /// instead of throwing a duplicate-key error.
   static Future<bool> saveTrip(SavedTrip trip) async {
     try {
       await Supabase.instance.client
@@ -257,10 +239,6 @@ class SavedTrip {
     }
   }
 
-  /// Fetches all trips from Supabase ordered by date, newest first.
-  ///
-  /// Uses tryFromJson so corrupted records are skipped cleanly instead of
-  /// creating silent Jan-1-1970 entries in the list.
   static Future<List<SavedTrip>> loadAllTrips() async {
     try {
       final List<dynamic> data = await Supabase.instance.client
@@ -281,7 +259,8 @@ class SavedTrip {
           if (trip != null) trips.add(trip);
         } catch (error, stackTrace) {
           debugPrint(
-              'Skipped corrupted saved_trip record: $error\n$stackTrace');
+            'Skipped corrupted saved_trip record: $error\n$stackTrace',
+          );
         }
       }
 
@@ -292,7 +271,6 @@ class SavedTrip {
     }
   }
 
-  /// Loads a single trip by ID. Useful for opening replay/detail screens.
   static Future<SavedTrip?> loadTrip(String id) async {
     final String safeId = id.trim();
     if (safeId.isEmpty) return null;
@@ -313,7 +291,6 @@ class SavedTrip {
     }
   }
 
-  /// Deletes a specific trip from Supabase by its ID.
   static Future<bool> deleteTrip(String id) async {
     final String safeId = id.trim();
     if (safeId.isEmpty) return false;
@@ -329,10 +306,6 @@ class SavedTrip {
       return false;
     }
   }
-
-  // ───────────────────────────────────────────────────────────────────────────
-  // PARSING HELPERS
-  // ───────────────────────────────────────────────────────────────────────────
 
   static List<SavedRoutePoint> _parseRoutePoints(Object? raw) {
     if (raw is! List) return const <SavedRoutePoint>[];
@@ -351,10 +324,12 @@ class SavedTrip {
     if (raw is num) return raw.toInt();
 
     if (raw is String) {
-      final int? asInt = int.tryParse(raw);
+      final String trimmed = raw.trim();
+
+      final int? asInt = int.tryParse(trimmed);
       if (asInt != null) return asInt;
 
-      final DateTime? parsed = DateTime.tryParse(raw);
+      final DateTime? parsed = DateTime.tryParse(trimmed);
       return parsed?.millisecondsSinceEpoch;
     }
 
@@ -363,7 +338,7 @@ class SavedTrip {
 
   static int _toInt(Object? raw) {
     if (raw is num) return raw.toInt();
-    if (raw is String) return int.tryParse(raw) ?? 0;
+    if (raw is String) return int.tryParse(raw.trim()) ?? 0;
     return 0;
   }
 }
@@ -374,9 +349,10 @@ DateTime? _tryRouteDateTime(Object? raw) {
   if (raw is num) {
     millis = raw.toInt();
   } else if (raw is String) {
-    millis = int.tryParse(raw);
+    final String trimmed = raw.trim();
+    millis = int.tryParse(trimmed);
     if (millis == null) {
-      final DateTime? parsed = DateTime.tryParse(raw);
+      final DateTime? parsed = DateTime.tryParse(trimmed);
       millis = parsed?.millisecondsSinceEpoch;
     }
   }
@@ -392,14 +368,18 @@ double _toDouble(Object? raw) {
   }
 
   if (raw is String) {
-    final double? value = double.tryParse(raw);
+    final double? value = double.tryParse(raw.trim());
     return value != null && value.isFinite ? value : 0.0;
   }
 
   return 0.0;
 }
 
-double _safeDouble(double value) {
+double _safeFinite(double value) {
+  return value.isFinite ? value : 0.0;
+}
+
+double _safeNonNegative(double value) {
   if (!value.isFinite) return 0.0;
   return value < 0.0 ? 0.0 : value;
 }

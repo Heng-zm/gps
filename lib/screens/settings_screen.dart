@@ -194,7 +194,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
         final Size screenSize = MediaQuery.of(popupContext).size;
         final EdgeInsets safe = MediaQuery.of(popupContext).padding;
         final double maxPopupHeight =
-            (screenSize.height - safe.top - safe.bottom - 28).clamp(360.0, 720.0);
+            (screenSize.height - safe.top - safe.bottom - 28)
+                .clamp(360.0, 720.0)
+                .toDouble();
 
         return Material(
           color: Colors.transparent,
@@ -238,7 +240,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             children: <Widget>[
                               const Icon(
                                 CupertinoIcons.location_fill,
-                                color: _goldSoft,
+                                color: const Color(0xFFFFD54F),
                                 size: 20,
                               ),
                               const SizedBox(width: 10),
@@ -347,12 +349,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   void _showSnack({required String message, required Color color}) {
-    ScaffoldMessenger.of(context).showSnackBar(
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
       SnackBar(
         content: Text(message),
         backgroundColor: color,
         behavior: SnackBarBehavior.floating,
-        margin: const EdgeInsets.all(16),
+        margin: EdgeInsets.fromLTRB(
+          16,
+          16,
+          16,
+          16 + MediaQuery.viewPaddingOf(context).bottom,
+        ),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
       ),
     );
@@ -393,6 +403,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
         builder: (_) => const DiagnosticsScreen(),
       ),
     );
+  }
+
+  Future<void> _openPrivacyLocationPanel() async {
+    HapticFeedback.lightImpact();
+    await _openLocationSettings();
+  }
+
+  Future<void> _refreshSettingsStatus() async {
+    HapticFeedback.selectionClick();
+    await _checkPermission();
+    if (!mounted) return;
+    _showSnack(message: 'Settings status refreshed.', color: _green);
   }
 
   @override
@@ -440,6 +462,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             onRequestLocation: _requestLocationPermission,
                             onOpenSettings: _openLocationSettings,
                           ),
+                          const SizedBox(height: 12),
+                          _SettingsQuickActions(
+                            onRefresh: _refreshSettingsStatus,
+                            onOpenLocation: _openPrivacyLocationPanel,
+                            onDiagnostics: _openDiagnostics,
+                          ),
                           const SizedBox(height: 18),
                           _Section(
                             title: 'TRACKING SETUP',
@@ -467,7 +495,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                 subtitle: 'Live route visualization mode',
                                 trailing: _ValueLabel(
                                   value: _s.mapStyle.name.toUpperCase(),
-                                  color: _goldSoft,
+                                  color: const Color(0xFFFFD54F),
                                 ),
                                 onTap: _showMapStylePicker,
                               ),
@@ -744,6 +772,109 @@ class _SettingsBackground extends StatelessWidget {
             _SettingsScreenState._bg,
           ],
           stops: const <double>[0.0, 0.42, 1.0],
+        ),
+      ),
+    );
+  }
+}
+
+
+class _SettingsQuickActions extends StatelessWidget {
+  const _SettingsQuickActions({
+    required this.onRefresh,
+    required this.onOpenLocation,
+    required this.onDiagnostics,
+  });
+
+  final VoidCallback onRefresh;
+  final VoidCallback onOpenLocation;
+  final VoidCallback onDiagnostics;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: <Widget>[
+        Expanded(
+          child: _MiniActionButton(
+            icon: CupertinoIcons.refresh,
+            label: 'Refresh',
+            color: const Color(0xFF32D74B),
+            onTap: onRefresh,
+          ),
+        ),
+        const SizedBox(width: 9),
+        Expanded(
+          child: _MiniActionButton(
+            icon: CupertinoIcons.location_fill,
+            label: 'Location',
+            color: const Color(0xFFFFD54F),
+            onTap: onOpenLocation,
+          ),
+        ),
+        const SizedBox(width: 9),
+        Expanded(
+          child: _MiniActionButton(
+            icon: CupertinoIcons.waveform_path_ecg,
+            label: 'Diagnostics',
+            color: const Color(0xFF4A9EFF),
+            onTap: onDiagnostics,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _MiniActionButton extends StatelessWidget {
+  const _MiniActionButton({
+    required this.icon,
+    required this.label,
+    required this.color,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final String label;
+  final Color color;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Semantics(
+      button: true,
+      label: label,
+      child: CupertinoButton(
+        padding: EdgeInsets.zero,
+        minSize: 48,
+        pressedOpacity: 0.82,
+        onPressed: onTap,
+        child: Container(
+          height: 48,
+          padding: const EdgeInsets.symmetric(horizontal: 8),
+          decoration: BoxDecoration(
+            color: color.withValues(alpha: 0.11),
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(color: color.withValues(alpha: 0.18)),
+          ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: <Widget>[
+              Icon(icon, color: color, size: 15),
+              const SizedBox(width: 6),
+              Flexible(
+                child: _SafeText(
+                  label.toUpperCase(),
+                  maxLines: 1,
+                  style: TextStyle(
+                    color: color,
+                    fontSize: 10,
+                    fontWeight: FontWeight.w900,
+                    letterSpacing: 0.55,
+                  ),
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -1271,29 +1402,30 @@ class _AccuracyChip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final Color color = selected ? _SettingsScreenState._goldSoft : Colors.white38;
-    return GestureDetector(
-      behavior: HitTestBehavior.opaque,
-      onTap: () {
-        HapticFeedback.selectionClick();
-        onTap();
-      },
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 180),
-        curve: Curves.easeOut,
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 11),
-        decoration: BoxDecoration(
-          color: selected ? _SettingsScreenState._gold.withValues(alpha: 0.13) : Colors.white.withValues(alpha: 0.035),
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(
-            color: selected ? _SettingsScreenState._goldSoft.withValues(alpha: 0.72) : Colors.white.withValues(alpha: 0.06),
-            width: selected ? 1.4 : 1.0,
+    return Semantics(
+      button: true,
+      selected: selected,
+      label: label,
+      child: CupertinoButton(
+        padding: EdgeInsets.zero,
+        minSize: 0,
+        pressedOpacity: 0.86,
+        onPressed: () {
+          HapticFeedback.selectionClick();
+          onTap();
+        },
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 180),
+          curve: Curves.easeOut,
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 11),
+          decoration: BoxDecoration(
+            color: selected ? _SettingsScreenState._gold.withValues(alpha: 0.13) : Colors.white.withValues(alpha: 0.035),
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(
+              color: selected ? _SettingsScreenState._goldSoft.withValues(alpha: 0.72) : Colors.white.withValues(alpha: 0.06),
+              width: selected ? 1.4 : 1.0,
+            ),
           ),
-        ),
-        child: _SafeText(
-          label,
-          maxLines: 1,
-          textAlign: TextAlign.center,
-          style: TextStyle(color: color, fontSize: 10, fontWeight: FontWeight.w900, letterSpacing: 0.6),
         ),
       ),
     );

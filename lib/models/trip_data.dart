@@ -2,9 +2,9 @@ import 'package:latlong2/latlong.dart';
 
 /// Represents a single GPS data point captured during a trip.
 ///
-/// Supports both old and new JSON formats:
+/// Supports old and new JSON formats:
 /// - speed / spd / speedMph / speed_mph
-/// - alt / altFt / altitudeFt
+/// - alt / altFt / altitudeFt / altitude_ft
 /// - time / timestamp / ts
 /// - acc / accuracy / accuracyMeters / accuracy_m
 class TripPoint {
@@ -22,55 +22,62 @@ class TripPoint {
   final DateTime timestamp;
   final double accuracyMeters;
 
-  bool get isValid {
-    return position.latitude.isFinite &&
-        position.longitude.isFinite &&
-        position.latitude.abs() <= 90.0 &&
-        position.longitude.abs() <= 180.0;
-  }
+  bool get isValid => isValidLatLng(position);
 
-  double get speedKmh => _safeDouble(speedMph) * 1.609344;
+  double get speedKmh => _safeNonNegative(speedMph) * 1.609344;
 
-  double get altitudeMeters => _safeDouble(altitudeFt) / 3.28084;
+  double get altitudeMeters => _safeFinite(altitudeFt) / 3.28084;
 
   Map<String, dynamic> toJson() {
     return <String, dynamic>{
-      'lat': _safeDouble(position.latitude),
-      'lng': _safeDouble(position.longitude),
-      'speed': _safeDouble(speedMph),
-      'spd': _safeDouble(speedMph),
-      'alt': _safeDouble(altitudeFt),
-      'altFt': _safeDouble(altitudeFt),
+      // Do NOT clamp coordinates to positive numbers. West/South coordinates
+      // are valid and must remain negative.
+      'lat': _safeCoordinate(position.latitude),
+      'lng': _safeCoordinate(position.longitude),
+      'speed': _safeNonNegative(speedMph),
+      'spd': _safeNonNegative(speedMph),
+      'alt': _safeFinite(altitudeFt),
+      'altFt': _safeFinite(altitudeFt),
       'time': timestamp.millisecondsSinceEpoch,
-      'acc': _safeDouble(accuracyMeters),
+      'timestamp': timestamp.toUtc().toIso8601String(),
+      'acc': _safeNonNegative(accuracyMeters),
     };
   }
 
   factory TripPoint.fromJson(Map<String, dynamic> json) {
-    final double lat = _readDouble(json['lat']);
-    final double lng = _readDouble(json['lng']);
-
     final DateTime parsedTime = _readDateTime(
       json['time'] ?? json['timestamp'] ?? json['ts'],
     );
 
     return TripPoint(
-      position: LatLng(lat, lng),
-      speedMph: _readDouble(
-        json['speed'] ?? json['spd'] ?? json['speedMph'] ?? json['speed_mph'],
+      position: LatLng(
+        _readDouble(json['lat'] ?? json['latitude']),
+        _readDouble(json['lng'] ?? json['lon'] ?? json['longitude']),
       ),
-      altitudeFt: _readDouble(
-        json['alt'] ??
-            json['altFt'] ??
-            json['altitudeFt'] ??
-            json['altitude_ft'],
+      speedMph: _safeNonNegative(
+        _readDouble(
+          json['speed'] ??
+              json['spd'] ??
+              json['speedMph'] ??
+              json['speed_mph'],
+        ),
+      ),
+      altitudeFt: _safeFinite(
+        _readDouble(
+          json['alt'] ??
+              json['altFt'] ??
+              json['altitudeFt'] ??
+              json['altitude_ft'],
+        ),
       ),
       timestamp: parsedTime,
-      accuracyMeters: _readDouble(
-        json['acc'] ??
-            json['accuracy'] ??
-            json['accuracyMeters'] ??
-            json['accuracy_m'],
+      accuracyMeters: _safeNonNegative(
+        _readDouble(
+          json['acc'] ??
+              json['accuracy'] ??
+              json['accuracyMeters'] ??
+              json['accuracy_m'],
+        ),
       ),
     );
   }
@@ -138,72 +145,74 @@ class TripSummary {
   final double distanceMiles;
   final List<TripPoint> points;
 
-  /// Cached formatters. These run only once per trip.
+  /// Cached formatters. These run only once per trip instance.
   late final String formattedTotalTime = _formatDuration(totalTime);
   late final String formattedStoppedTime = _formatDuration(stoppedTime);
   late final String formattedMovingTime = _formatDuration(effectiveMovingTime);
 
+  late final int routeQualityScore = _calculateRouteQuality(points);
+  late final String routeQualityLabel = _routeQualityLabel(routeQualityScore);
+
   int get pointCount => points.length;
 
   bool get hasRoute => points.length >= 2;
+
+  Duration get safeTotalTime => totalTime.isNegative ? Duration.zero : totalTime;
+
+  Duration get safeStoppedTime {
+    if (stoppedTime.isNegative) return Duration.zero;
+    if (stoppedTime > safeTotalTime) return safeTotalTime;
+    return stoppedTime;
+  }
 
   Duration get effectiveMovingTime {
     if (!movingTime.isNegative && movingTime > Duration.zero) {
       return movingTime;
     }
 
-    final Duration fallback = totalTime - stoppedTime;
+    final Duration fallback = safeTotalTime - safeStoppedTime;
     return fallback.isNegative ? Duration.zero : fallback;
   }
 
   double get stoppedRatio {
-    final int total = totalTime.inSeconds;
+    final int total = safeTotalTime.inSeconds;
     if (total <= 0) return 0.0;
 
-    final int stopped = stoppedTime.inSeconds.clamp(0, total);
+    final int stopped = safeStoppedTime.inSeconds.clamp(0, total).toInt();
     return stopped / total;
   }
 
-  int get routeQualityScore => _calculateRouteQuality(points);
-
-  String get routeQualityLabel {
-    final int score = routeQualityScore;
-    if (score >= 88) return 'Excellent';
-    if (score >= 72) return 'Good';
-    if (score >= 50) return 'Fair';
-    return 'Weak';
-  }
-
   Map<String, dynamic> toJson() {
+    final List<Map<String, dynamic>> pointJson = points
+        .map((TripPoint point) => point.toJson())
+        .toList(growable: false);
+
     return <String, dynamic>{
       'id': id,
       'date': date.millisecondsSinceEpoch,
-      'totalSec': _safeSeconds(totalTime),
-      'stopSec': _safeSeconds(stoppedTime),
+      'dateIso': date.toUtc().toIso8601String(),
+      'totalSec': _safeSeconds(safeTotalTime),
+      'stopSec': _safeSeconds(safeStoppedTime),
       'movSec': _safeSeconds(effectiveMovingTime),
-      'maxSpd': _safeDouble(maxSpeedMph),
-      'avgSpd': _safeDouble(avgSpeedMph),
-      'altGain': _safeDouble(altitudeGainFt),
-      'maxAlt': _safeDouble(maxAltitudeFt),
-      'minAlt': _safeDouble(minAltitudeFt),
-      'dist': _safeDouble(distanceMiles),
-      'pts': points
-          .map((TripPoint point) => point.toJson())
-          .toList(growable: false),
+      'maxSpd': _safeNonNegative(maxSpeedMph),
+      'avgSpd': _safeNonNegative(avgSpeedMph),
+      'altGain': _safeNonNegative(altitudeGainFt),
+      'maxAlt': _safeFinite(maxAltitudeFt),
+      'minAlt': _safeFinite(minAltitudeFt),
+      'dist': _safeNonNegative(distanceMiles),
+      'pts': pointJson,
 
       // Compatibility keys for Supabase/history code.
-      'totalTimeSeconds': _safeSeconds(totalTime),
-      'stoppedSeconds': _safeSeconds(stoppedTime),
+      'totalTimeSeconds': _safeSeconds(safeTotalTime),
+      'stoppedSeconds': _safeSeconds(safeStoppedTime),
       'movingSeconds': _safeSeconds(effectiveMovingTime),
-      'maxSpeedMph': _safeDouble(maxSpeedMph),
-      'avgSpeedMph': _safeDouble(avgSpeedMph),
-      'altitudeGainFt': _safeDouble(altitudeGainFt),
-      'maxAltitudeFt': _safeDouble(maxAltitudeFt),
-      'minAltitudeFt': _safeDouble(minAltitudeFt),
-      'distanceMiles': _safeDouble(distanceMiles),
-      'route_points': points
-          .map((TripPoint point) => point.toJson())
-          .toList(growable: false),
+      'maxSpeedMph': _safeNonNegative(maxSpeedMph),
+      'avgSpeedMph': _safeNonNegative(avgSpeedMph),
+      'altitudeGainFt': _safeNonNegative(altitudeGainFt),
+      'maxAltitudeFt': _safeFinite(maxAltitudeFt),
+      'minAltitudeFt': _safeFinite(minAltitudeFt),
+      'distanceMiles': _safeNonNegative(distanceMiles),
+      'route_points': pointJson,
       'routeQuality': routeQualityScore,
     };
   }
@@ -227,12 +236,14 @@ class TripSummary {
       movingTime: Duration(
         seconds: _readInt(json['movSec'] ?? json['movingSeconds']),
       ),
-      maxSpeedMph: _readDouble(json['maxSpd'] ?? json['maxSpeedMph']),
-      avgSpeedMph: _readDouble(json['avgSpd'] ?? json['avgSpeedMph']),
-      altitudeGainFt: _readDouble(json['altGain'] ?? json['altitudeGainFt']),
-      maxAltitudeFt: _readDouble(json['maxAlt'] ?? json['maxAltitudeFt']),
-      minAltitudeFt: _readDouble(json['minAlt'] ?? json['minAltitudeFt']),
-      distanceMiles: _readDouble(json['dist'] ?? json['distanceMiles']),
+      maxSpeedMph: _safeNonNegative(_readDouble(json['maxSpd'] ?? json['maxSpeedMph'])),
+      avgSpeedMph: _safeNonNegative(_readDouble(json['avgSpd'] ?? json['avgSpeedMph'])),
+      altitudeGainFt: _safeNonNegative(
+        _readDouble(json['altGain'] ?? json['altitudeGainFt']),
+      ),
+      maxAltitudeFt: _safeFinite(_readDouble(json['maxAlt'] ?? json['maxAltitudeFt'])),
+      minAltitudeFt: _safeFinite(_readDouble(json['minAlt'] ?? json['minAltitudeFt'])),
+      distanceMiles: _safeNonNegative(_readDouble(json['dist'] ?? json['distanceMiles'])),
       points: parsedPoints,
     );
   }
@@ -272,14 +283,8 @@ class TripSummary {
     final int m = safe.inMinutes.remainder(60);
     final int s = safe.inSeconds.remainder(60);
 
-    if (h > 0) {
-      return '${h}h ${m.toString().padLeft(2, '0')}m';
-    }
-
-    if (m > 0) {
-      return '${m}m ${s.toString().padLeft(2, '0')}s';
-    }
-
+    if (h > 0) return '${h}h ${m.toString().padLeft(2, '0')}m';
+    if (m > 0) return '${m}m ${s.toString().padLeft(2, '0')}s';
     return '${s}s';
   }
 
@@ -308,8 +313,8 @@ class TripSummary {
       final double lng = point.position.longitude;
       if (lastLat != null &&
           lastLng != null &&
-          lat == lastLat &&
-          lng == lastLng) {
+          (lat - lastLat).abs() < 0.0000001 &&
+          (lng - lastLng).abs() < 0.0000001) {
         duplicatePoints++;
       }
 
@@ -322,19 +327,35 @@ class TripSummary {
 
     if (points.length < 10) score -= 16;
     if (points.length < 5) score -= 20;
-    score -= (weakAccuracy * 4).clamp(0, 28);
-    score -= (duplicatePoints * 3).clamp(0, 18);
+    score -= (weakAccuracy * 4).clamp(0, 28).toInt();
+    score -= (duplicatePoints * 3).clamp(0, 18).toInt();
 
     if (avgAccuracy > 10.0) score -= 6;
     if (avgAccuracy > 20.0) score -= 10;
     if (avgAccuracy > 35.0) score -= 14;
 
-    return score.clamp(0, 100);
+    return score.clamp(0, 100).toInt();
+  }
+
+  static String _routeQualityLabel(int score) {
+    if (score >= 88) return 'Excellent';
+    if (score >= 72) return 'Good';
+    if (score >= 50) return 'Fair';
+    return 'Weak';
   }
 
   static int _safeSeconds(Duration duration) {
     return duration.isNegative ? 0 : duration.inSeconds;
   }
+}
+
+bool isValidLatLng(LatLng point) {
+  return point.latitude.isFinite &&
+      point.longitude.isFinite &&
+      point.latitude >= -90.0 &&
+      point.latitude <= 90.0 &&
+      point.longitude >= -180.0 &&
+      point.longitude <= 180.0;
 }
 
 double _readDouble(Object? value) {
@@ -344,7 +365,7 @@ double _readDouble(Object? value) {
   }
 
   if (value is String) {
-    final double? parsed = double.tryParse(value);
+    final double? parsed = double.tryParse(value.trim());
     return parsed != null && parsed.isFinite ? parsed : 0.0;
   }
 
@@ -354,7 +375,7 @@ double _readDouble(Object? value) {
 int _readInt(Object? value) {
   if (value is int) return value;
   if (value is num) return value.toInt();
-  if (value is String) return int.tryParse(value) ?? 0;
+  if (value is String) return int.tryParse(value.trim()) ?? 0;
   return 0;
 }
 
@@ -369,19 +390,29 @@ DateTime _readDateTime(Object? value) {
   }
 
   if (value is String) {
-    final int? millis = int.tryParse(value);
+    final String trimmed = value.trim();
+
+    final int? millis = int.tryParse(trimmed);
     if (millis != null && millis > 0) {
       return DateTime.fromMillisecondsSinceEpoch(millis);
     }
 
-    final DateTime? parsed = DateTime.tryParse(value);
+    final DateTime? parsed = DateTime.tryParse(trimmed);
     if (parsed != null) return parsed;
   }
 
   return DateTime.now();
 }
 
-double _safeDouble(double value) {
+double _safeFinite(double value) {
+  return value.isFinite ? value : 0.0;
+}
+
+double _safeNonNegative(double value) {
   if (!value.isFinite) return 0.0;
   return value < 0.0 ? 0.0 : value;
+}
+
+double _safeCoordinate(double value) {
+  return value.isFinite ? value : 0.0;
 }

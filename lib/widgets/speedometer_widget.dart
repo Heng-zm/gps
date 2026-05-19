@@ -93,7 +93,7 @@ class _SpeedReadout extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final int roundedSpeed = speed.round().clamp(0, 999);
+    final int roundedSpeed = speed.round().clamp(0, 999).toInt();
     final Color numberColor =
         isOverLimit ? const Color(0xFFFF453A) : Colors.white;
     final Color unitColor = isOverLimit

@@ -39,19 +39,26 @@ class AppSectionHeader extends StatelessWidget {
                   const SizedBox(height: 3),
                   Text(
                     subtitle!,
-                    maxLines: 1,
+                    maxLines: 2,
                     overflow: TextOverflow.ellipsis,
                     style: const TextStyle(
                       color: AppColors.white54,
                       fontSize: 11,
                       fontWeight: FontWeight.w700,
+                      height: 1.2,
                     ),
                   ),
                 ],
               ],
             ),
           ),
-          if (trailing != null) trailing!,
+          if (trailing != null) ...<Widget>[
+            const SizedBox(width: 10),
+            Flexible(
+              flex: 0,
+              child: trailing!,
+            ),
+          ],
         ],
       ),
     );

@@ -12,105 +12,215 @@ extension _MapScreenBottomPanel on _MapScreenState {
   Widget _buildBottomPanel(BuildContext context) {
     if (_route.isEmpty) return const SizedBox.shrink();
 
+    final MediaQueryData media = MediaQuery.of(context);
+    final double bottomInset = media.viewPadding.bottom;
+    final double horizontal = media.size.width < 390 ? 10.0 : 16.0;
+
     return MeasureSize(
       onChange: (Size size) => _bottomPanelHeight.value = size.height,
-      child: Padding(
-        padding: EdgeInsets.fromLTRB(
-          16,
+      child: SafeArea(
+        top: false,
+        minimum: EdgeInsets.fromLTRB(
+          horizontal,
           0,
-          16,
-          MediaQuery.of(context).padding.bottom + 10,
+          horizontal,
+          math.max(bottomInset, 8).toDouble() + 2,
         ),
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(24),
-          child: BackdropFilter(
-            filter: ui.ImageFilter.blur(sigmaX: 22, sigmaY: 22),
-            child: Container(
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                  colors: <Color>[
-                    _kSurface.withValues(alpha: 0.92),
-                    Colors.black.withValues(alpha: 0.88),
-                  ],
-                ),
-                borderRadius: BorderRadius.circular(24),
-                border: Border.all(
-                  color: Colors.white.withValues(alpha: 0.07),
-                ),
-                boxShadow: <BoxShadow>[
-                  BoxShadow(
-                    color: Colors.black.withValues(alpha: 0.6),
-                    blurRadius: 24,
-                    offset: const Offset(0, -10),
-                  ),
-                ],
-              ),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: <Widget>[
-                  // Drag handle
-                  GestureDetector(
-                    onTap: _togglePanel,
-                    child: Padding(
-                      padding: const EdgeInsets.only(top: 10, bottom: 4),
-                      child: AnimatedContainer(
-                        duration: const Duration(milliseconds: 200),
-                        width: _panelExpanded ? 36 : 48,
-                        height: 3.5,
-                        decoration: BoxDecoration(
-                          color: Colors.white.withValues(alpha: 0.2),
-                          borderRadius: BorderRadius.circular(2),
-                        ),
+        child: Align(
+          alignment: Alignment.bottomCenter,
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 720),
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onVerticalDragEnd: _handlePanelVerticalDragEnd,
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(_panelDockMode.isMini ? 26 : 24),
+                child: BackdropFilter(
+                  filter: ui.ImageFilter.blur(sigmaX: 22, sigmaY: 22),
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 280),
+                    curve: Curves.easeOutCubic,
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                        colors: <Color>[
+                          _kSurface.withValues(alpha: _panelDockMode.isMini ? 0.78 : 0.92),
+                          Colors.black.withValues(alpha: _panelDockMode.isMini ? 0.78 : 0.88),
+                        ],
                       ),
+                      borderRadius: BorderRadius.circular(_panelDockMode.isMini ? 26 : 24),
+                      border: Border.all(
+                        color: Colors.white.withValues(alpha: 0.07),
+                      ),
+                      boxShadow: <BoxShadow>[
+                        BoxShadow(
+                          color: Colors.black.withValues(alpha: 0.6),
+                          blurRadius: 24,
+                          offset: const Offset(0, -10),
+                        ),
+                      ],
+                    ),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: <Widget>[
+                        _buildDockHandle(),
+                        AnimatedSize(
+                          duration: const Duration(milliseconds: 320),
+                          curve: Curves.easeInOutCubic,
+                          child: _panelDockMode.isMini
+                              ? _buildMiniDock()
+                              : _panelDockMode.isCompact
+                                  ? _buildCompactDock()
+                                  : _buildExpandedDock(),
+                        ),
+                      ],
                     ),
                   ),
-                  AnimatedSize(
-                    duration: const Duration(milliseconds: 320),
-                    curve: Curves.easeInOutCubic,
-                    child: _panelExpanded
-                        ? Padding(
-                            padding: const EdgeInsets.fromLTRB(12, 4, 12, 12),
-                            child: Column(
-                              mainAxisSize: MainAxisSize.min,
-                              children: <Widget>[
-                                if (widget.isLive &&
-                                    _showChart &&
-                                    _route.speedSamples.isNotEmpty)
-                                  _buildMiniChart(),
-                                if (widget.isLive && _showSpeedGradient) ...<Widget>[
-                                  const SizedBox(height: 10),
-                                  _buildSpeedLegend(),
-                                  const SizedBox(height: 12),
-                                  Divider(
-                                    color: Colors.white.withValues(alpha: 0.06),
-                                    height: 1,
-                                  ),
-                                ],
-                                const SizedBox(height: 10),
-                                _buildCompactRouteSummaryCard(),
-                                if (_plannedRoute != null) ...<Widget>[
-                                  const SizedBox(height: 10),
-                                  _buildPlannedRouteSummaryCard(),
-                                ],
-                                if (!widget.isLive &&
-                                    _route.validPoints.length > 1) ...<Widget>[
-                                  const SizedBox(height: 10),
-                                  _buildReplayControls(),
-                                ],
-                                const SizedBox(height: 10),
-                                _buildActionRow(),
-                              ],
-                            ),
-                          )
-                        : const SizedBox.shrink(),
-                  ),
-                ],
+                ),
               ),
             ),
           ),
         ),
+      ),
+    );
+  }
+
+  Widget _buildDockHandle() {
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: _cyclePanelDockMode,
+      child: Padding(
+        padding: const EdgeInsets.only(top: 10, bottom: 4),
+        child: Column(
+          children: <Widget>[
+            AnimatedContainer(
+              duration: const Duration(milliseconds: 200),
+              width: _panelDockMode.isExpanded ? 36 : _panelDockMode.isCompact ? 48 : 58,
+              height: 3.5,
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: _panelDockMode.isMini ? 0.36 : 0.2),
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            const SizedBox(height: 5),
+            Text(
+              _panelDockMode.isMini
+                  ? 'SLIDE UP FOR CONTROLS'
+                  : _panelDockMode.isCompact
+                      ? 'SLIDE UP FOR FULL · DOWN FOR MINI'
+                      : 'SLIDE DOWN TO COMPACT',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: Colors.white.withValues(alpha: 0.38),
+                fontSize: 8,
+                fontWeight: FontWeight.w900,
+                letterSpacing: 1.15,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildMiniDock() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(10, 4, 10, 10),
+      child: Row(
+        mainAxisSize: MainAxisSize.max,
+        children: <Widget>[
+          Expanded(
+            child: _MiniDockStat(
+              label: 'DIST',
+              value: _formatDistance(_route.distanceKm),
+              color: _kBlueSoft,
+            ),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: ValueListenableBuilder<double>(
+              valueListenable: _hudSpeed,
+              builder: (_, double speed, __) {
+                return _MiniDockStat(
+                  label: widget.isLive ? 'LIVE' : 'REPLAY',
+                  value: '${speed.toStringAsFixed(0)} km/h',
+                  color: _speedColor(speed),
+                );
+              },
+            ),
+          ),
+          const SizedBox(width: 8),
+          _PressableButton(
+            onTap: () => _setPanelDockMode(_PanelDockMode.expanded),
+            child: Container(
+              width: 44,
+              height: 44,
+              decoration: BoxDecoration(
+                gradient: _kBlueGlassGradient,
+                borderRadius: BorderRadius.circular(16),
+              ),
+              child: const Icon(
+                CupertinoIcons.chevron_up,
+                color: Colors.white,
+                size: 18,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildCompactDock() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 4, 12, 12),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: <Widget>[
+          _buildCompactRouteSummaryCard(),
+          if (!widget.isLive && _route.validPoints.length > 1) ...<Widget>[
+            const SizedBox(height: 10),
+            _buildReplayControls(),
+          ],
+          const SizedBox(height: 10),
+          _buildActionRow(),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildExpandedDock() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 4, 12, 12),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: <Widget>[
+          if (widget.isLive && _showChart && _route.speedSamples.isNotEmpty)
+            _buildMiniChart(),
+          if (widget.isLive && _showSpeedGradient) ...<Widget>[
+            const SizedBox(height: 10),
+            _buildSpeedLegend(),
+            const SizedBox(height: 12),
+            Divider(
+              color: Colors.white.withValues(alpha: 0.06),
+              height: 1,
+            ),
+          ],
+          const SizedBox(height: 10),
+          _buildCompactRouteSummaryCard(),
+          if (_plannedRoute != null) ...<Widget>[
+            const SizedBox(height: 10),
+            _buildPlannedRouteSummaryCard(),
+          ],
+          if (!widget.isLive && _route.validPoints.length > 1) ...<Widget>[
+            const SizedBox(height: 10),
+            _buildReplayControls(),
+          ],
+          const SizedBox(height: 10),
+          _buildActionRow(),
+        ],
       ),
     );
   }
@@ -360,39 +470,46 @@ extension _MapScreenBottomPanel on _MapScreenState {
               // Chart with scrub gesture
               SizedBox(
                 height: 76,
-                child: ValueListenableBuilder<int>(
-                  valueListenable: _chartScrubIndex,
-                  builder: (_, int scrubIdx, __) {
-                    return GestureDetector(
-                      onHorizontalDragUpdate: (DragUpdateDetails details) {
-                        final RenderBox? box =
-                            context.findRenderObject() as RenderBox?;
-                        if (box == null) return;
-                        final double localX =
-                            details.localPosition.dx.clamp(0.0, box.size.width);
-                        final int idx =
-                            ((localX / box.size.width) * (samples.length - 1))
+                child: LayoutBuilder(
+                  builder: (BuildContext context, BoxConstraints constraints) {
+                    final double chartWidth = math.max(1.0, constraints.maxWidth);
+
+                    return ValueListenableBuilder<int>(
+                      valueListenable: _chartScrubIndex,
+                      builder: (_, int scrubIdx, __) {
+                        return GestureDetector(
+                          behavior: HitTestBehavior.opaque,
+                          onHorizontalDragUpdate: (DragUpdateDetails details) {
+                            if (samples.isEmpty) return;
+                            final double localX = details.localPosition.dx
+                                .clamp(0.0, chartWidth)
+                                .toDouble();
+                            final int idx = ((localX / chartWidth) *
+                                    (samples.length - 1))
                                 .round()
-                                .clamp(0, samples.length - 1);
-                        _chartScrubIndex.value = idx;
-                      },
-                      onHorizontalDragEnd: (_) {
-                        Future<void>.delayed(
-                          const Duration(milliseconds: 1500),
-                          () {
-                            if (mounted) _chartScrubIndex.value = -1;
+                                .clamp(0, samples.length - 1)
+                                .toInt();
+                            _chartScrubIndex.value = idx;
                           },
+                          onHorizontalDragEnd: (_) {
+                            Future<void>.delayed(
+                              const Duration(milliseconds: 1200),
+                              () {
+                                if (mounted) _chartScrubIndex.value = -1;
+                              },
+                            );
+                          },
+                          child: CustomPaint(
+                            size: Size.infinite,
+                            painter: _MiniChartPainter(
+                              samples: samples,
+                              color: chartColor,
+                              useSpeedColors: _chartMode == _ChartMode.speed,
+                              scrubIndex: scrubIdx,
+                            ),
+                          ),
                         );
                       },
-                      child: CustomPaint(
-                        size: const Size(double.infinity, 76),
-                        painter: _MiniChartPainter(
-                          samples: samples,
-                          color: chartColor,
-                          useSpeedColors: _chartMode == _ChartMode.speed,
-                          scrubIndex: scrubIdx,
-                        ),
-                      ),
                     );
                   },
                 ),
@@ -413,9 +530,9 @@ extension _MapScreenBottomPanel on _MapScreenState {
     const List<({Color color, String label})> items =
         <({Color color, String label})>[
       (color: _kBlueSoft, label: '<15'),
-      (color: _kGreen, label: '15–40'),
-      (color: _kBlue, label: '40–70'),
-      (color: _kBlueSoft, label: '70–100'),
+      (color: _kBlue, label: '15–40'),
+      (color: Colors.white, label: '40–70'),
+      (color: _kBlueDeep, label: '70–100'),
       (color: _kRed, label: '100+'),
     ];
 
@@ -504,7 +621,7 @@ class _MiniChartPainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     if (samples.isEmpty || size.width <= 0 || size.height <= 0) return;
 
-    final double maxVal = samples.reduce(math.max).clamp(1.0, double.infinity);
+    final double maxVal = samples.reduce(math.max).clamp(1.0, double.infinity).toDouble();
     final double w = size.width;
     final double h = size.height - 4;
     final int len = samples.length;
@@ -593,7 +710,7 @@ class _MiniChartPainter extends CustomPainter {
 
     // Speed dots
     if (useSpeedColors && len > 4) {
-      final int step = (len / 12).ceil().clamp(1, len);
+      final int step = (len / 12).ceil().clamp(1, len).toInt();
       final Paint dotPaint = Paint()..style = PaintingStyle.fill;
       for (int i = 0; i < pts.length; i += step) {
         dotPaint.color = _speedColor(samples[i]);
@@ -644,3 +761,78 @@ class _MiniChartPainter extends CustomPainter {
   }
 }
 
+
+
+class _MiniDockStat extends StatelessWidget {
+  const _MiniDockStat({
+    required this.label,
+    required this.value,
+    required this.color,
+  });
+
+  final String label;
+  final String value;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      height: 44,
+      padding: const EdgeInsets.symmetric(horizontal: 10),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.04),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: color.withValues(alpha: 0.16)),
+      ),
+      child: Row(
+        children: <Widget>[
+          Container(
+            width: 7,
+            height: 7,
+            decoration: BoxDecoration(
+              color: color,
+              shape: BoxShape.circle,
+              boxShadow: <BoxShadow>[
+                BoxShadow(
+                  color: color.withValues(alpha: 0.42),
+                  blurRadius: 8,
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 7),
+          Expanded(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                Text(
+                  label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: Colors.white.withValues(alpha: 0.42),
+                    fontSize: 8,
+                    fontWeight: FontWeight.w900,
+                    letterSpacing: 0.9,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  value,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}

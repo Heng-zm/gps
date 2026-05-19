@@ -10,10 +10,6 @@ part of 'map_screen.dart';
 // NATIVE MAPBOX LAYER — Android/mobile only. Web uses flutter_map fallback.
 // ─────────────────────────────────────────────────────────────────────────────
 
-<<<<<<< HEAD
-=======
-
->>>>>>> d655b8fc8c832b4beadc44ea05c83d7603c5dc24
 int _mapColorToInt(Color color) => color.value;
 
 class _NativeMapboxLayer extends StatefulWidget {
@@ -95,12 +91,8 @@ class _NativeMapboxLayerState extends State<_NativeMapboxLayer> {
           pulsingMaxRadius: 46,
           showAccuracyRing: widget.isLive,
           accuracyRingColor: _mapColorToInt(_kBlue.withValues(alpha: 0.18)),
-<<<<<<< HEAD
           accuracyRingBorderColor:
               _mapColorToInt(_kBlue.withValues(alpha: 0.42)),
-=======
-          accuracyRingBorderColor: _mapColorToInt(_kBlue.withValues(alpha: 0.42)),
->>>>>>> d655b8fc8c832b4beadc44ea05c83d7603c5dc24
         ),
       );
     } catch (error) {
@@ -187,7 +179,7 @@ class _NativeMapboxLayerState extends State<_NativeMapboxLayer> {
           outer: _plannedOuterManager,
           core: _plannedCoreManager,
           points: planned.points,
-          color: _kBlue,
+          color: widget.mapStyle.routeColor,
           outerWidth: 11,
           coreWidth: 5.2,
         );
@@ -198,7 +190,7 @@ class _NativeMapboxLayerState extends State<_NativeMapboxLayer> {
           outer: _routeOuterManager,
           core: _routeCoreManager,
           points: widget.route.smoothedPoints,
-          color: const Color(0xFF3B22FF),
+          color: widget.mapStyle.routeColor,
           outerWidth: 13,
           coreWidth: 6.5,
         );
@@ -276,11 +268,22 @@ class _NativeMapboxLayerState extends State<_NativeMapboxLayer> {
 
   LatLng? _positionAtReplayIndex(int index) {
     if (widget.route.validPoints.isEmpty) return null;
-    final int safeIndex = index.clamp(0, widget.route.validPoints.length - 1);
+    final int safeIndex = index.clamp(0, widget.route.validPoints.length - 1).toInt();
     return widget.route.validPoints[safeIndex].position;
   }
 
   static String _styleUri(MapStyle style) => style.styleUri;
+
+
+  @override
+  void dispose() {
+    unawaited(_plannedOuterManager?.deleteAll() ?? Future<void>.value());
+    unawaited(_plannedCoreManager?.deleteAll() ?? Future<void>.value());
+    unawaited(_routeOuterManager?.deleteAll() ?? Future<void>.value());
+    unawaited(_routeCoreManager?.deleteAll() ?? Future<void>.value());
+    _map = null;
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {

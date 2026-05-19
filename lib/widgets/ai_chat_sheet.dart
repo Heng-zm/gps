@@ -1,6 +1,7 @@
 // ignore_for_file: unused_element
 
 import 'dart:async';
+import 'dart:math' as math;
 import 'dart:ui' as ui;
 
 import 'package:flutter/cupertino.dart';
@@ -229,7 +230,11 @@ class _AiChatSheetState extends State<AiChatSheet> {
   Widget build(BuildContext context) {
     final MediaQueryData media = MediaQuery.of(context);
     final double bottomInset = media.viewInsets.bottom;
-    final double height = (media.size.height * 0.90).clamp(540.0, 780.0);
+    final double maxSheetHeight = media.size.height * 0.95;
+    final double minSheetHeight = math.min(420.0, maxSheetHeight);
+    final double height = (media.size.height * 0.90)
+        .clamp(minSheetHeight, math.min(780.0, maxSheetHeight))
+        .toDouble();
 
     return AnimatedPadding(
       duration: const Duration(milliseconds: 240),
