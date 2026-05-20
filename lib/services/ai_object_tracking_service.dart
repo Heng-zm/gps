@@ -3,17 +3,16 @@ import 'dart:math' as math;
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 
-/// Dependency-free v1 object tracking service for AR camera.
+/// Lightweight AI object tracking + risk scoring service for AR camera.
 ///
-/// What it does now:
-/// - tap-to-lock screen point
-/// - lightweight optical-flow-style drift prediction
-/// - object box growth simulation based on user speed + motion
-/// - relative speed/risk estimate
+/// v1 is dependency-free and compile-safe:
+/// - tap-to-lock object box
+/// - optical-flow-style box growth estimate
+/// - relative speed estimate
+/// - risk score 0..100
 ///
-/// TFLite hook:
-/// Later, replace [lockAtScreenPoint] with detector output from a
-/// YOLO/MobileNet/SSD model and feed detections into [updateFromDetection].
+/// Future TFLite hook:
+/// feed YOLO/MobileNet/SSD detections into [updateFromDetection].
 class AiObjectTrackingService {
   AiObjectTrackingService();
 
@@ -24,6 +23,7 @@ class AiObjectTrackingService {
   double _boxScale = 1.0;
   double _relativeSpeedKmh = 0.0;
   int _stableTicks = 0;
+  double _lastArea = 0.0;
 
   bool get hasLock => trackedObjectN.value != null;
 
@@ -38,6 +38,18 @@ class AiObjectTrackingService {
     _boxScale = 1.0;
     _relativeSpeedKmh = math.max(0.0, userSpeedKmh * 0.35);
     _stableTicks = 0;
+    _lastArea = 0.28 * 0.22;
+
+    final int score = _riskScoreFor(
+      userSpeedKmh: userSpeedKmh,
+      relativeSpeedKmh: _relativeSpeedKmh,
+      boxArea: _lastArea,
+      areaDelta: 0.0,
+      confidence: 0.72,
+      motionScore: 0.0,
+      gpsAccuracyMeters: 12.0,
+      trend: AiObjectTrend.tracking,
+    );
 
     trackedObjectN.value = AiTrackedObject(
       id: 'tap-lock',
@@ -46,7 +58,8 @@ class AiObjectTrackingService {
       normalizedSize: const Size(0.28, 0.22),
       estimatedSpeedKmh: _relativeSpeedKmh,
       confidence: 0.72,
-      risk: AiObjectRisk.low,
+      riskScore: score,
+      risk: _objectRiskFromScore(score),
       trend: AiObjectTrend.tracking,
       updatedAt: timestamp,
     );
@@ -59,8 +72,9 @@ class AiObjectTrackingService {
     required double confidence,
     required double userSpeedKmh,
     required DateTime timestamp,
+    double gpsAccuracyMeters = 12.0,
+    double motionScore = 0.0,
   }) {
-    final Offset center = normalizedBox.center;
     final AiTrackedObject? current = trackedObjectN.value;
     final double previousArea = current == null
         ? normalizedBox.width * normalizedBox.height
@@ -71,24 +85,32 @@ class AiObjectTrackingService {
     _relativeSpeedKmh = _estimateRelativeSpeed(
       userSpeedKmh: userSpeedKmh,
       areaDelta: areaDelta,
-      motionScore: 0.0,
+      motionScore: motionScore,
     );
 
     final AiObjectTrend trend = _trendFor(areaDelta, _relativeSpeedKmh);
-    final AiObjectRisk risk = _riskFor(
-      speedKmh: _relativeSpeedKmh,
+    final int score = _riskScoreFor(
+      userSpeedKmh: userSpeedKmh,
+      relativeSpeedKmh: _relativeSpeedKmh,
+      boxArea: nextArea,
+      areaDelta: areaDelta,
       confidence: confidence,
+      motionScore: motionScore,
+      gpsAccuracyMeters: gpsAccuracyMeters,
       trend: trend,
     );
+
+    _lastArea = nextArea;
     _lastTimestamp = timestamp;
     trackedObjectN.value = AiTrackedObject(
       id: 'detected-$label',
-      label: label,
-      normalizedCenter: center,
+      label: label.trim().isEmpty ? 'Object' : label.trim(),
+      normalizedCenter: normalizedBox.center,
       normalizedSize: normalizedBox.size,
       estimatedSpeedKmh: _relativeSpeedKmh,
       confidence: confidence.clamp(0.0, 1.0).toDouble(),
-      risk: risk,
+      riskScore: score,
+      risk: _objectRiskFromScore(score),
       trend: trend,
       updatedAt: timestamp,
     );
@@ -157,21 +179,29 @@ class AiObjectTrackingService {
             0.004 -
             accuracyPenalty * 0.05 -
             motionPenalty * 0.08)
-        .clamp(0.36, 0.92)
+        .clamp(0.36, 0.94)
         .toDouble();
     final AiObjectTrend trend = _trendFor(areaDelta, _relativeSpeedKmh);
-    final AiObjectRisk risk = _riskFor(
-      speedKmh: _relativeSpeedKmh,
+    final int score = _riskScoreFor(
+      userSpeedKmh: userSpeedKmh,
+      relativeSpeedKmh: _relativeSpeedKmh,
+      boxArea: newArea,
+      areaDelta: areaDelta,
       confidence: confidence,
+      motionScore: motionScore,
+      gpsAccuracyMeters: gpsAccuracyMeters,
       trend: trend,
     );
+
+    _lastArea = newArea;
     _lastTimestamp = timestamp;
     trackedObjectN.value = current.copyWith(
       normalizedCenter: center,
       normalizedSize: size,
       estimatedSpeedKmh: _relativeSpeedKmh,
       confidence: confidence,
-      risk: risk,
+      riskScore: score,
+      risk: _objectRiskFromScore(score),
       trend: trend,
       updatedAt: timestamp,
     );
@@ -182,6 +212,7 @@ class AiObjectTrackingService {
     _boxScale = 1.0;
     _relativeSpeedKmh = 0.0;
     _stableTicks = 0;
+    _lastArea = 0.0;
     trackedObjectN.value = null;
   }
 
@@ -208,23 +239,40 @@ class AiObjectTrackingService {
   }
 
   AiObjectTrend _trendFor(double areaDelta, double speedKmh) {
-    if (areaDelta > 0.0025 || speedKmh >= 35.0) return AiObjectTrend.closing;
+    if (areaDelta > 0.0025 || speedKmh >= 35.0) {
+      return AiObjectTrend.closing;
+    }
     if (areaDelta < -0.0025) return AiObjectTrend.movingAway;
     if (_stableTicks > 6) return AiObjectTrend.stable;
     return AiObjectTrend.tracking;
   }
 
-  AiObjectRisk _riskFor({
-    required double speedKmh,
+  int _riskScoreFor({
+    required double userSpeedKmh,
+    required double relativeSpeedKmh,
+    required double boxArea,
+    required double areaDelta,
     required double confidence,
+    required double motionScore,
+    required double gpsAccuracyMeters,
     required AiObjectTrend trend,
   }) {
-    if (confidence < 0.42) return AiObjectRisk.unknown;
-    if (trend == AiObjectTrend.closing && speedKmh >= 45.0)
-      return AiObjectRisk.high;
-    if (trend == AiObjectTrend.closing || speedKmh >= 28.0)
-      return AiObjectRisk.medium;
-    return AiObjectRisk.low;
+    double score = 8.0;
+
+    score += (userSpeedKmh / 90.0).clamp(0.0, 1.0) * 22.0;
+    score += (relativeSpeedKmh / 80.0).clamp(0.0, 1.0) * 26.0;
+    score += (boxArea / 0.18).clamp(0.0, 1.0) * 18.0;
+    if (areaDelta > 0) score += (areaDelta / 0.012).clamp(0.0, 1.0) * 18.0;
+    score += (motionScore / 8.0).clamp(0.0, 1.0) * 8.0;
+    score += (gpsAccuracyMeters / 60.0).clamp(0.0, 1.0) * 6.0;
+
+    if (trend == AiObjectTrend.closing) score += 14.0;
+    if (trend == AiObjectTrend.movingAway) score -= 12.0;
+    if (trend == AiObjectTrend.stable) score -= 6.0;
+    if (confidence < 0.48) score += 8.0;
+    if (confidence > 0.80) score -= 4.0;
+
+    return score.round().clamp(0, 100).toInt();
   }
 
   double _smooth(double oldValue, double newValue, double alpha) {
@@ -233,6 +281,15 @@ class AiObjectTrackingService {
 }
 
 enum AiObjectRisk { low, medium, high, unknown }
+
+AiObjectRisk _objectRiskFromScore(int score) {
+  final int safeScore = score.clamp(0, 100).toInt();
+
+  if (safeScore >= 75) return AiObjectRisk.high;
+  if (safeScore >= 40) return AiObjectRisk.medium;
+  if (safeScore >= 0) return AiObjectRisk.low;
+  return AiObjectRisk.unknown;
+}
 
 extension AiObjectRiskX on AiObjectRisk {
   Color get color {
@@ -285,6 +342,7 @@ class AiTrackedObject {
     required this.normalizedSize,
     required this.estimatedSpeedKmh,
     required this.confidence,
+    required this.riskScore,
     required this.risk,
     required this.trend,
     required this.updatedAt,
@@ -296,14 +354,17 @@ class AiTrackedObject {
   final Size normalizedSize;
   final double estimatedSpeedKmh;
   final double confidence;
+  final int riskScore;
   final AiObjectRisk risk;
   final AiObjectTrend trend;
   final DateTime updatedAt;
 
   String get speedLabel {
     if (confidence < 0.45) return 'Tracking...';
-    return '~$estimatedSpeedKmh km/h';
+    return '~${estimatedSpeedKmh.round()} km/h';
   }
+
+  String get riskLabel => 'Risk $riskScore%';
 
   String get advice {
     switch (trend) {
@@ -347,6 +408,7 @@ class AiTrackedObject {
     Size? normalizedSize,
     double? estimatedSpeedKmh,
     double? confidence,
+    int? riskScore,
     AiObjectRisk? risk,
     AiObjectTrend? trend,
     DateTime? updatedAt,
@@ -358,6 +420,7 @@ class AiTrackedObject {
       normalizedSize: normalizedSize ?? this.normalizedSize,
       estimatedSpeedKmh: estimatedSpeedKmh ?? this.estimatedSpeedKmh,
       confidence: confidence ?? this.confidence,
+      riskScore: riskScore ?? this.riskScore,
       risk: risk ?? this.risk,
       trend: trend ?? this.trend,
       updatedAt: updatedAt ?? this.updatedAt,

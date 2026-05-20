@@ -13,6 +13,8 @@ import 'package:sensors_plus/sensors_plus.dart';
 import '../../models/mapbox_route_models.dart';
 import '../../services/settings_service.dart';
 import '../../services/ai_object_tracking_service.dart';
+import '../../services/ai_road_condition_service.dart';
+import '../../services/ai_tracking_brain_service.dart';
 import '../../theme/app_theme.dart';
 
 const Color _kArBlue = AppColors.blue;
@@ -148,7 +150,17 @@ class _TrackingArCameraScreenState extends State<TrackingArCameraScreen>
       AiObjectTrackingService();
   late final ValueNotifier<AiTrackedObject?> _trackedObjectN =
       _objectTrackingService.trackedObjectN;
+  late final AiRoadConditionService _roadConditionService =
+      AiRoadConditionService();
+  late final ValueNotifier<AiRoadConditionSnapshot> _roadConditionN =
+      _roadConditionService.roadConditionN;
+  late final AiTrackingBrainService _trackingBrainService =
+      const AiTrackingBrainService();
+  final ValueNotifier<AiTrackingBrainResult> _aiGuardN =
+      ValueNotifier<AiTrackingBrainResult>(AiTrackingBrainResult.idle());
   Timer? _objectTrackingTimer;
+  DateTime? _lastAiBrainAt;
+  DateTime? _lastAiGuardHapticAt;
 
   late final Listenable _overlayListenable = Listenable.merge(<Listenable>[
     widget.speedN,
@@ -162,6 +174,8 @@ class _TrackingArCameraScreenState extends State<TrackingArCameraScreen>
     widget.plannedRouteN,
     _motionStabilityN,
     _trackedObjectN,
+    _roadConditionN,
+    _aiGuardN,
   ]);
 
   @override
@@ -195,6 +209,8 @@ class _TrackingArCameraScreenState extends State<TrackingArCameraScreen>
     _motionStabilityN.dispose();
     _objectTrackingTimer?.cancel();
     _objectTrackingService.dispose();
+    _roadConditionService.dispose();
+    _aiGuardN.dispose();
 
     final CameraController? controller = _cameraController;
     if (controller != null) {
@@ -230,6 +246,7 @@ class _TrackingArCameraScreenState extends State<TrackingArCameraScreen>
       motionScore: _motionEma,
       timestamp: DateTime.now(),
     );
+    _refreshAiGuard();
   }
 
   void _handleObjectTrackingTap(TapDownDetails details) {
@@ -243,11 +260,13 @@ class _TrackingArCameraScreenState extends State<TrackingArCameraScreen>
       userSpeedKmh: widget.settings.toDisplaySpeed(widget.speedN.value),
       timestamp: DateTime.now(),
     );
+    _refreshAiGuard(force: true);
   }
 
   void _clearObjectTracking() {
     HapticFeedback.lightImpact();
     _objectTrackingService.clearLock();
+    _refreshAiGuard(force: true);
   }
 
   void _initMotionSensor() {
@@ -296,8 +315,58 @@ class _TrackingArCameraScreenState extends State<TrackingArCameraScreen>
       next = _ArMotionStability.steady;
     }
 
+    _roadConditionService.updateAccelerometer(
+      x: event.x,
+      y: event.y,
+      z: event.z,
+      userSpeedKmh: widget.settings.toDisplaySpeed(widget.speedN.value),
+      timestamp: now,
+    );
+
     if (_motionStabilityN.value != next) {
       _motionStabilityN.value = next;
+    }
+    _refreshAiGuard();
+  }
+
+  void _refreshAiGuard({bool force = false}) {
+    if (!mounted) return;
+
+    final DateTime now = DateTime.now();
+    final DateTime? last = _lastAiBrainAt;
+    if (!force &&
+        last != null &&
+        now.difference(last) < const Duration(milliseconds: 360)) {
+      return;
+    }
+    _lastAiBrainAt = now;
+
+    final BatteryState? batteryState = widget.batteryStateN.value;
+    final bool isCharging = batteryState == BatteryState.charging ||
+        batteryState == BatteryState.full;
+
+    final AiTrackingBrainResult next = _trackingBrainService.evaluate(
+      speedKmh: widget.settings.toDisplaySpeed(widget.speedN.value),
+      gpsAccuracyMeters: widget.accuracyN.value,
+      batteryPercent: widget.batteryN.value,
+      isCharging: isCharging,
+      motionScore: _motionEma,
+      hasRoute: (widget.plannedRouteN.value?.points.length ?? 0) >= 2,
+      object: _trackedObjectN.value,
+      road: _roadConditionN.value,
+    );
+
+    final AiTrackingBrainResult old = _aiGuardN.value;
+    if (next.materiallyDiffers(old)) {
+      _aiGuardN.value = next;
+      if (next.shouldVibrate) {
+        final DateTime? lastHaptic = _lastAiGuardHapticAt;
+        if (lastHaptic == null ||
+            now.difference(lastHaptic) > const Duration(seconds: 4)) {
+          _lastAiGuardHapticAt = now;
+          HapticFeedback.mediumImpact();
+        }
+      }
     }
   }
 
@@ -462,6 +531,17 @@ class _TrackingArCameraScreenState extends State<TrackingArCameraScreen>
                   },
                 ),
               ),
+              Positioned(
+                left: 16,
+                right: 16,
+                top: MediaQuery.paddingOf(context).top + 118,
+                child: ValueListenableBuilder<AiTrackingBrainResult>(
+                  valueListenable: _aiGuardN,
+                  builder: (_, AiTrackingBrainResult result, __) {
+                    return _ArAiGuardBanner(result: result);
+                  },
+                ),
+              ),
             ],
           ),
         ),
@@ -512,6 +592,101 @@ class _TrackingArCameraScreenState extends State<TrackingArCameraScreen>
   }
 }
 
+class _ArAiGuardBanner extends StatelessWidget {
+  const _ArAiGuardBanner({required this.result});
+
+  final AiTrackingBrainResult result;
+
+  @override
+  Widget build(BuildContext context) {
+    return IgnorePointer(
+      child: AnimatedSwitcher(
+        duration: const Duration(milliseconds: 180),
+        child: ClipRRect(
+          key: ValueKey<String>('ai-guard-${result.title}-${result.score}'),
+          borderRadius: BorderRadius.circular(20),
+          child: BackdropFilter(
+            filter: ui.ImageFilter.blur(sigmaX: 16, sigmaY: 16),
+            child: Container(
+              padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+              decoration: BoxDecoration(
+                color: Colors.black.withValues(alpha: 0.58),
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(color: result.color.withValues(alpha: 0.28)),
+                boxShadow: <BoxShadow>[
+                  BoxShadow(
+                    color: result.color.withValues(alpha: 0.12),
+                    blurRadius: 18,
+                    offset: const Offset(0, 8),
+                  ),
+                ],
+              ),
+              child: Row(
+                children: <Widget>[
+                  Container(
+                    width: 34,
+                    height: 34,
+                    decoration: BoxDecoration(
+                      color: result.color.withValues(alpha: 0.14),
+                      borderRadius: BorderRadius.circular(13),
+                      border: Border.all(
+                        color: result.color.withValues(alpha: 0.22),
+                      ),
+                    ),
+                    child: Icon(result.icon, color: result.color, size: 17),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: <Widget>[
+                        Text(
+                          result.title,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 12.5,
+                            fontWeight: FontWeight.w900,
+                            decoration: TextDecoration.none,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          result.subtitle,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: Colors.white60,
+                            fontSize: 10.5,
+                            fontWeight: FontWeight.w700,
+                            decoration: TextDecoration.none,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    '${result.score}%',
+                    style: TextStyle(
+                      color: result.color,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w900,
+                      decoration: TextDecoration.none,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _ArObjectTrackingOverlay extends StatelessWidget {
   const _ArObjectTrackingOverlay({
     required this.tracked,
@@ -542,8 +717,10 @@ class _ArObjectTrackingOverlay extends StatelessWidget {
 
     final Rect box = object.screenBoxFor(size);
     final Color riskColor = object.risk.color;
-    final double labelLeft = box.left.clamp(12.0, size.width - 184.0).toDouble();
-    final double labelTop = (box.top - 44).clamp(82.0, size.height - 156.0).toDouble();
+    final double labelLeft =
+        box.left.clamp(12.0, size.width - 184.0).toDouble();
+    final double labelTop =
+        (box.top - 44).clamp(82.0, size.height - 156.0).toDouble();
 
     return Stack(
       children: <Widget>[
@@ -655,7 +832,8 @@ class _ArObjectSpeedLabel extends StatelessWidget {
               Row(
                 mainAxisSize: MainAxisSize.min,
                 children: <Widget>[
-                  Icon(CupertinoIcons.viewfinder_circle_fill, color: color, size: 14),
+                  Icon(CupertinoIcons.viewfinder_circle_fill,
+                      color: color, size: 14),
                   const SizedBox(width: 6),
                   Flexible(
                     child: Text(
@@ -674,7 +852,7 @@ class _ArObjectSpeedLabel extends StatelessWidget {
               ),
               const SizedBox(height: 4),
               Text(
-                object.speedLabel,
+                '${object.speedLabel} · ${object.riskLabel}',
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 style: TextStyle(
