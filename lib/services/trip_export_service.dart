@@ -1,30 +1,25 @@
 import 'dart:convert';
-import 'dart:io';
+import 'dart:typed_data';
 
-import 'package:flutter/foundation.dart' show kIsWeb;
-import 'package:path_provider/path_provider.dart';
+import 'package:flutter/widgets.dart';
 import 'package:share_plus/share_plus.dart';
 
 import '../models/trip_data.dart';
 
-/// Real file export service for GPX / CSV / KML.
+/// Real file export/share service for GPX / CSV / KML / JSON / TXT.
 ///
-/// Requires pubspec.yaml:
-///
-/// dependencies:
-///   path_provider: ^2.1.5
-///   share_plus: ^10.1.4
-///
-/// Mobile/Desktop writes files to temporary storage and opens the share sheet.
-/// Web uses XFile.fromData when the browser supports Web Share.
+/// Uses the current `share_plus` API:
+/// `SharePlus.instance.share(ShareParams(...))`.
 class TripExportService {
   const TripExportService._();
 
+  /// Shares the standard trip export bundle used by SummaryScreen.
   static Future<TripExportResult> shareTripFiles({
     required String tripId,
     required DateTime date,
     required List<TripPoint> points,
     String appName = 'TrackPro AI',
+    BuildContext? context,
   }) async {
     final List<TripPoint> valid = _validPoints(points);
 
@@ -43,77 +38,38 @@ class TripExportService {
     final String title =
         '$appName Trip ${tripId.isEmpty ? date.millisecondsSinceEpoch : tripId}';
 
-    final String gpx = buildGpx(
-      name: title,
-      date: date,
-      points: valid,
-      creator: appName,
-    );
-
-    final String csv = buildCsv(points: valid);
-
-    final String kml = buildKml(
-      name: title,
-      points: valid,
-    );
+    final List<XFile> files = <XFile>[
+      _xFileFromText(
+        name: '$safeName.gpx',
+        mimeType: 'application/gpx+xml',
+        content: buildGpx(
+          name: title,
+          date: date,
+          points: valid,
+          creator: appName,
+        ),
+      ),
+      _xFileFromText(
+        name: '$safeName.csv',
+        mimeType: 'text/csv',
+        content: buildCsv(points: valid),
+      ),
+      _xFileFromText(
+        name: '$safeName.kml',
+        mimeType: 'application/vnd.google-earth.kml+xml',
+        content: buildKml(name: title, points: valid),
+      ),
+    ];
 
     try {
-      final List<XFile> files = <XFile>[];
-
-      if (kIsWeb) {
-        files.addAll(<XFile>[
-          XFile.fromData(
-            utf8.encode(gpx),
-            name: '$safeName.gpx',
-            mimeType: 'application/gpx+xml',
-          ),
-          XFile.fromData(
-            utf8.encode(csv),
-            name: '$safeName.csv',
-            mimeType: 'text/csv',
-          ),
-          XFile.fromData(
-            utf8.encode(kml),
-            name: '$safeName.kml',
-            mimeType: 'application/vnd.google-earth.kml+xml',
-          ),
-        ]);
-      } else {
-        final Directory dir = await getTemporaryDirectory();
-
-        final File gpxFile = File('${dir.path}/$safeName.gpx');
-        final File csvFile = File('${dir.path}/$safeName.csv');
-        final File kmlFile = File('${dir.path}/$safeName.kml');
-
-        await Future.wait<void>(<Future<void>>[
-          gpxFile.writeAsString(gpx, flush: true),
-          csvFile.writeAsString(csv, flush: true),
-          kmlFile.writeAsString(kml, flush: true),
-        ]);
-
-        files.addAll(<XFile>[
-          XFile(
-            gpxFile.path,
-            mimeType: 'application/gpx+xml',
-            name: '$safeName.gpx',
-          ),
-          XFile(
-            csvFile.path,
-            mimeType: 'text/csv',
-            name: '$safeName.csv',
-          ),
-          XFile(
-            kmlFile.path,
-            mimeType: 'application/vnd.google-earth.kml+xml',
-            name: '$safeName.kml',
-          ),
-        ]);
-      }
-
-      final ShareResult result = await Share.shareXFiles(
-        files,
-        subject: '$appName Trip Export',
-        text: 'TrackPro AI trip export: GPX, CSV and KML files.',
+      final ShareResult result = await SharePlus.instance.share(
+        ShareParams(
+          files: files,
+          subject: '$appName Trip Export',
+          text: '$appName trip export: GPX, CSV and KML files.',
+          sharePositionOrigin:
+              context == null ? null : _shareOrigin(context),
+        ),
       );
 
       final bool dismissed = result.status == ShareResultStatus.dismissed;
@@ -132,6 +88,56 @@ class TripExportService {
         fileCount: 0,
       );
     }
+  }
+
+  /// Shares one generated export file. Used by History export formats.
+  static Future<bool> shareRawFile({
+    required BuildContext context,
+    required String filename,
+    required String content,
+    required String mimeType,
+    String? subject,
+    String? text,
+  }) async {
+    try {
+      final XFile file = _xFileFromText(
+        name: filename,
+        mimeType: mimeType,
+        content: content,
+      );
+
+      final ShareResult result = await SharePlus.instance.share(
+        ShareParams(
+          files: <XFile>[file],
+          subject: subject ?? filename,
+          text: text,
+          sharePositionOrigin: _shareOrigin(context),
+        ),
+      );
+
+      return result.status != ShareResultStatus.dismissed;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  static XFile _xFileFromText({
+    required String name,
+    required String mimeType,
+    required String content,
+  }) {
+    return XFile.fromData(
+      Uint8List.fromList(utf8.encode(content)),
+      name: _safeFileName(name),
+      mimeType: mimeType,
+      lastModified: DateTime.now(),
+    );
+  }
+
+  static Rect? _shareOrigin(BuildContext context) {
+    final RenderObject? renderObject = context.findRenderObject();
+    if (renderObject is! RenderBox || !renderObject.hasSize) return null;
+    return renderObject.localToGlobal(Offset.zero) & renderObject.size;
   }
 
   static String buildGpx({
@@ -195,30 +201,22 @@ class TripExportService {
   }) {
     final StringBuffer buffer = StringBuffer()
       ..writeln(
-          'lat,lng,speed_mph,speed_kmh,altitude_ft,altitude_m,timestamp,accuracy_m');
+        'lat,lng,speed_mph,speed_kmh,altitude_ft,altitude_m,accuracy_m,timestamp',
+      );
 
     for (final TripPoint point in _validPoints(points)) {
-      final double lat = point.position.latitude;
-      final double lng = point.position.longitude;
-      final double speedMph = _safeDouble(point.speedMph);
-      final double speedKmh = speedMph * 1.609344;
-      final double altFt = _safeDouble(point.altitudeFt);
-      final double altM = altFt * 0.3048;
-      final String time = point.timestamp.toUtc().toIso8601String();
-      final double acc = _safeDouble(point.accuracyMeters);
+      final List<String> row = <String>[
+        point.position.latitude.toStringAsFixed(7),
+        point.position.longitude.toStringAsFixed(7),
+        _safeDouble(point.speedMph).toStringAsFixed(2),
+        (_safeDouble(point.speedMph) * 1.609344).toStringAsFixed(2),
+        _safeDouble(point.altitudeFt).toStringAsFixed(2),
+        (_safeDouble(point.altitudeFt) * 0.3048).toStringAsFixed(2),
+        _safeDouble(point.accuracyMeters).toStringAsFixed(1),
+        point.timestamp.toUtc().toIso8601String(),
+      ];
 
-      buffer.writeln(
-        <String>[
-          lat.toStringAsFixed(7),
-          lng.toStringAsFixed(7),
-          speedMph.toStringAsFixed(2),
-          speedKmh.toStringAsFixed(2),
-          altFt.toStringAsFixed(2),
-          altM.toStringAsFixed(2),
-          _csvEscape(time),
-          acc.toStringAsFixed(1),
-        ].join(','),
-      );
+      buffer.writeln(row.map(_csvEscape).join(','));
     }
 
     return buffer.toString();
@@ -228,94 +226,65 @@ class TripExportService {
     required String name,
     required List<TripPoint> points,
   }) {
-    final List<TripPoint> valid = _validPoints(points);
     final String safeName = _xmlEscape(name);
-
-    final String coordinates = valid.map((TripPoint point) {
+    final String coordinates = _validPoints(points).map((TripPoint point) {
       final double lng = point.position.longitude;
       final double lat = point.position.latitude;
       final double eleMeters = _safeDouble(point.altitudeFt) * 0.3048;
-
       return '${lng.toStringAsFixed(7)},${lat.toStringAsFixed(7)},${eleMeters.toStringAsFixed(2)}';
     }).join(' ');
-
-    final TripPoint start = valid.first;
-    final TripPoint end = valid.last;
 
     return '''<?xml version="1.0" encoding="UTF-8"?>
 <kml xmlns="http://www.opengis.net/kml/2.2">
   <Document>
     <name>$safeName</name>
-    <Style id="trackproRoute">
-      <LineStyle>
-        <color>ff43a8d4</color>
-        <width>5</width>
-      </LineStyle>
-    </Style>
     <Placemark>
-      <name>$safeName Route</name>
-      <styleUrl>#trackproRoute</styleUrl>
+      <name>$safeName</name>
       <LineString>
         <tessellate>1</tessellate>
-        <altitudeMode>clampToGround</altitudeMode>
         <coordinates>$coordinates</coordinates>
       </LineString>
-    </Placemark>
-    <Placemark>
-      <name>Start</name>
-      <Point>
-        <coordinates>${start.position.longitude.toStringAsFixed(7)},${start.position.latitude.toStringAsFixed(7)},0</coordinates>
-      </Point>
-    </Placemark>
-    <Placemark>
-      <name>End</name>
-      <Point>
-        <coordinates>${end.position.longitude.toStringAsFixed(7)},${end.position.latitude.toStringAsFixed(7)},0</coordinates>
-      </Point>
     </Placemark>
   </Document>
 </kml>
 ''';
   }
 
+  static String buildJson({
+    required String tripId,
+    required DateTime date,
+    required List<TripPoint> points,
+  }) {
+    final Map<String, dynamic> payload = <String, dynamic>{
+      'id': tripId,
+      'date': date.toUtc().toIso8601String(),
+      'points': _validPoints(points).map((TripPoint point) {
+        return <String, dynamic>{
+          'lat': point.position.latitude,
+          'lng': point.position.longitude,
+          'speedMph': _safeDouble(point.speedMph),
+          'altitudeFt': _safeDouble(point.altitudeFt),
+          'accuracyMeters': _safeDouble(point.accuracyMeters),
+          'timestamp': point.timestamp.toUtc().toIso8601String(),
+        };
+      }).toList(growable: false),
+    };
+
+    return const JsonEncoder.withIndent('  ').convert(payload);
+  }
+
   static List<TripPoint> _validPoints(List<TripPoint> points) {
-    final List<TripPoint> valid = <TripPoint>[];
-    double? lastLat;
-    double? lastLng;
-
-    for (final TripPoint point in points) {
-      final double lat = point.position.latitude;
-      final double lng = point.position.longitude;
-
-      final bool ok = lat.isFinite &&
-          lng.isFinite &&
-          lat.abs() <= 90.0 &&
-          lng.abs() <= 180.0;
-
-      if (!ok) continue;
-
-      if (lastLat != null &&
-          lastLng != null &&
-          lastLat == lat &&
-          lastLng == lng) {
-        continue;
-      }
-
-      valid.add(point);
-      lastLat = lat;
-      lastLng = lng;
-    }
-
-    return List<TripPoint>.unmodifiable(valid);
+    return points
+        .where((TripPoint point) => point.isValid)
+        .toList(growable: false);
   }
 
   static String _safeFileName(String value) {
     final String cleaned = value
         .trim()
-        .replaceAll(RegExp(r'[^a-zA-Z0-9_\-]+'), '_')
-        .replaceAll(RegExp(r'_+'), '_');
-
-    return cleaned.isEmpty ? 'trackpro_trip' : cleaned;
+        .replaceAll(RegExp(r'[\\/:*?"<>|]+'), '_')
+        .replaceAll(RegExp(r'\s+'), '_');
+    return cleaned.isEmpty ? 'trip_export.txt' : cleaned;
   }
 
   static String _xmlEscape(String value) {

@@ -1,14 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart' as mb;
 
-import '../models/mapbox_3d_config.dart';
+import '../config/mapbox_3d_config.dart';
 
 class Mapbox3DService {
   const Mapbox3DService._();
 
-  /// Applies camera pitch/bearing/zoom for 3D viewing.
-  ///
-  /// Safe to call after the Mapbox map is created.
   static Future<void> applyCameraMode({
     required mb.MapboxMap mapboxMap,
     required Mapbox3DConfig config,
@@ -18,21 +15,14 @@ class Mapbox3DService {
   }) async {
     try {
       await mapboxMap.flyTo(
-        config.camera(
-          latitude: latitude,
-          longitude: longitude,
-        ),
+        config.camera(latitude: latitude, longitude: longitude),
         mb.MapAnimationOptions(duration: duration.inMilliseconds),
       );
     } catch (error, stackTrace) {
-      debugPrint('Mapbox3DService.applyCameraMode failed: $error\n$stackTrace');
+      debugPrint('Mapbox3DService.applyCameraMode failed: \$error\n\$stackTrace');
     }
   }
 
-  /// Terrain API support differs across mapbox_maps_flutter versions.
-  ///
-  /// This method intentionally stays a safe no-op so the app compiles on
-  /// versions where `Terrain` is not exposed. 3D camera pitch still works.
   static Future<void> tryEnableTerrain({
     required mb.MapboxMap mapboxMap,
     double exaggeration = 1.35,
@@ -40,9 +30,6 @@ class Mapbox3DService {
     return;
   }
 
-  /// Enables 3D buildings when supported by the active style.
-  ///
-  /// Works best with Standard, Standard Satellite, Streets, and Navigation styles.
   static Future<void> tryEnable3DBuildings({
     required mb.MapboxMap mapboxMap,
     double opacity = 0.72,
@@ -55,7 +42,7 @@ class Mapbox3DService {
           sourceLayer: 'building',
           minZoom: 14,
           fillExtrusionColor: 0xFF9CA3AF,
-          fillExtrusionOpacity: opacity,
+          fillExtrusionOpacity: opacity.clamp(0.0, 1.0).toDouble(),
           fillExtrusionHeightExpression: <Object>[
             'coalesce',
             <Object>['get', 'height'],
@@ -69,7 +56,7 @@ class Mapbox3DService {
         ),
       );
     } catch (error) {
-      debugPrint('Mapbox 3D buildings not applied: $error');
+      debugPrint('Mapbox 3D buildings not applied: \$error');
     }
   }
 

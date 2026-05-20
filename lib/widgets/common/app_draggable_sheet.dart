@@ -28,8 +28,7 @@ class AppDraggableSheet extends StatelessWidget {
   Widget build(BuildContext context) {
     final double minSize = minChildSize.clamp(0.08, 0.95).toDouble();
     final double maxSize = maxChildSize.clamp(minSize, 0.98).toDouble();
-    final double initialSize =
-        initialChildSize.clamp(minSize, maxSize).toDouble();
+    final double initialSize = initialChildSize.clamp(minSize, maxSize).toDouble();
 
     return DraggableScrollableSheet(
       initialChildSize: initialSize,
@@ -49,9 +48,7 @@ class AppDraggableSheet extends StatelessWidget {
                   decoration: BoxDecoration(
                     color: AppColors.surface.withValues(alpha: 0.92),
                     border: Border(
-                      top: BorderSide(
-                        color: AppColors.white.withValues(alpha: 0.10),
-                      ),
+                      top: BorderSide(color: AppColors.white.withValues(alpha: 0.10)),
                     ),
                     boxShadow: <BoxShadow>[
                       BoxShadow(
@@ -65,8 +62,7 @@ class AppDraggableSheet extends StatelessWidget {
                     top: false,
                     child: ListView(
                       controller: controller,
-                      keyboardDismissBehavior:
-                          ScrollViewKeyboardDismissBehavior.onDrag,
+                      keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
                       padding: const EdgeInsets.fromLTRB(16, 10, 16, 24),
                       children: <Widget>[
                         Center(
@@ -91,22 +87,21 @@ class AppDraggableSheet extends StatelessWidget {
                                     overflow: TextOverflow.ellipsis,
                                     style: const TextStyle(
                                       color: AppColors.white,
-                                      fontSize: 17,
+                                      fontSize: 18,
                                       fontWeight: FontWeight.w900,
                                     ),
                                   ),
-                                ),
+                                )
+                              else
+                                const Spacer(),
                               if (trailing != null) ...<Widget>[
-                                const SizedBox(width: 10),
-                                Flexible(
-                                  flex: 0,
-                                  child: trailing!,
-                                ),
+                                const SizedBox(width: 12),
+                                trailing!,
                               ],
                             ],
                           ),
                         ],
-                        const SizedBox(height: 12),
+                        const SizedBox(height: 14),
                         ...children,
                       ],
                     ),

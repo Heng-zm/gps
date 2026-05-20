@@ -24,8 +24,7 @@ class AppTimelineSlider extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final double safeMax = max.isFinite && max > 0 ? max : 1.0;
-    final double safeValue =
-        (value.isFinite ? value : 0.0).clamp(0.0, safeMax).toDouble();
+    final double safeValue = (value.isFinite ? value : 0.0).clamp(0.0, safeMax).toDouble();
 
     return Semantics(
       slider: true,

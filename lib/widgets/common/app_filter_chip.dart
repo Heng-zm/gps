@@ -73,6 +73,7 @@ class AppFilterChip extends StatelessWidget {
                       color: color,
                       fontSize: 11,
                       fontWeight: FontWeight.w900,
+                      letterSpacing: 0.55,
                     ),
                   ),
                 ),

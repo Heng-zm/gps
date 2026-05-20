@@ -74,15 +74,17 @@ class AppMetricCard extends StatelessWidget {
                       height: 0.96,
                     ),
                   ),
-                  if (unit != null) ...<Widget>[
+                  if (unit != null && unit!.isNotEmpty) ...<Widget>[
                     const SizedBox(width: 5),
                     Padding(
                       padding: const EdgeInsets.only(bottom: 2),
                       child: Text(
                         unit!,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
                         style: TextStyle(
                           color: color,
-                          fontSize: compact ? 10 : 12,
+                          fontSize: compact ? 10 : 11,
                           fontWeight: FontWeight.w900,
                         ),
                       ),

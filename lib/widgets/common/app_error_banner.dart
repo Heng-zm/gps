@@ -12,6 +12,8 @@ class AppErrorBanner {
     IconData icon = Icons.error_rounded,
     Duration duration = const Duration(seconds: 3),
   }) {
+    if (!context.mounted) return;
+
     final ScaffoldMessengerState messenger = ScaffoldMessenger.of(context);
 
     messenger

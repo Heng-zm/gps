@@ -35,10 +35,7 @@ class AppPageShell extends StatelessWidget {
   Widget build(BuildContext context) {
     final MediaQueryData media = MediaQuery.of(context);
 
-    Widget bodyChild = Padding(
-      padding: padding,
-      child: child,
-    );
+    Widget bodyChild = Padding(padding: padding, child: child);
 
     if (scrollable) {
       bodyChild = SingleChildScrollView(
@@ -130,9 +127,7 @@ class _AppPageHeader extends StatelessWidget {
                   decoration: BoxDecoration(
                     shape: BoxShape.circle,
                     color: AppColors.white.withValues(alpha: 0.08),
-                    border: Border.all(
-                      color: AppColors.white.withValues(alpha: 0.10),
-                    ),
+                    border: Border.all(color: AppColors.white.withValues(alpha: 0.10)),
                   ),
                   child: const Icon(
                     CupertinoIcons.chevron_back,
@@ -156,20 +151,18 @@ class _AppPageHeader extends StatelessWidget {
               decoration: BoxDecoration(
                 color: AppColors.card.withValues(alpha: 0.72),
                 borderRadius: BorderRadius.circular(26),
-                border: Border.all(
-                  color: AppColors.white.withValues(alpha: 0.08),
-                ),
+                border: Border.all(color: AppColors.white.withValues(alpha: 0.08)),
               ),
               child: Row(
                 children: <Widget>[
                   if (resolvedLeading != null) ...<Widget>[
                     resolvedLeading,
-                    const SizedBox(width: 12),
+                    const SizedBox(width: 10),
                   ],
                   Expanded(
                     child: Column(
-                      mainAxisSize: MainAxisSize.min,
                       crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisAlignment: MainAxisAlignment.center,
                       children: <Widget>[
                         Text(
                           title,
@@ -179,7 +172,7 @@ class _AppPageHeader extends StatelessWidget {
                             color: AppColors.white,
                             fontSize: 20,
                             fontWeight: FontWeight.w900,
-                            letterSpacing: -0.5,
+                            letterSpacing: -0.4,
                           ),
                         ),
                         if (subtitle != null) ...<Widget>[
@@ -199,11 +192,8 @@ class _AppPageHeader extends StatelessWidget {
                     ),
                   ),
                   if (trailing != null) ...<Widget>[
-                    const SizedBox(width: 12),
-                    Flexible(
-                      flex: 0,
-                      child: trailing!,
-                    ),
+                    const SizedBox(width: 10),
+                    Flexible(flex: 0, child: trailing!),
                   ],
                 ],
               ),

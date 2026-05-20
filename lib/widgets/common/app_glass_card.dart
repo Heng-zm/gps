@@ -15,6 +15,8 @@ class AppGlassCard extends StatelessWidget {
     this.blur = 16,
     this.shadow = true,
     this.clip = true,
+    this.margin,
+    this.gradient,
   });
 
   final Widget child;
@@ -25,14 +27,21 @@ class AppGlassCard extends StatelessWidget {
   final double blur;
   final bool shadow;
   final bool clip;
+  final EdgeInsetsGeometry? margin;
+  final Gradient? gradient;
 
   @override
   Widget build(BuildContext context) {
     final double radius = borderRadius.clamp(0.0, 80.0).toDouble();
+    final BorderRadiusGeometry resolvedRadius = BorderRadius.circular(radius);
+
     final Widget content = DecoratedBox(
       decoration: BoxDecoration(
-        color: color ?? AppColors.card.withValues(alpha: 0.88),
-        borderRadius: BorderRadius.circular(radius),
+        color: gradient == null
+            ? (color ?? AppColors.card.withValues(alpha: 0.88))
+            : null,
+        gradient: gradient,
+        borderRadius: resolvedRadius,
         border: Border.all(
           color: borderColor ?? AppColors.border.withValues(alpha: 0.78),
         ),
@@ -59,11 +68,14 @@ class AppGlassCard extends StatelessWidget {
             child: content,
           );
 
-    if (!clip) return blurred;
+    Widget result = clip
+        ? ClipRRect(
+            borderRadius: BorderRadius.circular(radius),
+            child: blurred,
+          )
+        : blurred;
 
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(radius),
-      child: blurred,
-    );
+    if (margin != null) result = Padding(padding: margin!, child: result);
+    return result;
   }
 }

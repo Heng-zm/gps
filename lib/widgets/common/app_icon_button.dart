@@ -51,9 +51,7 @@ class AppIconButton extends StatelessWidget {
             decoration: BoxDecoration(
               shape: BoxShape.circle,
               color: backgroundColor ?? AppColors.white.withValues(alpha: 0.06),
-              border: Border.all(
-                color: AppColors.white.withValues(alpha: 0.09),
-              ),
+              border: Border.all(color: AppColors.white.withValues(alpha: 0.09)),
               boxShadow: <BoxShadow>[
                 BoxShadow(
                   color: AppColors.black.withValues(alpha: 0.18),

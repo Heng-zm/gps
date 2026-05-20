@@ -9,8 +9,8 @@ import 'package:flutter/services.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart' as mb;
 
-import 'screens/history_screen.dart';
-import 'screens/settings_screen.dart';
+import 'screens/history/history_screen.dart';
+import 'screens/settings_screen.dart' as settings_ui;
 import 'screens/tracking/tracking_screen.dart';
 import 'services/settings_service.dart';
 import 'config/mapbox_config.dart';
@@ -69,7 +69,6 @@ const String _kSupabaseAnonKey =
 
 const String _kAppVersion = '1.5.1';
 const Duration _kOfflineSyncBootDelay = Duration(seconds: 2);
-
 
 DateTime? _lastKeyboardAssertionLogAt;
 int _suppressedKeyboardAssertionCount = 0;
@@ -453,6 +452,9 @@ class _AppShellState extends State<AppShell>
   int _previous = 0;
   double _pillStartFraction = 0.0;
 
+  bool _offlineSyncScheduled = false;
+  bool _offlineSyncRunning = false;
+
   late final AnimationController _ctrl = AnimationController(
     vsync: this,
     duration: const Duration(milliseconds: 430),
@@ -493,7 +495,7 @@ class _AppShellState extends State<AppShell>
   late final List<Widget> _pages = <Widget>[
     const TrackingScreen(),
     const HistoryScreen(),
-    const SettingsScreen(),
+    const settings_ui.SettingsScreen(),
   ];
 
   @override
@@ -511,11 +513,19 @@ class _AppShellState extends State<AppShell>
   }
 
   void _scheduleOfflineQueueSync() {
+    if (_offlineSyncScheduled || _offlineSyncRunning) return;
+
+    _offlineSyncScheduled = true;
+
     Future<void>.delayed(_kOfflineSyncBootDelay, () async {
-      if (!mounted) return;
+      _offlineSyncScheduled = false;
+
+      if (!mounted || _offlineSyncRunning) return;
 
       final int pending = OfflineSyncQueue.instance.pendingCount.value;
       if (pending <= 0) return;
+
+      _offlineSyncRunning = true;
 
       AppConsole.log(
         'Boot offline sync started',
@@ -523,19 +533,32 @@ class _AppShellState extends State<AppShell>
         data: <String, Object?>{'pending': pending},
       );
 
-      final OfflineSyncResult result =
-          await OfflineSyncQueue.instance.syncNow();
+      try {
+        final OfflineSyncResult result =
+            await OfflineSyncQueue.instance.syncNow();
 
-      AppConsole.log(
-        result.hasPending ? 'Boot offline sync still pending' : 'Boot offline sync complete',
-        tag: 'SYNC',
-        data: <String, Object?>{
-          'attempted': result.attempted,
-          'succeeded': result.succeeded,
-          'failed': result.failed,
-          'pending': result.pending,
-        },
-      );
+        AppConsole.log(
+          result.hasPending
+              ? 'Boot offline sync still pending'
+              : 'Boot offline sync complete',
+          tag: 'SYNC',
+          data: <String, Object?>{
+            'attempted': result.attempted,
+            'succeeded': result.succeeded,
+            'failed': result.failed,
+            'pending': result.pending,
+          },
+        );
+      } catch (error, stackTrace) {
+        AppConsole.error(
+          'Boot offline sync failed',
+          tag: 'SYNC',
+          error: error,
+          stackTrace: stackTrace,
+        );
+      } finally {
+        _offlineSyncRunning = false;
+      }
     });
   }
 

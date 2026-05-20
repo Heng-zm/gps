@@ -8,9 +8,11 @@ import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:latlong2/latlong.dart';
+import 'package:sensors_plus/sensors_plus.dart';
 
 import '../../models/mapbox_route_models.dart';
 import '../../services/settings_service.dart';
+import '../../services/ai_object_tracking_service.dart';
 import '../../theme/app_theme.dart';
 
 const Color _kArBlue = AppColors.blue;
@@ -20,6 +22,81 @@ const Color _kArRed = AppColors.red;
 const Color _kArGold = Color(0xFFFFD54F);
 const Color _kArSurface = Color(0xDD05070A);
 const Distance _kArDistance = Distance();
+
+enum _ArMotionStability {
+  steady,
+  moving,
+  shaking,
+}
+
+extension _ArMotionStabilityX on _ArMotionStability {
+  String get label {
+    switch (this) {
+      case _ArMotionStability.steady:
+        return 'Stable';
+      case _ArMotionStability.moving:
+        return 'Moving';
+      case _ArMotionStability.shaking:
+        return 'Hold steady';
+    }
+  }
+
+  Color get color {
+    switch (this) {
+      case _ArMotionStability.steady:
+        return _kArGreen;
+      case _ArMotionStability.moving:
+        return _kArGold;
+      case _ArMotionStability.shaking:
+        return _kArRed;
+    }
+  }
+
+  IconData get icon {
+    switch (this) {
+      case _ArMotionStability.steady:
+        return CupertinoIcons.checkmark_shield_fill;
+      case _ArMotionStability.moving:
+        return CupertinoIcons.hand_raised_fill;
+      case _ArMotionStability.shaking:
+        return CupertinoIcons.exclamationmark_triangle_fill;
+    }
+  }
+}
+
+enum _ArHudMode {
+  full,
+  minimal,
+}
+
+extension _ArHudModeX on _ArHudMode {
+  _ArHudMode get next {
+    switch (this) {
+      case _ArHudMode.full:
+        return _ArHudMode.minimal;
+      case _ArHudMode.minimal:
+        return _ArHudMode.full;
+    }
+  }
+
+  IconData get icon {
+    switch (this) {
+      case _ArHudMode.full:
+        return CupertinoIcons.eye_fill;
+      case _ArHudMode.minimal:
+        return CupertinoIcons.eye_slash_fill;
+    }
+  }
+
+  String get semanticsLabel {
+    switch (this) {
+      case _ArHudMode.full:
+        return 'Switch to minimal AR HUD';
+      case _ArHudMode.minimal:
+        return 'Switch to full AR HUD';
+    }
+  }
+}
 
 class TrackingArCameraScreen extends StatefulWidget {
   const TrackingArCameraScreen({
@@ -58,8 +135,20 @@ class _TrackingArCameraScreenState extends State<TrackingArCameraScreen>
   bool _loading = true;
   bool _cameraReady = false;
   bool _torchOn = false;
+  _ArHudMode _hudMode = _ArHudMode.full;
+  final ValueNotifier<_ArMotionStability> _motionStabilityN =
+      ValueNotifier<_ArMotionStability>(_ArMotionStability.steady);
+  StreamSubscription<AccelerometerEvent>? _accelerometerSub;
+  DateTime? _lastMotionSampleAt;
+  double _motionEma = 0.0;
   String? _error;
   int _selectedCameraIndex = 0;
+
+  late final AiObjectTrackingService _objectTrackingService =
+      AiObjectTrackingService();
+  late final ValueNotifier<AiTrackedObject?> _trackedObjectN =
+      _objectTrackingService.trackedObjectN;
+  Timer? _objectTrackingTimer;
 
   late final Listenable _overlayListenable = Listenable.merge(<Listenable>[
     widget.speedN,
@@ -71,12 +160,16 @@ class _TrackingArCameraScreenState extends State<TrackingArCameraScreen>
     widget.coachTipN,
     widget.posN,
     widget.plannedRouteN,
+    _motionStabilityN,
+    _trackedObjectN,
   ]);
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _initMotionSensor();
+    _startObjectTrackingTicker();
     unawaited(_initCamera());
   }
 
@@ -98,12 +191,118 @@ class _TrackingArCameraScreenState extends State<TrackingArCameraScreen>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    unawaited(_cameraController?.dispose());
+    unawaited(_accelerometerSub?.cancel());
+    _motionStabilityN.dispose();
+    _objectTrackingTimer?.cancel();
+    _objectTrackingService.dispose();
+
+    final CameraController? controller = _cameraController;
+    if (controller != null) {
+      unawaited(() async {
+        try {
+          if (controller.value.isInitialized) {
+            await controller.setFlashMode(FlashMode.off);
+          }
+        } catch (_) {
+          // Camera may already be disposed by the platform lifecycle.
+        }
+        await controller.dispose();
+      }());
+    }
+
     super.dispose();
   }
 
-  Future<void> _initCamera() async {
+  void _startObjectTrackingTicker() {
+    _objectTrackingTimer?.cancel();
+    _objectTrackingTimer = Timer.periodic(
+      const Duration(milliseconds: 260),
+      (_) => _updateObjectTrackingEstimate(),
+    );
+  }
+
+  void _updateObjectTrackingEstimate() {
     if (!mounted) return;
+
+    _objectTrackingService.updateTelemetry(
+      userSpeedKmh: widget.settings.toDisplaySpeed(widget.speedN.value),
+      gpsAccuracyMeters: widget.accuracyN.value,
+      motionScore: _motionEma,
+      timestamp: DateTime.now(),
+    );
+  }
+
+  void _handleObjectTrackingTap(TapDownDetails details) {
+    final Size screen = MediaQuery.sizeOf(context);
+    if (screen.width <= 0 || screen.height <= 0) return;
+
+    HapticFeedback.selectionClick();
+    _objectTrackingService.lockAtScreenPoint(
+      details.localPosition,
+      screen,
+      userSpeedKmh: widget.settings.toDisplaySpeed(widget.speedN.value),
+      timestamp: DateTime.now(),
+    );
+  }
+
+  void _clearObjectTracking() {
+    HapticFeedback.lightImpact();
+    _objectTrackingService.clearLock();
+  }
+
+  void _initMotionSensor() {
+    unawaited(_accelerometerSub?.cancel());
+
+    try {
+      _accelerometerSub = accelerometerEventStream(
+        samplingPeriod: const Duration(milliseconds: 220),
+      ).listen(
+        _handleAccelerometerEvent,
+        onError: (Object error, StackTrace stackTrace) {
+          debugPrint('AR motion sensor error: $error\n$stackTrace');
+        },
+        cancelOnError: false,
+      );
+    } catch (error, stackTrace) {
+      debugPrint('AR motion sensor init failed: $error\n$stackTrace');
+    }
+  }
+
+  void _handleAccelerometerEvent(AccelerometerEvent event) {
+    if (!mounted) return;
+
+    final DateTime now = DateTime.now();
+    final DateTime? last = _lastMotionSampleAt;
+    if (last != null &&
+        now.difference(last) < const Duration(milliseconds: 170)) {
+      return;
+    }
+    _lastMotionSampleAt = now;
+
+    final double magnitude = math.sqrt(
+      event.x * event.x + event.y * event.y + event.z * event.z,
+    );
+
+    final double motion = (magnitude - 9.80665).abs();
+    _motionEma =
+        _motionEma == 0.0 ? motion : (_motionEma * 0.72 + motion * 0.28);
+
+    final _ArMotionStability next;
+    if (_motionEma >= 4.8) {
+      next = _ArMotionStability.shaking;
+    } else if (_motionEma >= 2.0) {
+      next = _ArMotionStability.moving;
+    } else {
+      next = _ArMotionStability.steady;
+    }
+
+    if (_motionStabilityN.value != next) {
+      _motionStabilityN.value = next;
+    }
+  }
+
+  Future<void> _initCamera() async {
+    if (!mounted || _loading && _cameraController != null) return;
 
     setState(() {
       _loading = true;
@@ -185,10 +384,16 @@ class _TrackingArCameraScreenState extends State<TrackingArCameraScreen>
   }
 
   Future<void> _switchCamera() async {
-    if (_cameras.length < 2) return;
+    if (_cameras.length < 2 || _loading) return;
     HapticFeedback.selectionClick();
+    _torchOn = false;
     _selectedCameraIndex = (_selectedCameraIndex + 1) % _cameras.length;
     await _initCamera();
+  }
+
+  void _toggleHudMode() {
+    HapticFeedback.selectionClick();
+    setState(() => _hudMode = _hudMode.next);
   }
 
   @override
@@ -199,43 +404,66 @@ class _TrackingArCameraScreenState extends State<TrackingArCameraScreen>
       value: SystemUiOverlayStyle.light,
       child: CupertinoPageScaffold(
         backgroundColor: Colors.black,
-        child: Stack(
-          children: <Widget>[
-            Positioned.fill(
-              child: _buildCameraPreview(controller),
-            ),
-            const Positioned.fill(child: _ArScrim()),
-            Positioned.fill(
-              child: AnimatedBuilder(
-                animation: _overlayListenable,
-                builder: (_, __) {
-                  final _ArRouteSnapshot snapshot = _ArRouteSnapshot.from(
-                    position: widget.posN.value,
-                    route: widget.plannedRouteN.value,
-                    compassHeading: widget.compassN.value,
-                    hybridHeading: widget.headingN.value,
-                    speedMph: widget.speedN.value,
-                    accuracyMeters: widget.accuracyN.value,
-                    battery: widget.batteryN.value,
-                    batteryState: widget.batteryStateN.value,
-                    coachTip: widget.coachTipN.value,
-                    settings: widget.settings,
-                  );
-
-                  return _ArRouteOverlay(
-                    snapshot: snapshot,
-                    onClose: () => Navigator.of(context).maybePop(),
-                    onTorch: _toggleTorch,
-                    onSwitchCamera: _switchCamera,
-                    torchOn: _torchOn,
-                    canSwitchCamera: _cameras.length > 1,
-                    loading: _loading,
-                    error: _error,
-                  );
-                },
+        child: DefaultTextStyle.merge(
+          style: const TextStyle(decoration: TextDecoration.none),
+          child: Stack(
+            children: <Widget>[
+              Positioned.fill(
+                child: _buildCameraPreview(controller),
               ),
-            ),
-          ],
+              const Positioned.fill(child: _ArScrim()),
+              Positioned.fill(
+                child: GestureDetector(
+                  behavior: HitTestBehavior.translucent,
+                  onTapDown: _handleObjectTrackingTap,
+                ),
+              ),
+              Positioned.fill(
+                child: ValueListenableBuilder<AiTrackedObject?>(
+                  valueListenable: _trackedObjectN,
+                  builder: (_, AiTrackedObject? tracked, __) {
+                    return _ArObjectTrackingOverlay(
+                      tracked: tracked,
+                      onClear: _clearObjectTracking,
+                    );
+                  },
+                ),
+              ),
+              Positioned.fill(
+                child: AnimatedBuilder(
+                  animation: _overlayListenable,
+                  builder: (_, __) {
+                    final _ArRouteSnapshot snapshot = _ArRouteSnapshot.from(
+                      position: widget.posN.value,
+                      route: widget.plannedRouteN.value,
+                      compassHeading: widget.compassN.value,
+                      hybridHeading: widget.headingN.value,
+                      speedMph: widget.speedN.value,
+                      accuracyMeters: widget.accuracyN.value,
+                      battery: widget.batteryN.value,
+                      batteryState: widget.batteryStateN.value,
+                      coachTip: widget.coachTipN.value,
+                      settings: widget.settings,
+                    );
+
+                    return _ArRouteOverlay(
+                      snapshot: snapshot,
+                      onClose: () => Navigator.of(context).maybePop(),
+                      onTorch: _toggleTorch,
+                      onSwitchCamera: _switchCamera,
+                      torchOn: _torchOn,
+                      canSwitchCamera: _cameras.length > 1,
+                      hudMode: _hudMode,
+                      onHudMode: _toggleHudMode,
+                      motionStability: _motionStabilityN.value,
+                      loading: _loading,
+                      error: _error,
+                    );
+                  },
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -255,7 +483,9 @@ class _TrackingArCameraScreenState extends State<TrackingArCameraScreen>
       );
     }
 
-    if (!_cameraReady || controller == null || !controller.value.isInitialized) {
+    if (!_cameraReady ||
+        controller == null ||
+        !controller.value.isInitialized) {
       return _ArCameraError(
         message: 'Camera is not ready.',
         onRetry: _initCamera,
@@ -265,14 +495,344 @@ class _TrackingArCameraScreenState extends State<TrackingArCameraScreen>
     final Size screen = MediaQuery.sizeOf(context);
     final Size preview = controller.value.previewSize ?? screen;
     final double previewAspect = preview.height / preview.width;
-    final double screenAspect = screen.width / screen.height;
 
-    return Transform.scale(
-      scale: previewAspect / screenAspect,
-      child: Center(
-        child: CameraPreview(controller),
+    return ClipRect(
+      child: OverflowBox(
+        alignment: Alignment.center,
+        child: FittedBox(
+          fit: BoxFit.cover,
+          child: SizedBox(
+            width: screen.width,
+            height: screen.width / previewAspect,
+            child: CameraPreview(controller),
+          ),
+        ),
       ),
     );
+  }
+}
+
+class _ArObjectTrackingOverlay extends StatelessWidget {
+  const _ArObjectTrackingOverlay({
+    required this.tracked,
+    required this.onClear,
+  });
+
+  final AiTrackedObject? tracked;
+  final VoidCallback onClear;
+
+  @override
+  Widget build(BuildContext context) {
+    final Size size = MediaQuery.sizeOf(context);
+    final AiTrackedObject? object = tracked;
+
+    if (object == null) {
+      return IgnorePointer(
+        child: SafeArea(
+          child: Align(
+            alignment: Alignment.bottomCenter,
+            child: Padding(
+              padding: const EdgeInsets.only(bottom: 104, left: 18, right: 18),
+              child: _ArObjectHintCard(),
+            ),
+          ),
+        ),
+      );
+    }
+
+    final Rect box = object.screenBoxFor(size);
+    final Color riskColor = object.risk.color;
+    final double labelLeft = box.left.clamp(12.0, size.width - 184.0).toDouble();
+    final double labelTop = (box.top - 44).clamp(82.0, size.height - 156.0).toDouble();
+
+    return Stack(
+      children: <Widget>[
+        Positioned.fromRect(
+          rect: box,
+          child: IgnorePointer(
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(18),
+                border: Border.all(color: riskColor, width: 2.4),
+                boxShadow: <BoxShadow>[
+                  BoxShadow(
+                    color: riskColor.withValues(alpha: 0.28),
+                    blurRadius: 18,
+                    spreadRadius: 1,
+                  ),
+                ],
+              ),
+              child: CustomPaint(
+                painter: _ArObjectCornerPainter(color: riskColor),
+              ),
+            ),
+          ),
+        ),
+        Positioned(
+          left: labelLeft,
+          top: labelTop,
+          child: _ArObjectSpeedLabel(object: object),
+        ),
+        Positioned(
+          left: 16,
+          right: 16,
+          bottom: MediaQuery.paddingOf(context).bottom + 92,
+          child: _ArObjectRiskBanner(
+            object: object,
+            onClear: onClear,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _ArObjectHintCard extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(18),
+      child: BackdropFilter(
+        filter: ui.ImageFilter.blur(sigmaX: 14, sigmaY: 14),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
+          decoration: BoxDecoration(
+            color: Colors.black.withValues(alpha: 0.46),
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(color: Colors.white.withValues(alpha: 0.10)),
+          ),
+          child: const Row(
+            mainAxisSize: MainAxisSize.min,
+            children: <Widget>[
+              Icon(CupertinoIcons.scope, color: _kArBlueSoft, size: 17),
+              SizedBox(width: 8),
+              Flexible(
+                child: Text(
+                  'Tap an object to lock + estimate speed',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: Colors.white70,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w800,
+                    decoration: TextDecoration.none,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ArObjectSpeedLabel extends StatelessWidget {
+  const _ArObjectSpeedLabel({required this.object});
+
+  final AiTrackedObject object;
+
+  @override
+  Widget build(BuildContext context) {
+    final Color color = object.risk.color;
+
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(16),
+      child: BackdropFilter(
+        filter: ui.ImageFilter.blur(sigmaX: 16, sigmaY: 16),
+        child: Container(
+          constraints: const BoxConstraints(maxWidth: 178),
+          padding: const EdgeInsets.fromLTRB(12, 9, 12, 9),
+          decoration: BoxDecoration(
+            color: Colors.black.withValues(alpha: 0.70),
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: color.withValues(alpha: 0.45)),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: <Widget>[
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: <Widget>[
+                  Icon(CupertinoIcons.viewfinder_circle_fill, color: color, size: 14),
+                  const SizedBox(width: 6),
+                  Flexible(
+                    child: Text(
+                      object.label,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w900,
+                        decoration: TextDecoration.none,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 4),
+              Text(
+                object.speedLabel,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: color,
+                  fontSize: 17,
+                  fontWeight: FontWeight.w900,
+                  letterSpacing: -0.4,
+                  decoration: TextDecoration.none,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ArObjectRiskBanner extends StatelessWidget {
+  const _ArObjectRiskBanner({
+    required this.object,
+    required this.onClear,
+  });
+
+  final AiTrackedObject object;
+  final VoidCallback onClear;
+
+  @override
+  Widget build(BuildContext context) {
+    final Color color = object.risk.color;
+
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(22),
+      child: BackdropFilter(
+        filter: ui.ImageFilter.blur(sigmaX: 18, sigmaY: 18),
+        child: Container(
+          padding: const EdgeInsets.fromLTRB(14, 12, 8, 12),
+          decoration: BoxDecoration(
+            color: Colors.black.withValues(alpha: 0.66),
+            borderRadius: BorderRadius.circular(22),
+            border: Border.all(color: color.withValues(alpha: 0.32)),
+          ),
+          child: Row(
+            children: <Widget>[
+              Container(
+                width: 36,
+                height: 36,
+                decoration: BoxDecoration(
+                  color: color.withValues(alpha: 0.16),
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: color.withValues(alpha: 0.26)),
+                ),
+                child: Icon(object.risk.icon, color: color, size: 18),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: <Widget>[
+                    Text(
+                      object.risk.title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w900,
+                        decoration: TextDecoration.none,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      object.advice,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: Colors.white60,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w700,
+                        decoration: TextDecoration.none,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              CupertinoButton(
+                padding: EdgeInsets.zero,
+                minSize: 36,
+                onPressed: onClear,
+                child: const Icon(
+                  CupertinoIcons.xmark_circle_fill,
+                  color: Colors.white38,
+                  size: 22,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ArObjectCornerPainter extends CustomPainter {
+  const _ArObjectCornerPainter({required this.color});
+
+  final Color color;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final Paint paint = Paint()
+      ..color = color
+      ..strokeWidth = 4
+      ..strokeCap = StrokeCap.round
+      ..style = PaintingStyle.stroke;
+
+    const double length = 18;
+    // Draw corner brackets with lines instead of ui.Path to avoid conflicts with
+    // `Path<LatLng>` from routing/map packages.
+    canvas
+      ..drawLine(const Offset(0, 0), Offset(length, 0), paint)
+      ..drawLine(const Offset(0, 0), Offset(0, length), paint)
+      ..drawLine(
+        Offset(size.width - length, 0),
+        Offset(size.width, 0),
+        paint,
+      )
+      ..drawLine(
+        Offset(size.width, 0),
+        Offset(size.width, length),
+        paint,
+      )
+      ..drawLine(
+        Offset(size.width, size.height - length),
+        Offset(size.width, size.height),
+        paint,
+      )
+      ..drawLine(
+        Offset(size.width - length, size.height),
+        Offset(size.width, size.height),
+        paint,
+      )
+      ..drawLine(
+        Offset(0, size.height),
+        Offset(length, size.height),
+        paint,
+      )
+      ..drawLine(
+        Offset(0, size.height - length),
+        Offset(0, size.height),
+        paint,
+      );
+  }
+
+  @override
+  bool shouldRepaint(covariant _ArObjectCornerPainter oldDelegate) {
+    return oldDelegate.color != color;
   }
 }
 
@@ -349,8 +909,8 @@ class _ArRouteSnapshot {
         ? 'GPS ±${accuracyMeters.round()}m'
         : 'GPS searching';
 
-    final bool charging =
-        batteryState == BatteryState.charging || batteryState == BatteryState.full;
+    final bool charging = batteryState == BatteryState.charging ||
+        batteryState == BatteryState.full;
     final Color batteryColor = battery == null
         ? Colors.white54
         : charging
@@ -375,9 +935,8 @@ class _ArRouteSnapshot {
       relativeBearing: relative,
       arrowTurns: relative / 360.0,
       directionLabel: _directionLabel(relative),
-      targetLabel: hasTarget
-          ? _distanceLabel(meters, settings)
-          : 'Plan route first',
+      targetLabel:
+          hasTarget ? _distanceLabel(meters, settings) : 'Plan route first',
       speedLabel: speedLabel,
       speedUnit: settings.speedUnit.toUpperCase(),
       gpsLabel: gpsLabel,
@@ -449,6 +1008,9 @@ class _ArRouteOverlay extends StatelessWidget {
     required this.onSwitchCamera,
     required this.torchOn,
     required this.canSwitchCamera,
+    required this.hudMode,
+    required this.onHudMode,
+    required this.motionStability,
     required this.loading,
     required this.error,
   });
@@ -457,35 +1019,81 @@ class _ArRouteOverlay extends StatelessWidget {
   final VoidCallback onClose;
   final VoidCallback onTorch;
   final VoidCallback onSwitchCamera;
+  final VoidCallback onHudMode;
+  final _ArMotionStability motionStability;
   final bool torchOn;
   final bool canSwitchCamera;
+  final _ArHudMode hudMode;
   final bool loading;
   final String? error;
 
   @override
   Widget build(BuildContext context) {
     final EdgeInsets safe = MediaQuery.paddingOf(context);
+    final Size size = MediaQuery.sizeOf(context);
+    final bool compact = size.width < 390.0 || size.height < 720.0;
+    final bool minimal = hudMode == _ArHudMode.minimal;
 
     return SafeArea(
       child: Padding(
-        padding: EdgeInsets.fromLTRB(14, 8, 14, 14 + safe.bottom * 0.15),
+        padding: EdgeInsets.fromLTRB(
+          compact ? 10 : 14,
+          8,
+          compact ? 10 : 14,
+          12 + safe.bottom * 0.12,
+        ),
         child: Column(
           children: <Widget>[
             _ArTopBar(
               onClose: onClose,
               onTorch: onTorch,
               onSwitchCamera: onSwitchCamera,
+              onHudMode: onHudMode,
               torchOn: torchOn,
               canSwitchCamera: canSwitchCamera,
+              hudMode: hudMode,
             ),
-            const SizedBox(height: 12),
-            _ArStatusStrip(snapshot: snapshot),
-            const Spacer(),
-            _ArDirectionArrow(snapshot: snapshot),
-            const SizedBox(height: 12),
-            _ArSensorRadar(snapshot: snapshot),
-            const Spacer(),
-            _ArBottomHud(snapshot: snapshot),
+            SizedBox(height: compact ? 8 : 10),
+            if (!minimal) _ArStatusStrip(snapshot: snapshot),
+            if (!minimal) SizedBox(height: compact ? 8 : 10),
+            _ArSystemBanner(
+              loading: loading,
+              error: error,
+              compact: compact || minimal,
+            ),
+            if (loading || error != null) SizedBox(height: compact ? 6 : 8),
+            _ArMotionStabilityBanner(
+              stability: motionStability,
+              compact: compact || minimal,
+            ),
+            SizedBox(height: compact ? 6 : 8),
+            Expanded(
+              child: Center(
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(
+                    maxWidth: compact ? 360 : 430,
+                  ),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: <Widget>[
+                      _ArDirectionArrow(
+                        snapshot: snapshot,
+                        compact: compact || minimal,
+                      ),
+                      SizedBox(height: compact ? 10 : 14),
+                      _ArSensorRadar(
+                        snapshot: snapshot,
+                        compact: compact || minimal,
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+            _ArBottomHud(
+              snapshot: snapshot,
+              compact: compact || minimal,
+            ),
           ],
         ),
       ),
@@ -498,15 +1106,19 @@ class _ArTopBar extends StatelessWidget {
     required this.onClose,
     required this.onTorch,
     required this.onSwitchCamera,
+    required this.onHudMode,
     required this.torchOn,
     required this.canSwitchCamera,
+    required this.hudMode,
   });
 
   final VoidCallback onClose;
   final VoidCallback onTorch;
   final VoidCallback onSwitchCamera;
+  final VoidCallback onHudMode;
   final bool torchOn;
   final bool canSwitchCamera;
+  final _ArHudMode hudMode;
 
   @override
   Widget build(BuildContext context) {
@@ -524,6 +1136,13 @@ class _ArTopBar extends StatelessWidget {
           color: _kArBlueSoft,
         ),
         const Spacer(),
+        _ArRoundButton(
+          icon: hudMode.icon,
+          label: hudMode.semanticsLabel,
+          active: hudMode == _ArHudMode.minimal,
+          onTap: onHudMode,
+        ),
+        const SizedBox(width: 8),
         _ArRoundButton(
           icon: torchOn ? CupertinoIcons.bolt_fill : CupertinoIcons.bolt,
           label: 'Toggle torch',
@@ -552,8 +1171,11 @@ class _ArStatusStrip extends StatelessWidget {
     return _ArGlass(
       radius: 999,
       padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 8),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
+      child: Wrap(
+        alignment: WrapAlignment.center,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        spacing: 7,
+        runSpacing: 4,
         children: <Widget>[
           _ArMiniStatus(
             icon: CupertinoIcons.location_fill,
@@ -569,7 +1191,9 @@ class _ArStatusStrip extends StatelessWidget {
           _ArDot(color: snapshot.hasRoute ? _kArGreen : _kArGold),
           _ArMiniStatus(
             icon: Icons.route_rounded,
-            label: snapshot.hasRoute ? '${snapshot.routePointCount} pts' : 'No route',
+            label: snapshot.hasRoute
+                ? '${snapshot.routePointCount} pts'
+                : 'No route',
             color: snapshot.hasRoute ? _kArGreen : _kArGold,
           ),
         ],
@@ -579,35 +1203,56 @@ class _ArStatusStrip extends StatelessWidget {
 }
 
 class _ArDirectionArrow extends StatelessWidget {
-  const _ArDirectionArrow({required this.snapshot});
+  const _ArDirectionArrow({
+    required this.snapshot,
+    required this.compact,
+  });
 
   final _ArRouteSnapshot snapshot;
+  final bool compact;
 
   @override
   Widget build(BuildContext context) {
     final Color arrowColor = snapshot.hasRoute ? _kArBlueSoft : _kArGold;
+    final double arrowSize = compact ? 82.0 : 112.0;
 
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: <Widget>[
-        _ArGlass(
-          radius: 32,
-          padding: const EdgeInsets.fromLTRB(18, 14, 18, 16),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
+    return _ArGlass(
+      radius: compact ? 28 : 34,
+      padding: EdgeInsets.fromLTRB(
+        compact ? 14 : 18,
+        compact ? 12 : 14,
+        compact ? 14 : 18,
+        compact ? 13 : 16,
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: <Widget>[
+          _ArDirectionHeader(
+            color: arrowColor,
+            direction: snapshot.directionLabel,
+            distance: snapshot.targetLabel,
+            hasRoute: snapshot.hasRoute,
+          ),
+          SizedBox(height: compact ? 9 : 12),
+          Stack(
+            alignment: Alignment.center,
             children: <Widget>[
-              Text(
-                snapshot.directionLabel,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  color: arrowColor,
-                  fontSize: 15,
-                  fontWeight: FontWeight.w900,
-                  letterSpacing: 0.4,
+              Container(
+                width: arrowSize + 34,
+                height: arrowSize + 34,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  border: Border.all(
+                    color: arrowColor.withValues(alpha: 0.14),
+                  ),
+                  boxShadow: <BoxShadow>[
+                    BoxShadow(
+                      color: arrowColor.withValues(alpha: 0.14),
+                      blurRadius: 22,
+                    ),
+                  ],
                 ),
               ),
-              const SizedBox(height: 10),
               AnimatedRotation(
                 turns: snapshot.arrowTurns,
                 duration: const Duration(milliseconds: 220),
@@ -615,7 +1260,7 @@ class _ArDirectionArrow extends StatelessWidget {
                 child: Icon(
                   CupertinoIcons.arrow_up_circle_fill,
                   color: arrowColor,
-                  size: 112,
+                  size: arrowSize,
                   shadows: <Shadow>[
                     Shadow(
                       color: arrowColor.withValues(alpha: 0.44),
@@ -624,32 +1269,214 @@ class _ArDirectionArrow extends StatelessWidget {
                   ],
                 ),
               ),
-              const SizedBox(height: 8),
-              Text(
-                snapshot.targetLabel,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 26,
-                  fontWeight: FontWeight.w900,
-                  letterSpacing: -0.7,
-                  fontFeatures: <ui.FontFeature>[
-                    ui.FontFeature.tabularFigures(),
-                  ],
-                ),
+            ],
+          ),
+          SizedBox(height: compact ? 7 : 9),
+          Text(
+            snapshot.hasRoute
+                ? 'follow arrow and radar dot'
+                : 'open Route first, then use AR',
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              decoration: TextDecoration.none,
+              color: Colors.white.withValues(alpha: 0.58),
+              fontSize: compact ? 10 : 11,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ArSystemBanner extends StatelessWidget {
+  const _ArSystemBanner({
+    required this.loading,
+    required this.error,
+    required this.compact,
+  });
+
+  final bool loading;
+  final String? error;
+  final bool compact;
+
+  @override
+  Widget build(BuildContext context) {
+    final String? message = error == null
+        ? loading
+            ? 'Starting AR camera…'
+            : null
+        : 'Camera issue · ${error!}';
+
+    if (message == null) return const SizedBox.shrink();
+
+    final bool hasError = error != null;
+
+    return AnimatedSwitcher(
+      duration: const Duration(milliseconds: 220),
+      child: _ArGlass(
+        radius: 999,
+        padding: EdgeInsets.symmetric(
+          horizontal: compact ? 10 : 12,
+          vertical: compact ? 7 : 8,
+        ),
+        color: Colors.black.withValues(alpha: hasError ? 0.62 : 0.42),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: <Widget>[
+            if (loading && !hasError) ...<Widget>[
+              const CupertinoActivityIndicator(color: Colors.white),
+              const SizedBox(width: 8),
+            ] else ...<Widget>[
+              const Icon(
+                CupertinoIcons.exclamationmark_triangle_fill,
+                color: _kArGold,
+                size: 15,
               ),
-              const SizedBox(height: 3),
-              Text(
-                snapshot.hasRoute
-                    ? 'to next route direction'
-                    : 'open Route first, then use AR',
+              const SizedBox(width: 8),
+            ],
+            Flexible(
+              child: Text(
+                message,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 style: TextStyle(
-                  color: Colors.white.withValues(alpha: 0.58),
-                  fontSize: 11,
+                  decoration: TextDecoration.none,
+                  color: Colors.white.withValues(alpha: 0.82),
+                  fontSize: compact ? 10 : 11,
                   fontWeight: FontWeight.w800,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ArMotionStabilityBanner extends StatelessWidget {
+  const _ArMotionStabilityBanner({
+    required this.stability,
+    required this.compact,
+  });
+
+  final _ArMotionStability stability;
+  final bool compact;
+
+  @override
+  Widget build(BuildContext context) {
+    final bool quiet = stability == _ArMotionStability.steady;
+
+    return AnimatedSwitcher(
+      duration: const Duration(milliseconds: 220),
+      child: quiet && compact
+          ? const SizedBox.shrink()
+          : _ArGlass(
+              radius: 999,
+              padding: EdgeInsets.symmetric(
+                horizontal: compact ? 10 : 12,
+                vertical: compact ? 7 : 8,
+              ),
+              color: Colors.black.withValues(alpha: quiet ? 0.34 : 0.58),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: <Widget>[
+                  Icon(
+                    stability.icon,
+                    color: stability.color,
+                    size: compact ? 13 : 15,
+                  ),
+                  const SizedBox(width: 7),
+                  Text(
+                    stability == _ArMotionStability.shaking
+                        ? 'Phone shaking · hold steady'
+                        : stability == _ArMotionStability.moving
+                            ? 'Motion detected · move slowly'
+                            : 'AR stable',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      decoration: TextDecoration.none,
+                      color: quiet
+                          ? Colors.white.withValues(alpha: 0.72)
+                          : stability.color,
+                      fontSize: compact ? 10 : 11,
+                      fontWeight: FontWeight.w900,
+                      letterSpacing: 0.25,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+    );
+  }
+}
+
+class _ArDirectionHeader extends StatelessWidget {
+  const _ArDirectionHeader({
+    required this.color,
+    required this.direction,
+    required this.distance,
+    required this.hasRoute,
+  });
+
+  final Color color;
+  final String direction;
+  final String distance;
+  final bool hasRoute;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: <Widget>[
+        Container(
+          width: 34,
+          height: 34,
+          decoration: BoxDecoration(
+            color: color.withValues(alpha: 0.13),
+            shape: BoxShape.circle,
+            border: Border.all(color: color.withValues(alpha: 0.28)),
+          ),
+          child: Icon(
+            hasRoute ? Icons.navigation_rounded : Icons.route_rounded,
+            color: color,
+            size: 18,
+          ),
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[
+              Text(
+                direction,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  decoration: TextDecoration.none,
+                  color: color,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w900,
+                  letterSpacing: 0.2,
+                ),
+              ),
+              const SizedBox(height: 2),
+              Text(
+                distance,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  decoration: TextDecoration.none,
+                  color: Colors.white,
+                  fontSize: 22,
+                  fontWeight: FontWeight.w900,
+                  letterSpacing: -0.8,
+                  fontFeatures: <ui.FontFeature>[
+                    ui.FontFeature.tabularFigures(),
+                  ],
                 ),
               ),
             ],
@@ -660,11 +1487,14 @@ class _ArDirectionArrow extends StatelessWidget {
   }
 }
 
-
 class _ArSensorRadar extends StatelessWidget {
-  const _ArSensorRadar({required this.snapshot});
+  const _ArSensorRadar({
+    required this.snapshot,
+    required this.compact,
+  });
 
   final _ArRouteSnapshot snapshot;
+  final bool compact;
 
   @override
   Widget build(BuildContext context) {
@@ -677,7 +1507,7 @@ class _ArSensorRadar extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         children: <Widget>[
           CustomPaint(
-            size: const Size.square(118),
+            size: Size.square(compact ? 96 : 118),
             painter: _ArRadarPainter(
               heading: snapshot.heading,
               targetBearing: snapshot.targetBearing,
@@ -688,7 +1518,7 @@ class _ArSensorRadar extends StatelessWidget {
           ),
           const SizedBox(width: 12),
           ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 168),
+            constraints: BoxConstraints(maxWidth: compact ? 150 : 168),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: <Widget>[
@@ -697,6 +1527,7 @@ class _ArSensorRadar extends StatelessWidget {
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
+                    decoration: TextDecoration.none,
                     color: color,
                     fontSize: 10,
                     fontWeight: FontWeight.w900,
@@ -711,6 +1542,7 @@ class _ArSensorRadar extends StatelessWidget {
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(
+                    decoration: TextDecoration.none,
                     color: Colors.white,
                     fontSize: 12,
                     fontWeight: FontWeight.w800,
@@ -723,6 +1555,7 @@ class _ArSensorRadar extends StatelessWidget {
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
+                    decoration: TextDecoration.none,
                     color: Colors.white.withValues(alpha: 0.56),
                     fontSize: 10,
                     fontWeight: FontWeight.w700,
@@ -881,7 +1714,7 @@ class _ArRadarPainter extends CustomPainter {
   }
 
   void _drawCardinalLabels(Canvas canvas, Offset center, double radius) {
-    final List<_RadarLabel> labels = <_RadarLabel>[
+    const List<_RadarLabel> labels = <_RadarLabel>[
       _RadarLabel('N', 0),
       _RadarLabel('E', 90),
       _RadarLabel('S', 180),
@@ -900,6 +1733,7 @@ class _ArRadarPainter extends CustomPainter {
         text: TextSpan(
           text: label.text,
           style: TextStyle(
+            decoration: TextDecoration.none,
             color: label.text == 'N'
                 ? _kArBlueSoft
                 : Colors.white.withValues(alpha: 0.55),
@@ -935,32 +1769,37 @@ class _RadarLabel {
 }
 
 class _ArBottomHud extends StatelessWidget {
-  const _ArBottomHud({required this.snapshot});
+  const _ArBottomHud({
+    required this.snapshot,
+    required this.compact,
+  });
 
   final _ArRouteSnapshot snapshot;
+  final bool compact;
 
   @override
   Widget build(BuildContext context) {
     return _ArGlass(
-      radius: 30,
-      padding: const EdgeInsets.all(14),
+      radius: compact ? 26 : 30,
+      padding: EdgeInsets.all(compact ? 11 : 14),
       child: Row(
         children: <Widget>[
           SizedBox(
-            width: 92,
+            width: compact ? 76 : 92,
             child: Column(
               children: <Widget>[
                 Text(
                   snapshot.speedLabel,
                   maxLines: 1,
                   overflow: TextOverflow.clip,
-                  style: const TextStyle(
+                  style: TextStyle(
+                    decoration: TextDecoration.none,
                     color: Colors.white,
-                    fontSize: 44,
+                    fontSize: compact ? 36 : 44,
                     height: 0.92,
                     fontWeight: FontWeight.w900,
-                    letterSpacing: -2.2,
-                    fontFeatures: <ui.FontFeature>[
+                    letterSpacing: compact ? -1.6 : -2.2,
+                    fontFeatures: const <ui.FontFeature>[
                       ui.FontFeature.tabularFigures(),
                     ],
                   ),
@@ -969,6 +1808,7 @@ class _ArBottomHud extends StatelessWidget {
                 Text(
                   snapshot.speedUnit,
                   style: const TextStyle(
+                    decoration: TextDecoration.none,
                     color: _kArBlueSoft,
                     fontSize: 10,
                     fontWeight: FontWeight.w900,
@@ -980,8 +1820,8 @@ class _ArBottomHud extends StatelessWidget {
           ),
           Container(
             width: 1,
-            height: 48,
-            margin: const EdgeInsets.symmetric(horizontal: 12),
+            height: compact ? 42 : 48,
+            margin: EdgeInsets.symmetric(horizontal: compact ? 10 : 12),
             color: Colors.white.withValues(alpha: 0.12),
           ),
           Expanded(
@@ -992,17 +1832,18 @@ class _ArBottomHud extends StatelessWidget {
                       ? CupertinoIcons.checkmark_circle_fill
                       : CupertinoIcons.exclamationmark_triangle_fill,
                   color: snapshot.hasRoute ? _kArGreen : _kArGold,
-                  size: 20,
+                  size: compact ? 18 : 20,
                 ),
                 const SizedBox(width: 9),
                 Expanded(
                   child: Text(
                     snapshot.coachTip,
-                    maxLines: 2,
+                    maxLines: compact ? 1 : 2,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
+                    style: TextStyle(
+                      decoration: TextDecoration.none,
                       color: Colors.white,
-                      fontSize: 12,
+                      fontSize: compact ? 11 : 12,
                       fontWeight: FontWeight.w800,
                       height: 1.18,
                     ),
@@ -1048,6 +1889,7 @@ class _ArCameraError extends StatelessWidget {
                 const Text(
                   'AR Camera unavailable',
                   style: TextStyle(
+                    decoration: TextDecoration.none,
                     color: Colors.white,
                     fontSize: 17,
                     fontWeight: FontWeight.w900,
@@ -1058,6 +1900,7 @@ class _ArCameraError extends StatelessWidget {
                   message,
                   textAlign: TextAlign.center,
                   style: TextStyle(
+                    decoration: TextDecoration.none,
                     color: Colors.white.withValues(alpha: 0.64),
                     fontSize: 12,
                     fontWeight: FontWeight.w700,
@@ -1186,6 +2029,7 @@ class _ArPill extends StatelessWidget {
           Text(
             label,
             style: TextStyle(
+              decoration: TextDecoration.none,
               color: color,
               fontSize: 11,
               fontWeight: FontWeight.w900,
@@ -1211,7 +2055,8 @@ class _ArMiniStatus extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Flexible(
+    return ConstrainedBox(
+      constraints: const BoxConstraints(maxWidth: 118),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: <Widget>[
@@ -1223,6 +2068,7 @@ class _ArMiniStatus extends StatelessWidget {
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: const TextStyle(
+                decoration: TextDecoration.none,
                 color: Colors.white,
                 fontSize: 10,
                 fontWeight: FontWeight.w800,

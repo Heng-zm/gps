@@ -52,11 +52,7 @@ class AppSearchBar extends StatelessWidget {
         ),
         prefix: const Padding(
           padding: EdgeInsets.only(left: 13, right: 7),
-          child: Icon(
-            CupertinoIcons.search,
-            color: AppColors.white54,
-            size: 17,
-          ),
+          child: Icon(CupertinoIcons.search, color: AppColors.white54, size: 17),
         ),
         suffix: ValueListenableBuilder<TextEditingValue>(
           valueListenable: controller,
@@ -83,9 +79,9 @@ class AppSearchBar extends StatelessWidget {
         ),
         padding: const EdgeInsets.symmetric(vertical: 14),
         decoration: BoxDecoration(
-          color: AppColors.white.withValues(alpha: 0.07),
+          color: AppColors.white.withValues(alpha: 0.065),
           borderRadius: BorderRadius.circular(18),
-          border: Border.all(color: AppColors.white.withValues(alpha: 0.10)),
+          border: Border.all(color: AppColors.white.withValues(alpha: 0.09)),
         ),
       ),
     );

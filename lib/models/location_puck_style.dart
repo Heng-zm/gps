@@ -182,6 +182,30 @@ enum LocationPuckStyle {
     'sport': LocationPuckStyle.sportArrow,
   };
 
+
+  /// Styles shown by default in picker UIs. Kept separate from [values] so
+  /// future experimental styles can be hidden without breaking persistence.
+  static const List<LocationPuckStyle> selectorStyles = <LocationPuckStyle>[
+    LocationPuckStyle.classicBlue,
+    LocationPuckStyle.neonBlue,
+    LocationPuckStyle.compass,
+    LocationPuckStyle.vehicle,
+    LocationPuckStyle.navigator,
+    LocationPuckStyle.earner,
+    LocationPuckStyle.pulseHalo,
+    LocationPuckStyle.stealth,
+    LocationPuckStyle.rider,
+    LocationPuckStyle.sportArrow,
+    LocationPuckStyle.minimalDot,
+  ];
+
+  static LocationPuckStyle fromIndex(int index) {
+    if (index < 0 || index >= LocationPuckStyle.values.length) {
+      return LocationPuckStyle.classicBlue;
+    }
+    return LocationPuckStyle.values[index];
+  }
+
   static LocationPuckStyle fromStorageKey(String? value) {
     final String normalized = (value ?? '').trim().toLowerCase();
     if (normalized.isEmpty) return LocationPuckStyle.classicBlue;

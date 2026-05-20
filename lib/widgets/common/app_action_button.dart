@@ -58,10 +58,11 @@ class _AppActionButtonState extends State<AppActionButton> {
   Widget build(BuildContext context) {
     final double resolvedHeight = math.max(44.0, widget.height);
     final double resolvedMinWidth = math.max(44.0, widget.minWidth);
+    final Color foreground = widget.primary ? AppColors.white : widget.textColor;
 
     return Semantics(
       button: true,
-      enabled: _active || widget.isLoading,
+      enabled: _active,
       label: widget.label,
       hint: widget.semanticHint,
       child: MouseRegion(
@@ -90,22 +91,20 @@ class _AppActionButtonState extends State<AppActionButton> {
                 ),
                 child: DecoratedBox(
                   decoration: BoxDecoration(
-                    gradient:
-                        widget.primary ? AppColors.blueButtonGradient : null,
+                    gradient: widget.primary ? AppColors.blueButtonGradient : null,
                     color: widget.primary
                         ? null
-                        : (widget.color ??
-                            AppColors.white.withValues(alpha: 0.075)),
+                        : (widget.color ?? AppColors.white.withValues(alpha: 0.075)),
                     borderRadius: BorderRadius.circular(18),
                     border: Border.all(
                       color: widget.primary
-                          ? AppColors.blueSoft.withValues(alpha: 0.20)
+                          ? AppColors.blueSoft.withValues(alpha: 0.22)
                           : AppColors.white.withValues(alpha: 0.10),
                     ),
                     boxShadow: widget.primary
                         ? <BoxShadow>[
                             BoxShadow(
-                              color: AppColors.blue.withValues(alpha: 0.28),
+                              color: AppColors.blue.withValues(alpha: 0.26),
                               blurRadius: 18,
                               offset: const Offset(0, 8),
                             ),
@@ -120,30 +119,24 @@ class _AppActionButtonState extends State<AppActionButton> {
                         mainAxisAlignment: MainAxisAlignment.center,
                         mainAxisSize: MainAxisSize.min,
                         children: <Widget>[
-                          if (widget.isLoading)
-                            const CupertinoActivityIndicator(
-                              color: AppColors.white,
-                              radius: 8,
-                            )
-                          else if (widget.icon != null)
-                            Icon(
-                              widget.icon,
-                              color: widget.textColor,
-                              size: 17,
-                            ),
-                          if (widget.isLoading || widget.icon != null)
+                          if (widget.isLoading) ...<Widget>[
+                            CupertinoActivityIndicator(color: foreground),
+                            const SizedBox(width: 9),
+                          ] else if (widget.icon != null) ...<Widget>[
+                            Icon(widget.icon, color: foreground, size: 18),
                             const SizedBox(width: 8),
+                          ],
                           Flexible(
                             child: Text(
-                              widget.label,
+                              widget.isLoading ? 'Loading…' : widget.label,
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
-                              textAlign: TextAlign.center,
+                              softWrap: false,
                               style: TextStyle(
-                                color: widget.textColor,
+                                color: foreground,
                                 fontSize: 13,
                                 fontWeight: FontWeight.w900,
-                                letterSpacing: 0.2,
+                                letterSpacing: 0.15,
                               ),
                             ),
                           ),

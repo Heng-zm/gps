@@ -58,6 +58,10 @@
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
 
+	<!-- Camera Permission for AR Camera Screen -->
+	<key>NSCameraUsageDescription</key>
+	<string>GPS Tracker uses the camera for AR navigation, live route guidance, and visual direction overlays.</string>
+
 	<!-- Location Permissions -->
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>GPS Tracker uses your location to show live speed, distance, route, and compass direction while you use the app.</string>
@@ -73,7 +77,7 @@
 
 	<!-- Motion / Compass Permission -->
 	<key>NSMotionUsageDescription</key>
-	<string>Motion detection helps GPS Tracker improve compass direction, movement detection, and battery optimization while tracking trips.</string>
+	<string>Motion detection helps GPS Tracker improve compass direction, movement detection, AR stability warnings, and battery optimization while tracking trips.</string>
 
 	<!-- Hardware Capabilities -->
 	<key>UIRequiredDeviceCapabilities</key>

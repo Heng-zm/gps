@@ -1,11 +1,11 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
 
 import '../models/mapbox_route_models.dart';
-import '../utils/app_logger.dart';
 
 class MapboxGeocodingException implements Exception {
   const MapboxGeocodingException(this.message);
@@ -36,7 +36,7 @@ class MapboxGeocodingService {
       return const <MapboxPlaceResult>[];
     }
 
-    if (accessToken.isEmpty) {
+    if (accessToken.trim().isEmpty) {
       throw const MapboxGeocodingException('Mapbox token is missing.');
     }
 
@@ -46,14 +46,14 @@ class MapboxGeocodingService {
         MapboxPlaceResult(
           name: 'Pinned coordinate',
           address:
-              '${coordinate.latitude.toStringAsFixed(5)}, ${coordinate.longitude.toStringAsFixed(5)}',
+              '\${coordinate.latitude.toStringAsFixed(5)}, \${coordinate.longitude.toStringAsFixed(5)}',
           position: coordinate,
         ),
       ];
     }
 
     final Map<String, String> params = <String, String>{
-      'access_token': accessToken,
+      'access_token': accessToken.trim(),
       'limit': limit.clamp(1, 10).toString(),
       'types':
           'country,region,postcode,district,place,locality,neighborhood,address,poi',
@@ -63,25 +63,24 @@ class MapboxGeocodingService {
     };
 
     if (proximity != null && isValidLatLng(proximity)) {
-      params['proximity'] = '${proximity.longitude},${proximity.latitude}';
+      params['proximity'] = '\${proximity.longitude},\${proximity.latitude}';
     }
 
     final Uri uri = Uri.parse(
       'https://api.mapbox.com/geocoding/v5/mapbox.places/'
-      '${Uri.encodeComponent(trimmed)}.json',
+      '\${Uri.encodeComponent(trimmed)}.json',
     ).replace(queryParameters: params);
 
     try {
       final http.Response response = await http.get(uri).timeout(timeout);
 
       if (response.statusCode < 200 || response.statusCode >= 300) {
-        AppLogger.err(
-          'MAPBOX',
-          'Geocoding API returned ${response.statusCode}',
-          data: response.body,
+        debugPrint(
+          'MapboxGeocodingService status \${response.statusCode}: '
+          '\${_shortBody(response.body)}',
         );
         throw MapboxGeocodingException(
-          'Location search failed (${response.statusCode}).',
+          'Location search failed (\${response.statusCode}).',
         );
       }
 
@@ -98,35 +97,40 @@ class MapboxGeocodingService {
       final List<MapboxPlaceResult> results = <MapboxPlaceResult>[];
       final Set<String> seen = <String>{};
 
-      for (final dynamic item in features) {
-        if (item is! Map<String, dynamic>) continue;
+      for (final Object? item in features) {
+        if (item is! Map) continue;
+        final Map<String, dynamic> feature = Map<String, dynamic>.from(item);
 
         final String name =
-            (item['text'] ?? item['place_name'] ?? '').toString().trim();
-        final String address = (item['place_name'] ?? '').toString().trim();
-        final List<dynamic> center = item['center'] as List<dynamic>? ?? [];
+            (feature['text'] ?? feature['place_name'] ?? '').toString().trim();
+        final String address =
+            (feature['place_name'] ?? '').toString().trim();
+
+        final List<dynamic> center =
+            feature['center'] as List<dynamic>? ?? <dynamic>[];
 
         if (name.isEmpty || center.length < 2) continue;
 
-        final double? lng = (center[0] as num?)?.toDouble();
-        final double? lat = (center[1] as num?)?.toDouble();
-
+        final double? lng = _asDoubleOrNull(center[0]);
+        final double? lat = _asDoubleOrNull(center[1]);
         if (lat == null || lng == null) continue;
 
         final LatLng position = LatLng(lat, lng);
         if (!isValidLatLng(position)) continue;
 
         final String key =
-            '${name.toLowerCase()}|${lat.toStringAsFixed(5)},${lng.toStringAsFixed(5)}';
+            '\${lat.toStringAsFixed(5)},\${lng.toStringAsFixed(5)}:\$name';
         if (!seen.add(key)) continue;
 
         results.add(
           MapboxPlaceResult(
             name: name,
-            address: address,
+            address: address.isEmpty ? name : address,
             position: position,
           ),
         );
+
+        if (results.length >= limit.clamp(1, 10)) break;
       }
 
       return List<MapboxPlaceResult>.unmodifiable(results);
@@ -135,13 +139,49 @@ class MapboxGeocodingService {
     } on MapboxGeocodingException {
       rethrow;
     } catch (error, stackTrace) {
-      AppLogger.err(
-        'MAPBOX',
-        'Geocoding search failed',
-        error: error,
-        stackTrace: stackTrace,
-      );
+      debugPrint('MapboxGeocodingService failed: \$error\n\$stackTrace');
       throw const MapboxGeocodingException('Location search failed.');
     }
+  }
+
+  static LatLng? tryParseLatLng(String value) {
+    final String normalized = value
+        .replaceAll(';', ',')
+        .replaceAll('|', ',')
+        .replaceAll(RegExp(r'\s+'), ',');
+
+    final List<String> parts = normalized
+        .split(',')
+        .map((String part) => part.trim())
+        .where((String part) => part.isNotEmpty)
+        .toList(growable: false);
+
+    if (parts.length < 2) return null;
+
+    final double? lat = double.tryParse(parts[0]);
+    final double? lng = double.tryParse(parts[1]);
+
+    if (lat == null || lng == null) return null;
+
+    final LatLng point = LatLng(lat, lng);
+    return isValidLatLng(point) ? point : null;
+  }
+
+  static double? _asDoubleOrNull(Object? value) {
+    if (value is num) {
+      final double parsed = value.toDouble();
+      return parsed.isFinite ? parsed : null;
+    }
+    if (value is String) {
+      final double? parsed = double.tryParse(value.trim());
+      return parsed != null && parsed.isFinite ? parsed : null;
+    }
+    return null;
+  }
+
+  static String _shortBody(String value) {
+    final String trimmed = value.trim();
+    if (trimmed.length <= 300) return trimmed;
+    return '\${trimmed.substring(0, 300)}...';
   }
 }

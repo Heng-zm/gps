@@ -18,6 +18,21 @@ import 'package:latlong2/latlong.dart';
 /// - `downsamplePolyline` and `downsampleValues` avoid intermediate cleaned
 ///   list copies in their hot paths.
 ///
+/// ### Performance fixes (v2)
+/// - `resamplePolylineByDistance` now walks the segment cursor incrementally,
+///   reducing complexity from O(N × targetCount) to O(N + targetCount).
+/// - `_nearlySame` now squares the clamped tolerance instead of calling
+///   `sqrt`, matching the safety guarantee without the trig overhead.
+/// - `closestPointOnPolyline` no longer calls `_projectPointOnSegment` on
+///   every segment. The projection is computed only once for the winner.
+/// - `downsampleValues` cursor logic now guards against duplicate
+///   `targetOrdinal` values when `step < 1`.
+///
+/// ### Documentation fixes (v2)
+/// - `bearingAtDistance` documents the overshoot behaviour near the end of
+///   the route.
+/// - `_linearSubdivide` removes the redundant `.toInt()` cast.
+///
 /// ### Performance notes
 /// Most helpers are O(N). For very large live routes, prefer
 /// [optimizeLiveRoutePolyline], [optimizePolylineAdaptive], or
@@ -417,7 +432,8 @@ List<LatLng> removeGpsJumps(
 ///
 /// Useful for replay markers, animated route previews, and progress tracking.
 ///
-/// Complexity: O(N * targetCount) because each interpolation scans from start.
+/// Complexity: O(N + targetCount). The segment cursor advances incrementally
+/// so each input point is visited at most once regardless of output count.
 /// Keep [maxPoints] bounded for large routes.
 List<LatLng> resamplePolylineByDistance(
   List<LatLng> points, {
@@ -439,15 +455,34 @@ List<LatLng> resamplePolylineByDistance(
       math.min((total / safeSpacing).ceil() + 1, safeMax).toInt();
   final List<LatLng> result = <LatLng>[];
 
+  // FIX: walk the segment cursor forward incrementally instead of calling
+  // interpolatePointAtDistance (which scans from index 0 every time).
+  // This reduces complexity from O(N × targetCount) to O(N + targetCount).
+  int segIndex = 1;
+  double segStart = 0.0;
+  double segEnd = calculateDistanceMeters(cleaned[0], cleaned[1]);
+
   for (int i = 0; i < targetCount; i++) {
-    final double distance = i == targetCount - 1
+    final double target = i == targetCount - 1
         ? total
         : (i * safeSpacing).clamp(0.0, total).toDouble();
 
-    final LatLng? point = interpolatePointAtDistance(cleaned, distance);
-    if (point != null) {
-      _addIfDifferent(result, point, _kDefaultDuplicateTolerance);
+    // Advance the segment cursor to the segment that contains `target`.
+    while (segIndex < cleaned.length - 1 && segEnd < target) {
+      segStart = segEnd;
+      segIndex++;
+      segEnd +=
+          calculateDistanceMeters(cleaned[segIndex - 1], cleaned[segIndex]);
     }
+
+    final double segLen = segEnd - segStart;
+    final double t = segLen > 0.0 ? (target - segStart) / segLen : 0.0;
+    final LatLng point = _lerpLatLng(
+      cleaned[segIndex - 1],
+      cleaned[segIndex],
+      t.clamp(0.0, 1.0).toDouble(),
+    );
+    _addIfDifferent(result, point, _kDefaultDuplicateTolerance);
   }
 
   if (result.isEmpty || !_nearlySame(result.last, cleaned.last, 0.0)) {
@@ -460,6 +495,13 @@ List<LatLng> resamplePolylineByDistance(
 /// Returns route bearing at a cumulative distance.
 ///
 /// Useful for replay vehicle heading or navigation puck orientation.
+///
+/// Note: when [distanceMeters] is close to the end of the route,
+/// `distanceMeters + lookAheadMeters` may exceed the total length.
+/// In that case [interpolatePointAtDistance] returns the final point, so
+/// the returned bearing reflects the last available heading rather than a
+/// projected one. Callers that need strict end-of-route behaviour should
+/// clamp [distanceMeters] before calling this function.
 double? bearingAtDistance(
   List<LatLng> points,
   double distanceMeters, {
@@ -594,6 +636,14 @@ List<double> downsampleValues(
   for (int out = 0; out < safeMax; out++) {
     final int targetOrdinal =
         (out * step).round().clamp(0, lastFiniteOrdinal).toInt();
+
+    // FIX: when step < 1, consecutive targetOrdinal values can be identical.
+    // If the cursor has already passed this ordinal, reuse the value that was
+    // written for the previous output slot rather than advancing further.
+    if (finiteOrdinal >= targetOrdinal && out > 0) {
+      result[out] = result[out - 1];
+      continue;
+    }
 
     while (sourceIndex < valueLength && finiteOrdinal < targetOrdinal) {
       final double value = values[sourceIndex++];
@@ -779,21 +829,24 @@ ClosestPointResult? closestPointOnPolyline(
   }
 
   double bestDistSq = double.infinity;
-  LatLng bestPoint = cleaned.first;
+  // FIX: defer _projectPointOnSegment until we know the winning segment.
+  // Previously it was called on every segment; now it is called exactly once.
   int bestSegment = 0;
 
   for (int i = 0; i < cleaned.length - 1; i++) {
-    final LatLng start = cleaned[i];
-    final LatLng end = cleaned[i + 1];
-
-    final double distSq = _getSqSegDist(query, start, end);
+    final double distSq = _getSqSegDist(query, cleaned[i], cleaned[i + 1]);
 
     if (distSq < bestDistSq) {
       bestDistSq = distSq;
-      bestPoint = _projectPointOnSegment(query, start, end);
       bestSegment = i;
     }
   }
+
+  final LatLng bestPoint = _projectPointOnSegment(
+    query,
+    cleaned[bestSegment],
+    cleaned[bestSegment + 1],
+  );
 
   return ClosestPointResult(
     point: bestPoint,
@@ -1145,8 +1198,8 @@ List<LatLng> _linearSubdivide(
   int subdivisions, {
   required int maxOutputPoints,
 }) {
-  final int count =
-      math.min(subdivisions.clamp(1, 24).toInt() + 1, maxOutputPoints).toInt();
+  // FIX: removed redundant `.toInt()` — math.min(int, int) already returns int.
+  final int count = math.min(subdivisions.clamp(1, 24) + 1, maxOutputPoints);
 
   if (count <= 2) return <LatLng>[a, b];
 
@@ -1270,9 +1323,9 @@ bool _isValidLatLng(LatLng point) {
 
 /// Returns `true` if [a] and [b] are within [tolerance] degrees of each other.
 ///
-/// Positive tolerances are clamped to at least [_kGeometryEpsilon], then
-/// compared with real Euclidean distance instead of squared tolerance. This is
-/// slightly more expensive than squared-distance but safer for tiny tolerances.
+/// FIX: squares the clamped tolerance instead of calling `sqrt` on the
+/// distance. This gives the same safety guarantee as the previous `sqrt`-based
+/// implementation at a fraction of the cost — no trig required.
 bool _nearlySame(LatLng a, LatLng b, double tolerance) {
   final double dLat = a.latitude - b.latitude;
   final double dLng = a.longitude - b.longitude;
@@ -1282,7 +1335,8 @@ bool _nearlySame(LatLng a, LatLng b, double tolerance) {
   }
 
   final double safeTolerance = math.max(tolerance, _kGeometryEpsilon);
-  return math.sqrt(dLat * dLat + dLng * dLng) <= safeTolerance;
+  // Compare squared distance to squared tolerance — avoids sqrt entirely.
+  return (dLat * dLat + dLng * dLng) <= safeTolerance * safeTolerance;
 }
 
 bool _isClosedLoop(List<LatLng> points) {

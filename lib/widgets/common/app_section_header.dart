@@ -54,10 +54,7 @@ class AppSectionHeader extends StatelessWidget {
           ),
           if (trailing != null) ...<Widget>[
             const SizedBox(width: 10),
-            Flexible(
-              flex: 0,
-              child: trailing!,
-            ),
+            Flexible(flex: 0, child: trailing!),
           ],
         ],
       ),

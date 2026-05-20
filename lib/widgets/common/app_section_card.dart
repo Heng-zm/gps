@@ -45,9 +45,7 @@ class AppSectionCard extends StatelessWidget {
                       decoration: BoxDecoration(
                         shape: BoxShape.circle,
                         color: iconColor.withValues(alpha: 0.12),
-                        border: Border.all(
-                          color: iconColor.withValues(alpha: 0.22),
-                        ),
+                        border: Border.all(color: iconColor.withValues(alpha: 0.22)),
                       ),
                       child: Icon(icon, color: iconColor, size: 14),
                     ),
@@ -86,10 +84,7 @@ class AppSectionCard extends StatelessWidget {
                   ),
                   if (trailing != null) ...<Widget>[
                     const SizedBox(width: 8),
-                    Flexible(
-                      flex: 0,
-                      child: trailing!,
-                    ),
+                    Flexible(flex: 0, child: trailing!),
                   ],
                 ],
               ),
@@ -97,10 +92,7 @@ class AppSectionCard extends StatelessWidget {
             AppGlassCard(
               padding: padding,
               borderRadius: 24,
-              child: _SectionChildren(
-                spacing: spacing,
-                children: children,
-              ),
+              child: _SectionChildren(spacing: spacing, children: children),
             ),
           ],
         ),
@@ -110,10 +102,7 @@ class AppSectionCard extends StatelessWidget {
 }
 
 class _SectionChildren extends StatelessWidget {
-  const _SectionChildren({
-    required this.children,
-    required this.spacing,
-  });
+  const _SectionChildren({required this.children, required this.spacing});
 
   final List<Widget> children;
   final double spacing;
@@ -121,22 +110,24 @@ class _SectionChildren extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (children.isEmpty) return const SizedBox.shrink();
-
     if (spacing <= 0) {
       return Column(
         mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: children,
       );
     }
 
+    final List<Widget> spaced = <Widget>[];
+    for (int i = 0; i < children.length; i++) {
+      if (i > 0) spaced.add(SizedBox(height: spacing));
+      spaced.add(children[i]);
+    }
+
     return Column(
       mainAxisSize: MainAxisSize.min,
-      children: <Widget>[
-        for (int i = 0; i < children.length; i++) ...<Widget>[
-          if (i > 0) SizedBox(height: spacing),
-          children[i],
-        ],
-      ],
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: spaced,
     );
   }
 }

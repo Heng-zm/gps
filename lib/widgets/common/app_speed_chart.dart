@@ -37,14 +37,11 @@ class AppSpeedChart extends StatelessWidget {
   static List<double> _downsample(List<double> source, int maxSamples) {
     final int safeMax = maxSamples.clamp(8, 300).toInt();
     if (source.length <= safeMax) {
-      return source
-          .map((double value) => value.isFinite ? value : 0.0)
-          .toList(growable: false);
+      return source.map((double value) => value.isFinite ? value : 0.0).toList(growable: false);
     }
 
     return List<double>.generate(safeMax, (int index) {
-      final int sourceIndex =
-          ((index / (safeMax - 1)) * (source.length - 1)).round();
+      final int sourceIndex = ((index / (safeMax - 1)) * (source.length - 1)).round();
       final double value = source[sourceIndex];
       return value.isFinite ? value : 0.0;
     }, growable: false);
@@ -52,24 +49,15 @@ class AppSpeedChart extends StatelessWidget {
 }
 
 class _SpeedChartPainter extends CustomPainter {
-  const _SpeedChartPainter({
-    required this.values,
-    required this.color,
-  });
+  const _SpeedChartPainter({required this.values, required this.color});
 
   final List<double> values;
   final Color color;
 
   @override
   void paint(Canvas canvas, Size size) {
-    final RRect bg = RRect.fromRectAndRadius(
-      Offset.zero & size,
-      const Radius.circular(18),
-    );
-    canvas.drawRRect(
-      bg,
-      Paint()..color = AppColors.white.withValues(alpha: 0.055),
-    );
+    final RRect bg = RRect.fromRectAndRadius(Offset.zero & size, const Radius.circular(18));
+    canvas.drawRRect(bg, Paint()..color = AppColors.white.withValues(alpha: 0.055));
 
     if (values.length < 2 || size.width <= 0 || size.height <= 0) return;
 
@@ -80,38 +68,40 @@ class _SpeedChartPainter extends CustomPainter {
 
     const double pad = 12.0;
     final Path path = Path();
+    final Path fill = Path();
 
     for (int i = 0; i < values.length; i++) {
       final double x = pad + (i / (values.length - 1)) * (size.width - pad * 2);
-      final double normalized =
-          ((values[i].isFinite ? values[i] : 0.0) / maxValue)
-              .clamp(0.0, 1.0)
-              .toDouble();
-      final double y =
-          size.height - pad - normalized * (size.height - pad * 2);
+      final double normalized = ((values[i].isFinite ? values[i] : 0.0) / maxValue).clamp(0.0, 1.0).toDouble();
+      final double y = size.height - pad - normalized * (size.height - pad * 2);
       if (i == 0) {
         path.moveTo(x, y);
+        fill.moveTo(x, size.height - pad);
+        fill.lineTo(x, y);
       } else {
         path.lineTo(x, y);
+        fill.lineTo(x, y);
       }
     }
+    fill.lineTo(size.width - pad, size.height - pad);
+    fill.close();
 
+    canvas.drawPath(fill, Paint()..color = color.withValues(alpha: 0.10));
     canvas.drawPath(
       path,
       Paint()
-        ..color = color.withValues(alpha: 0.25)
-        ..strokeWidth = math.max(5.0, size.height * 0.07)
+        ..color = color.withValues(alpha: 0.28)
         ..style = PaintingStyle.stroke
+        ..strokeWidth = 7
         ..strokeCap = StrokeCap.round
         ..strokeJoin = StrokeJoin.round,
     );
-
     canvas.drawPath(
       path,
       Paint()
         ..color = color
-        ..strokeWidth = 3
         ..style = PaintingStyle.stroke
+        ..strokeWidth = 2.5
         ..strokeCap = StrokeCap.round
         ..strokeJoin = StrokeJoin.round,
     );
@@ -119,6 +109,6 @@ class _SpeedChartPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _SpeedChartPainter oldDelegate) {
-    return oldDelegate.values != values || oldDelegate.color != color;
+    return oldDelegate.color != color || oldDelegate.values.length != values.length || oldDelegate.values != values;
   }
 }

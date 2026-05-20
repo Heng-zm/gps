@@ -1,9 +1,9 @@
 import 'package:flutter/widgets.dart';
 
-/// Safe one-line text used across the app.
+/// Safe text used across dense overlays and web builds.
 ///
-/// Uses [IgnorePointer] so text fragments do not participate in hit testing.
-/// This helps avoid Flutter Web text-fragment hit-test issues in dense overlays.
+/// Text is wrapped with [IgnorePointer] so it never steals taps from nearby
+/// buttons. This also reduces Flutter Web text-fragment hit-test noise.
 class AppSafeText extends StatelessWidget {
   const AppSafeText(
     this.data, {
@@ -12,8 +12,9 @@ class AppSafeText extends StatelessWidget {
     this.maxLines = 1,
     this.textAlign,
     this.softWrap = false,
-    this.overflow = TextOverflow.clip,
+    this.overflow = TextOverflow.ellipsis,
     this.semanticsLabel,
+    this.excludeSemantics = false,
   });
 
   final String data;
@@ -23,21 +24,27 @@ class AppSafeText extends StatelessWidget {
   final bool softWrap;
   final TextOverflow overflow;
   final String? semanticsLabel;
+  final bool excludeSemantics;
 
   @override
   Widget build(BuildContext context) {
+    final Widget text = IgnorePointer(
+      child: Text(
+        data,
+        maxLines: maxLines,
+        textAlign: textAlign,
+        softWrap: softWrap,
+        overflow: overflow,
+        style: style,
+      ),
+    );
+
+    if (excludeSemantics) return ExcludeSemantics(child: text);
+    if (semanticsLabel == null) return text;
+
     return Semantics(
       label: semanticsLabel,
-      child: IgnorePointer(
-        child: Text(
-          data,
-          maxLines: maxLines,
-          textAlign: textAlign,
-          softWrap: softWrap,
-          overflow: overflow,
-          style: style,
-        ),
-      ),
+      child: text,
     );
   }
 }
