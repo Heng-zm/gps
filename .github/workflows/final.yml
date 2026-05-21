@@ -249,6 +249,14 @@ jobs:
           zip -qq -r -9 GPS-Tracker.ipa Payload
           echo "✅ IPA size: $(du -sh GPS-Tracker.ipa | cut -f1)"
 
+      - name: 📤 Upload IPA as workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: GPS-Tracker-IPA-v1.1.${{ github.run_number }}
+          path: GPS-Tracker.ipa
+          if-no-files-found: error
+          retention-days: 30
+
       - name: 🌐 Generate OTA manifest + install page
         run: |
           REPO="${{ github.repository }}"
@@ -257,7 +265,7 @@ jobs:
           OWNER="${{ github.repository_owner }}"
           REPO_NAME="${{ github.event.repository.name }}"
 
-          IPA_URL="https://github.com/${REPO}/releases/download/v${VERSION}/GPS-Tracker-v${VERSION}.ipa"
+          IPA_URL="https://github.com/${REPO}/releases/download/v${VERSION}/GPS-Tracker.ipa"
           PAGES_URL="https://${OWNER}.github.io/${REPO_NAME}"
           MANIFEST_URL="${PAGES_URL}/manifest.plist"
 
@@ -331,14 +339,22 @@ jobs:
           echo "MANIFEST_URL=${MANIFEST_URL}" >> $GITHUB_ENV
           echo "PAGES_URL=${PAGES_URL}" >> $GITHUB_ENV
 
+      - name: ✅ Verify IPA before release upload
+        run: |
+          set -e
+          ls -lah
+          test -f GPS-Tracker.ipa
+          echo "✅ IPA exists:"
+          du -sh GPS-Tracker.ipa
+
       - name: 🚀 Upload IPA to GitHub Releases
-        uses: svenstaro/upload-release-action@v2
+        uses: softprops/action-gh-release@v2
         with:
-          repo_token: ${{ secrets.GITHUB_TOKEN }}
-          file: GPS-Tracker.ipa
-          asset_name: GPS-Tracker-v1.1.${{ github.run_number }}.ipa
-          tag: v1.1.${{ github.run_number }}
-          overwrite: true
+          tag_name: v1.1.${{ github.run_number }}
+          name: GPS Tracker v1.1.${{ github.run_number }}
+          files: GPS-Tracker.ipa
+          fail_on_unmatched_files: true
+          make_latest: true
           body: |
             ## 📍 GPS Tracker — v1.1.${{ github.run_number }}
 
@@ -353,7 +369,14 @@ jobs:
 
             👉 ${{ env.PAGES_URL }}
 
+            ### 📦 IPA Asset
+            Download the IPA from this release asset:
+
+            `GPS-Tracker.ipa`
+
             > ⚠️ Unsigned build — device UDID must be registered, or use Sideloadly/AltStore.
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: 📤 Deploy OTA page to GitHub Pages
         uses: peaceiris/actions-gh-pages@v4
