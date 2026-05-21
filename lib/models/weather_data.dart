@@ -287,3 +287,32 @@ double _safeNonNegative(double value) {
   if (!value.isFinite) return 0.0;
   return value < 0.0 ? 0.0 : value;
 }
+
+extension WeatherDataUxX on WeatherData {
+  bool get isSevere => severity >= 2;
+
+  bool get isWetRoadRisk =>
+      _c.contains('rain') ||
+      _c.contains('shower') ||
+      _c.contains('drizzle') ||
+      safePrecipProbabilityPct > 50;
+
+  bool get isLowVisibilityRisk =>
+      _c.contains('fog') || _c.contains('mist') || _c.contains('haze');
+
+  String get compactSummary => '$icon $tempDisplay · $condition';
+
+  String get drivingBadge {
+    if (isSevere) return 'Alert';
+    if (isDrivingCaution) return 'Caution';
+    return 'Clear';
+  }
+
+  String get routePlanningHint {
+    if (isSevere) return drivingAdvisory;
+    if (isWetRoadRisk) return 'Add extra braking distance';
+    if (isLowVisibilityRisk) return 'Use lights and reduce speed';
+    if (_safeNonNegative(windSpeed) >= 40) return 'Watch for crosswinds';
+    return 'Good for route tracking';
+  }
+}

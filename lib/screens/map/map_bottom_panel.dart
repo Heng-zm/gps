@@ -152,19 +152,23 @@ extension _MapScreenBottomPanel on _MapScreenState {
             ),
           ),
           const SizedBox(width: 8),
-          _PressableButton(
-            onTap: () => _setPanelDockMode(_PanelDockMode.expanded),
-            child: Container(
-              width: 44,
-              height: 44,
-              decoration: BoxDecoration(
-                gradient: _kBlueGlassGradient,
-                borderRadius: BorderRadius.circular(16),
-              ),
-              child: const Icon(
-                CupertinoIcons.chevron_up,
-                color: Colors.white,
-                size: 18,
+          Semantics(
+            button: true,
+            label: 'Expand map controls',
+            child: _PressableButton(
+              onTap: () => _setPanelDockMode(_PanelDockMode.expanded),
+              child: Container(
+                width: 44,
+                height: 44,
+                decoration: BoxDecoration(
+                  gradient: _kBlueGlassGradient,
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: const Icon(
+                  CupertinoIcons.chevron_up,
+                  color: Colors.white,
+                  size: 18,
+                ),
               ),
             ),
           ),

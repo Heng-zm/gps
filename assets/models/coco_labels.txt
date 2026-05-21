@@ -1,0 +1,9 @@
+person
+car
+motorcycle
+bicycle
+bus
+truck
+traffic light
+stop sign
+chair / obstacle

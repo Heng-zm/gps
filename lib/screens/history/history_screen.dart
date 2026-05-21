@@ -16,7 +16,6 @@ import '../../models/location_puck_style.dart';
 import '../../models/mapbox_styles.dart';
 import '../../services/settings_service.dart';
 import '../../services/trip_export_service.dart';
-import '../../services/trip_export_service.dart';
 import '../../widgets/location_puck_widget.dart';
 
 // ═══════════════════════════════════════════════════════════════════════════════

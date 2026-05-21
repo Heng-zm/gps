@@ -514,3 +514,90 @@ double _readDouble(Object? value) {
 
   return 0.0;
 }
+
+extension DirectionsProfileUxX on DirectionsProfile {
+  bool get isMotorized {
+    switch (this) {
+      case DirectionsProfile.drivingTraffic:
+      case DirectionsProfile.driving:
+        return true;
+      case DirectionsProfile.walking:
+      case DirectionsProfile.cycling:
+        return false;
+    }
+  }
+
+  bool get prefersTrafficAwareRouting => this == DirectionsProfile.drivingTraffic;
+
+  String get uxHint {
+    switch (this) {
+      case DirectionsProfile.drivingTraffic:
+        return 'Best for live traffic and city driving';
+      case DirectionsProfile.driving:
+        return 'Best for simple car routing';
+      case DirectionsProfile.walking:
+        return 'Best for short walking routes';
+      case DirectionsProfile.cycling:
+        return 'Best for bike-friendly routes';
+    }
+  }
+}
+
+extension PlannedRouteUxX on PlannedRoute {
+  bool get hasUsefulMetrics => safeDistanceMeters > 0.0 || safeDurationSeconds > 0.0;
+
+  double get averageSpeedKmh {
+    final double hours = safeDurationSeconds / 3600.0;
+    if (hours <= 0.0) return 0.0;
+    final double value = distanceKm / hours;
+    return value.isFinite && value > 0.0 ? value : 0.0;
+  }
+
+  String get averageSpeedLabel {
+    final double speed = averageSpeedKmh;
+    if (speed <= 0.0) return '—';
+    return '${speed.toStringAsFixed(speed >= 10 ? 0 : 1)} km/h';
+  }
+
+  String get compactDistanceLabel {
+    final double meters = safeDistanceMeters;
+    if (meters <= 0.0) return '0 m';
+    if (meters < 1000.0) return '${meters.round()} m';
+    return '${(meters / 1000.0).toStringAsFixed(meters >= 10000.0 ? 1 : 2)} km';
+  }
+
+  String get compactDurationLabel {
+    final int seconds = safeDurationSeconds.round().clamp(0, 1 << 31).toInt();
+    if (seconds <= 0) return '0s';
+    if (seconds < 60) return '${seconds}s';
+
+    final int hours = seconds ~/ 3600;
+    final int minutes = (seconds % 3600) ~/ 60;
+
+    if (hours > 0) return '${hours}h ${minutes.toString().padLeft(2, '0')}m';
+    return '${minutes}m';
+  }
+
+  PlannedRoute sanitized({int maxPoints = 2500}) {
+    final List<LatLng> validPoints = points
+        .where(isValidLatLng)
+        .take(maxPoints <= 0 ? points.length : maxPoints)
+        .toList(growable: false);
+
+    return copyWith(
+      points: List<LatLng>.unmodifiable(validPoints),
+      distanceMeters: safeDistanceMeters,
+      durationSeconds: safeDurationSeconds,
+    );
+  }
+}
+
+extension MapboxPlaceResultUxX on MapboxPlaceResult {
+  String get displayTitle => name.trim().isEmpty ? 'Pinned location' : name.trim();
+
+  String get displaySubtitle {
+    final String trimmed = address.trim();
+    if (trimmed.isNotEmpty) return trimmed;
+    return '${position.latitude.toStringAsFixed(5)}, ${position.longitude.toStringAsFixed(5)}';
+  }
+}

@@ -51,7 +51,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
 
   void _onSearchChanged() {
     _searchDebounce?.cancel();
-    _searchDebounce = Timer(const Duration(milliseconds: 120), () {
+    _searchDebounce = Timer(const Duration(milliseconds: 180), () {
       if (!mounted) return;
       final String next = _searchCtrl.text.trim().toLowerCase();
       if (next == _query) return;
@@ -290,21 +290,30 @@ class _HistoryScreenState extends State<HistoryScreen> {
   void _showSnack(String message, Color color) {
     if (!mounted) return;
     ScaffoldMessenger.of(context)
-      ..hideCurrentSnackBar()
+      ..clearSnackBars()
       ..showSnackBar(
-      SnackBar(
-        content: Text(message),
-        backgroundColor: color,
-        behavior: SnackBarBehavior.floating,
-        margin: EdgeInsets.fromLTRB(
-          16,
-          16,
-          16,
-          16 + MediaQuery.viewPaddingOf(context).bottom,
+        SnackBar(
+          content: Text(
+            message,
+            style: const TextStyle(
+              color: Colors.white,
+              fontWeight: FontWeight.w800,
+              decoration: TextDecoration.none,
+            ),
+          ),
+          backgroundColor: color,
+          behavior: SnackBarBehavior.floating,
+          margin: EdgeInsets.fromLTRB(
+            16,
+            16,
+            16,
+            16 + MediaQuery.viewPaddingOf(context).bottom,
+          ),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(14),
+          ),
         ),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-      ),
-    );
+      );
   }
 
   void _openTripDetails(SavedTrip trip) {

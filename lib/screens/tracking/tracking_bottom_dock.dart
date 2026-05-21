@@ -4,6 +4,8 @@ part of 'tracking_screen.dart';
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // BOTTOM DOCK
+// UX pass: compact drag behavior, low rebuild cost via ValueListenableBuilder,
+// and map-first action controls remain isolated in this part file.
 // ═══════════════════════════════════════════════════════════════════════════════
 
 class _MapFirstBottomDock extends StatefulWidget {

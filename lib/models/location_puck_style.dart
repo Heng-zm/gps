@@ -224,3 +224,62 @@ enum LocationPuckStyle {
     return LocationPuckStyle.classicBlue;
   }
 }
+
+extension LocationPuckStyleUxX on LocationPuckStyle {
+  /// Cycles through only user-facing styles, keeping hidden/experimental values safe.
+  LocationPuckStyle get nextSelectorStyle {
+    final List<LocationPuckStyle> styles = LocationPuckStyle.selectorStyles;
+    final int index = styles.indexOf(this);
+    if (index < 0 || styles.isEmpty) return LocationPuckStyle.classicBlue;
+    return styles[(index + 1) % styles.length];
+  }
+
+  bool get isVehicleFocused => usesVehicleBody || this == LocationPuckStyle.rider;
+
+  bool get isNavigationFocused =>
+      showsHeadingCone || usesArrowBody || this == LocationPuckStyle.compass;
+
+  bool get isHighVisibility =>
+      usesPulseRing ||
+      this == LocationPuckStyle.neonBlue ||
+      this == LocationPuckStyle.navigator ||
+      this == LocationPuckStyle.sportArrow;
+
+  bool get recommendedForDarkMap {
+    switch (this) {
+      case LocationPuckStyle.neonBlue:
+      case LocationPuckStyle.navigator:
+      case LocationPuckStyle.pulseHalo:
+      case LocationPuckStyle.sportArrow:
+      case LocationPuckStyle.minimalDot:
+        return true;
+      default:
+        return false;
+    }
+  }
+
+  bool get recommendedForSatellite {
+    switch (this) {
+      case LocationPuckStyle.earner:
+      case LocationPuckStyle.rider:
+      case LocationPuckStyle.sportArrow:
+      case LocationPuckStyle.pulseHalo:
+        return true;
+      default:
+        return false;
+    }
+  }
+
+  Color get readableTextColor {
+    final double luminance = centerColor.computeLuminance();
+    return luminance > 0.45 ? const Color(0xFF111827) : const Color(0xFFFFFFFF);
+  }
+
+  String get uxBadge {
+    if (isVehicleFocused) return 'Trip';
+    if (isNavigationFocused) return 'Nav';
+    if (isHighVisibility) return 'Visible';
+    if (isCompact) return 'Clean';
+    return 'GPS';
+  }
+}

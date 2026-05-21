@@ -29,6 +29,7 @@ dependencies:
   camera: ^0.11.0
   sensors_plus: ^7.0.0
   share_plus: ^12.0.2
+  tflite_flutter: ^0.12.1
 
 dev_dependencies:
   flutter_test:
@@ -38,4 +39,7 @@ dev_dependencies:
   flutter_lints: ^5.0.0
 
 flutter:
+  assets:
+    - assets/models/object_detector.tflite
+    - assets/models/labels.txt
   uses-material-design: true

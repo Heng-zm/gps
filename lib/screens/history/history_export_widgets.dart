@@ -175,7 +175,7 @@ class _TripExportSheet extends StatelessWidget {
   }
 }
 
-class _TripExportFormatTile extends StatelessWidget {
+class _TripExportFormatTile extends StatefulWidget {
   const _TripExportFormatTile({
     required this.format,
     required this.onTap,
@@ -185,72 +185,110 @@ class _TripExportFormatTile extends StatelessWidget {
   final VoidCallback onTap;
 
   @override
+  State<_TripExportFormatTile> createState() => _TripExportFormatTileState();
+}
+
+class _TripExportFormatTileState extends State<_TripExportFormatTile> {
+  bool _pressed = false;
+
+  void _setPressed(bool value) {
+    if (!mounted || _pressed == value) return;
+    setState(() => _pressed = value);
+  }
+
+  void _handleTap() {
+    HapticFeedback.selectionClick();
+    widget.onTap();
+  }
+
+  @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      behavior: HitTestBehavior.opaque,
-      onTap: onTap,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 160),
-        padding: const EdgeInsets.all(13),
-        decoration: BoxDecoration(
-          color: Colors.white.withValues(alpha: 0.045),
-          borderRadius: BorderRadius.circular(19),
-          border: Border.all(color: Colors.white.withValues(alpha: 0.075)),
-        ),
-        child: Row(
-          children: <Widget>[
-            Container(
-              width: 38,
-              height: 38,
-              decoration: BoxDecoration(
-                color: _kBlue.withValues(alpha: 0.13),
-                borderRadius: BorderRadius.circular(14),
-                border: Border.all(color: _kBlue.withValues(alpha: 0.18)),
-              ),
-              child: Icon(format.icon, color: _kBlue, size: 18),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: <Widget>[
-                  _SafeText(
-                    format.label,
-                    maxLines: 1,
-                    style: const TextStyle(decoration: TextDecoration.none,
+    final TripExportFormat format = widget.format;
 
-                      color: Colors.white,
-                      fontSize: 13,
-                      fontWeight: FontWeight.w900,
-                    ),
-                  ),
-                  const SizedBox(height: 3),
-                  _SafeText(
-                    format.description,
-                    maxLines: 1,
-                    style: const TextStyle(decoration: TextDecoration.none,
-
-                      color: Colors.white54,
-                      fontSize: 11,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                ],
+    return Semantics(
+      button: true,
+      label: 'Export ${format.label}',
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: _handleTap,
+        onTapDown: (_) => _setPressed(true),
+        onTapCancel: () => _setPressed(false),
+        onTapUp: (_) => _setPressed(false),
+        child: AnimatedScale(
+          duration: const Duration(milliseconds: 120),
+          curve: Curves.easeOutCubic,
+          scale: _pressed ? 0.985 : 1.0,
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 180),
+            curve: Curves.easeOutCubic,
+            padding: const EdgeInsets.all(13),
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: _pressed ? 0.075 : 0.045),
+              borderRadius: BorderRadius.circular(19),
+              border: Border.all(
+                color: Colors.white.withValues(alpha: _pressed ? 0.13 : 0.075),
               ),
             ),
-            const SizedBox(width: 8),
-            const Icon(
-              CupertinoIcons.chevron_right_circle_fill,
-              color: _kGoldSoft,
-              size: 20,
+            child: Row(
+              children: <Widget>[
+                AnimatedContainer(
+                  duration: const Duration(milliseconds: 180),
+                  width: 38,
+                  height: 38,
+                  decoration: BoxDecoration(
+                    color: _kBlue.withValues(alpha: _pressed ? 0.20 : 0.13),
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(color: _kBlue.withValues(alpha: 0.18)),
+                  ),
+                  child: Icon(format.icon, color: _kBlue, size: 18),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: <Widget>[
+                      _SafeText(
+                        format.label,
+                        maxLines: 1,
+                        style: const TextStyle(
+                          decoration: TextDecoration.none,
+                          color: Colors.white,
+                          fontSize: 13,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                      const SizedBox(height: 3),
+                      _SafeText(
+                        format.description,
+                        maxLines: 1,
+                        style: const TextStyle(
+                          decoration: TextDecoration.none,
+                          color: Colors.white54,
+                          fontSize: 11,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 8),
+                AnimatedRotation(
+                  duration: const Duration(milliseconds: 180),
+                  turns: _pressed ? 0.03 : 0.0,
+                  child: const Icon(
+                    CupertinoIcons.chevron_right_circle_fill,
+                    color: _kGoldSoft,
+                    size: 20,
+                  ),
+                ),
+              ],
             ),
-          ],
+          ),
         ),
       ),
     );
   }
 }
-
 
 Future<bool> _shareTripExportFile({
   required BuildContext context,

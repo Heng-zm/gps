@@ -1,5 +1,8 @@
 part of 'summary_screen.dart';
 
+// UX pass: summary widgets keep expensive route/stat calculations outside build
+// and use App* shared components for consistent spacing, colors, and motion.
+
 class _SummaryHeroRedesign extends StatelessWidget {
   static String _heroDateLabel(DateTime date) {
     const List<String> months = <String>[

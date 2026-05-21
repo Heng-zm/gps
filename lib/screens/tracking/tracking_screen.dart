@@ -28,7 +28,6 @@ import '../../widgets/weather_widget.dart';
 import '../map/map_screen.dart';
 import '../summary_screen.dart';
 import 'tracking_ar_camera_screen.dart';
-
 import '../../widgets/route_planner_sheet.dart';
 import '../../theme/app_theme.dart';
 import '../../widgets/common/app_action_button.dart';
@@ -211,6 +210,32 @@ extension _TrackingPerformanceModeX on _TrackingPerformanceMode {
         return _TrackingPerformanceMode.performance;
       case _TrackingPerformanceMode.performance:
         return _TrackingPerformanceMode.battery;
+    }
+  }
+}
+
+
+
+extension _TrackingPerformanceModeUxX on _TrackingPerformanceMode {
+  String get shortLabel {
+    switch (this) {
+      case _TrackingPerformanceMode.battery:
+        return 'Battery';
+      case _TrackingPerformanceMode.balanced:
+        return 'Balanced';
+      case _TrackingPerformanceMode.performance:
+        return 'Fast';
+    }
+  }
+
+  String get description {
+    switch (this) {
+      case _TrackingPerformanceMode.battery:
+        return 'Lower map refresh rate for longer trips';
+      case _TrackingPerformanceMode.balanced:
+        return 'Smooth tracking with moderate battery use';
+      case _TrackingPerformanceMode.performance:
+        return 'Fastest camera and route updates';
     }
   }
 }

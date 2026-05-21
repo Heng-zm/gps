@@ -25,13 +25,17 @@ extension _MapScreenReplayControls on _MapScreenState {
             children: <Widget>[
               Row(
                 children: <Widget>[
-                  _PressableButton(
-                    onTap: _replayPlaying ? _pauseReplay : _startReplay,
-                    child: _ReplayRoundButton(
-                      icon: _replayPlaying
-                          ? CupertinoIcons.pause_fill
-                          : CupertinoIcons.play_fill,
-                      color: _kBlueSoft,
+                  Semantics(
+                    button: true,
+                    label: _replayPlaying ? 'Pause replay' : 'Start replay',
+                    child: _PressableButton(
+                      onTap: _replayPlaying ? _pauseReplay : _startReplay,
+                      child: _ReplayRoundButton(
+                        icon: _replayPlaying
+                            ? CupertinoIcons.pause_fill
+                            : CupertinoIcons.play_fill,
+                        color: _kBlueSoft,
+                      ),
                     ),
                   ),
                   const SizedBox(width: 10),

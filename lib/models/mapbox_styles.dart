@@ -281,3 +281,85 @@ class MapboxStyleCatalog {
     ...navigation,
   ];
 }
+
+extension MapboxVisualStyleUxX on MapboxVisualStyle {
+  MapboxVisualStyle get next {
+    final List<MapboxVisualStyle> styles = MapboxStyleCatalog.all;
+    final int index = styles.indexOf(this);
+    if (index < 0 || styles.isEmpty) return MapboxVisualStyle.standard;
+    return styles[(index + 1) % styles.length];
+  }
+
+  bool get isLowDistraction {
+    switch (this) {
+      case MapboxVisualStyle.light:
+      case MapboxVisualStyle.dark:
+      case MapboxVisualStyle.navigationDay:
+      case MapboxVisualStyle.navigationNight:
+        return true;
+      default:
+        return false;
+    }
+  }
+
+  bool get recommendedForDriving {
+    switch (this) {
+      case MapboxVisualStyle.navigationDay:
+      case MapboxVisualStyle.navigationNight:
+      case MapboxVisualStyle.standard:
+      case MapboxVisualStyle.streets:
+        return true;
+      default:
+        return false;
+    }
+  }
+
+  bool get recommendedForReplay {
+    switch (this) {
+      case MapboxVisualStyle.standard:
+      case MapboxVisualStyle.standardSatellite:
+      case MapboxVisualStyle.satelliteStreets:
+      case MapboxVisualStyle.navigationNight:
+        return true;
+      default:
+        return false;
+    }
+  }
+
+  String get categoryLabel {
+    if (isStandardFamily) return '3D';
+    if (isSatelliteFamily) return 'Satellite';
+    if (isNavigationFamily) return 'Navigation';
+    return 'Classic';
+  }
+
+  String get uxHint {
+    if (isDark) return 'Best for night mode';
+    if (isSatelliteFamily) return 'Best for visual route replay';
+    if (isNavigationFamily) return 'Best while driving';
+    if (this == MapboxVisualStyle.outdoors) return 'Best for walking and cycling';
+    return description;
+  }
+
+  String rasterTilesUrlSafe(String accessToken, {int tileSize = 512}) {
+    final String trimmed = accessToken.trim();
+    if (trimmed.isEmpty) return '';
+    return rasterTilesUrl(trimmed, tileSize: tileSize);
+  }
+}
+
+MapboxVisualStyle mapboxVisualStyleFromStyleUri(String? uri) {
+  final String normalized = (uri ?? '').trim().toLowerCase();
+  if (normalized.isEmpty) return MapboxVisualStyle.standard;
+
+  for (final MapboxVisualStyle style in MapboxVisualStyle.values) {
+    if (style.styleUri.toLowerCase() == normalized ||
+        style.storageKey.toLowerCase() == normalized ||
+        style.label.toLowerCase() == normalized ||
+        style.shortLabel.toLowerCase() == normalized) {
+      return style;
+    }
+  }
+
+  return MapboxVisualStyleX.fromStorageKey(normalized);
+}

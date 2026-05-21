@@ -44,6 +44,7 @@ class _NativeMapboxLayerState extends State<_NativeMapboxLayer> {
   mb.PolylineAnnotationManager? _plannedOuterManager;
   mb.PolylineAnnotationManager? _plannedCoreManager;
   bool _styleLoaded = false;
+  bool _disposed = false;
 
   @override
   void didUpdateWidget(covariant _NativeMapboxLayer oldWidget) {
@@ -109,6 +110,7 @@ class _NativeMapboxLayerState extends State<_NativeMapboxLayer> {
     _styleLoaded = false;
     try {
       await map.loadStyleURI(_styleUri(widget.mapStyle));
+      if (!mounted || _disposed) return;
       _styleLoaded = true;
       _routeOuterManager = null;
       _routeCoreManager = null;
@@ -161,12 +163,16 @@ class _NativeMapboxLayerState extends State<_NativeMapboxLayer> {
     try {
       _plannedOuterManager ??=
           await map.annotations.createPolylineAnnotationManager();
+      if (!mounted || _disposed) return;
       _plannedCoreManager ??=
           await map.annotations.createPolylineAnnotationManager();
+      if (!mounted || _disposed) return;
       _routeOuterManager ??=
           await map.annotations.createPolylineAnnotationManager();
+      if (!mounted || _disposed) return;
       _routeCoreManager ??=
           await map.annotations.createPolylineAnnotationManager();
+      if (!mounted || _disposed) return;
 
       await _plannedOuterManager?.deleteAll();
       await _plannedCoreManager?.deleteAll();
@@ -277,6 +283,7 @@ class _NativeMapboxLayerState extends State<_NativeMapboxLayer> {
 
   @override
   void dispose() {
+    _disposed = true;
     unawaited(_plannedOuterManager?.deleteAll() ?? Future<void>.value());
     unawaited(_plannedCoreManager?.deleteAll() ?? Future<void>.value());
     unawaited(_routeOuterManager?.deleteAll() ?? Future<void>.value());
@@ -307,6 +314,7 @@ class _NativeMapboxLayerState extends State<_NativeMapboxLayer> {
       textureView: true,
       onMapCreated: _onMapCreated,
       onStyleLoadedListener: (_) {
+        if (!mounted || _disposed) return;
         _styleLoaded = true;
         unawaited(_configureStandardStyle());
         unawaited(_rebuildRoutes());

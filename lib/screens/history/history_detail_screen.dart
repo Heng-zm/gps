@@ -1,5 +1,10 @@
 part of 'history_screen.dart';
 
+const double _kReplayPanelSafeGap = 18.0;
+const double _kReplayFloatingGap = 22.0;
+const double _kReplayCollapsedPanelHeight = 92.0;
+const double _kReplayExpandedPanelHeight = 216.0;
+
 // TRIP DETAIL / REPLAY
 // ═══════════════════════════════════════════════════════════════════════════════
 
@@ -290,20 +295,26 @@ class _TripDetailScreenState extends State<TripDetailScreen>
 
   void _showDetailSnack(String message, Color color) {
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(
-          message,
-          style: const TextStyle(
-            decoration: TextDecoration.none,
+    ScaffoldMessenger.of(context)
+      ..clearSnackBars()
+      ..showSnackBar(
+        SnackBar(
+          content: Text(
+            message,
+            style: const TextStyle(
+              color: Colors.white,
+              fontWeight: FontWeight.w800,
+              decoration: TextDecoration.none,
+            ),
+          ),
+          backgroundColor: color,
+          behavior: SnackBarBehavior.floating,
+          margin: EdgeInsets.fromLTRB(16, 0, 16, MediaQuery.viewPaddingOf(context).bottom + 240),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(14),
           ),
         ),
-        backgroundColor: color,
-        behavior: SnackBarBehavior.floating,
-        margin: const EdgeInsets.fromLTRB(16, 0, 16, 220),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-      ),
-    );
+      );
   }
 
   // ── Style helpers ─────────────────────────────────────────────────────────
@@ -416,7 +427,7 @@ class _TripDetailScreenState extends State<TripDetailScreen>
         _mapController.fitCamera(
           fm.CameraFit.bounds(
             bounds: bounds,
-            padding: const EdgeInsets.fromLTRB(46, 120, 46, 320),
+            padding: EdgeInsets.fromLTRB(46, 132, 46, MediaQuery.viewPaddingOf(context).bottom + 350),
           ),
         );
       } catch (_) {}
@@ -668,7 +679,7 @@ class _TripDetailScreenState extends State<TripDetailScreen>
       return fm.MapOptions(
         initialCameraFit: fm.CameraFit.bounds(
           bounds: fm.LatLngBounds.fromPoints(_points),
-          padding: EdgeInsets.fromLTRB(46, 120, 46, safeBottom + 260),
+          padding: EdgeInsets.fromLTRB(46, 132, 46, safeBottom + 330),
         ),
         interactionOptions: const fm.InteractionOptions(
           flags: fm.InteractiveFlag.all & ~fm.InteractiveFlag.rotate,
@@ -716,10 +727,12 @@ class _TripDetailScreenState extends State<TripDetailScreen>
     final double puckSize = puckStyle.markerSize.clamp(50.0, 92.0).toDouble();
 
     final double safeTop = padding.top + 10.0;
-    final double safeBottom = math.max(padding.bottom, 12.0);
-    final double playerHeight =
-        (_replayPanelExpanded ? 204.0 : 82.0) + safeBottom;
-    final double floatingBottom = playerHeight + 18.0;
+    final double safeBottom = math.max(padding.bottom, 16.0);
+    final double playerBaseHeight = _replayPanelExpanded
+        ? _kReplayExpandedPanelHeight
+        : _kReplayCollapsedPanelHeight;
+    final double playerHeight = playerBaseHeight + safeBottom;
+    final double floatingBottom = playerHeight + _kReplayFloatingGap;
 
     return AnnotatedRegion<SystemUiOverlayStyle>(
       value: SystemUiOverlayStyle.light,

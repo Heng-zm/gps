@@ -88,7 +88,9 @@ class _FlutterMapLayer extends StatelessWidget {
         ),
         fm.Polyline(
           points: route.smoothedPoints,
-          color: mapStyle.isSatellite ? _kBlue.withValues(alpha: 0.95) : _kBlueDeep.withValues(alpha: 0.95),
+          color: mapStyle.isSatellite
+              ? _kBlue.withValues(alpha: 0.95)
+              : _kBlueDeep.withValues(alpha: 0.95),
           strokeWidth: 5.8,
           strokeCap: StrokeCap.round,
           strokeJoin: StrokeJoin.round,
@@ -126,6 +128,8 @@ class _FlutterMapLayer extends StatelessWidget {
           strokeJoin: StrokeJoin.round,
         ));
     }
+
+    if (polylines.isEmpty) return const SizedBox.shrink();
 
     return fm.PolylineLayer(polylines: polylines);
   }

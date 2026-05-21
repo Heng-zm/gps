@@ -243,6 +243,7 @@ class _SummaryScreenState extends State<SummaryScreen> {
 
   Future<void> _saveLocalMirror(Map<String, dynamic> payload) async {
     final SharedPreferences prefs = await SharedPreferences.getInstance();
+    if (!mounted) return;
 
     final List<String> existing = prefs.getStringList('trip_history') ??
         prefs.getStringList('saved_trips') ??
@@ -366,7 +367,7 @@ class _SummaryScreenState extends State<SummaryScreen> {
     );
 
     ScaffoldMessenger.of(context)
-      ..hideCurrentSnackBar()
+      ..clearSnackBars()
       ..showSnackBar(
         SnackBar(
           behavior: SnackBarBehavior.floating,
@@ -377,14 +378,28 @@ class _SummaryScreenState extends State<SummaryScreen> {
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(16),
           ),
-          content: Text(
-            message,
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-            style: TextStyle(
-              color: darkText ? Colors.black : Colors.white,
-              fontWeight: FontWeight.w800,
-            ),
+          content: Row(
+            children: <Widget>[
+              Icon(
+                color == _kRed
+                    ? CupertinoIcons.exclamationmark_triangle_fill
+                    : CupertinoIcons.checkmark_circle_fill,
+                color: darkText ? Colors.black : Colors.white,
+                size: 18,
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  message,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: darkText ? Colors.black : Colors.white,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ),
+            ],
           ),
         ),
       );

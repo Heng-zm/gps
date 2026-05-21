@@ -221,7 +221,7 @@ enum MapStyle {
   String get styleUri => 'mapbox://styles/mapbox/$mapboxStyleId';
 
   String get tileUrlTemplate {
-    final String token = _kMapboxAccessToken;
+    final String token = _kMapboxAccessToken.trim();
 
     if (token.isEmpty) {
       debugPrint(
@@ -468,15 +468,15 @@ class _RouteProcessor {
         ? optimizePolylineAdaptive(raw, maxOutputPoints: _kMaxMapRenderPoints)
         : List<LatLng>.from(raw);
 
-    // FIX: Use downsampleValues from utils instead of manual index stepping.
-    final List<double> rawSpeeds = valid
-        .map((TripPoint p) => p.speedKmh)
-        .where((double v) => v.isFinite)
-        .toList(growable: false);
-    final List<double> rawAlts = valid
-        .map((TripPoint p) => p.altitudeMeters)
-        .where((double v) => v.isFinite)
-        .toList(growable: false);
+    // Build chart samples in one pass to reduce allocations on long trips.
+    final List<double> rawSpeeds = <double>[];
+    final List<double> rawAlts = <double>[];
+    for (final TripPoint point in valid) {
+      final double speed = point.speedKmh;
+      final double altitude = point.altitudeMeters;
+      if (speed.isFinite) rawSpeeds.add(speed);
+      if (altitude.isFinite) rawAlts.add(altitude);
+    }
 
     return _RouteData(
       validPoints: valid,
@@ -704,6 +704,7 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
     final _RouteData newRoute = _RouteProcessor.process(widget.points);
 
     _stopReplayTimer();
+    if (!mounted) return;
     setState(() {
       _route = newRoute;
       _replayPlaying = false;

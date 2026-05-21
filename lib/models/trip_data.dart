@@ -416,3 +416,69 @@ double _safeNonNegative(double value) {
 double _safeCoordinate(double value) {
   return value.isFinite ? value : 0.0;
 }
+
+extension TripPointUxX on TripPoint {
+  String get coordinateLabel =>
+      '${position.latitude.toStringAsFixed(5)}, ${position.longitude.toStringAsFixed(5)}';
+
+  String get speedMphLabel =>
+      '${speedMph.toStringAsFixed(speedMph >= 10 ? 0 : 1)} mph';
+
+  String get speedKmhLabel =>
+      '${speedKmh.toStringAsFixed(speedKmh >= 10 ? 0 : 1)} km/h';
+
+  bool get hasGoodAccuracy => accuracyMeters <= 0.0 || accuracyMeters <= 25.0;
+}
+
+extension TripSummaryUxX on TripSummary {
+  bool get isEmptyTrip => !hasRoute && distanceMiles <= 0.0;
+
+  double get distanceKm => distanceMiles * 1.609344;
+
+  String get compactDistanceLabel {
+    if (distanceMiles <= 0.0) return '0 mi';
+    if (distanceMiles < 0.1) return '${(distanceMiles * 5280).round()} ft';
+    return '${distanceMiles.toStringAsFixed(distanceMiles >= 10 ? 1 : 2)} mi';
+  }
+
+  String get compactDistanceMetricLabel {
+    if (distanceKm <= 0.0) return '0 m';
+    if (distanceKm < 1.0) return '${(distanceKm * 1000).round()} m';
+    return '${distanceKm.toStringAsFixed(distanceKm >= 10 ? 1 : 2)} km';
+  }
+
+  String get avgSpeedLabel =>
+      '${avgSpeedMph.toStringAsFixed(avgSpeedMph >= 10 ? 0 : 1)} mph';
+
+  String get maxSpeedLabel =>
+      '${maxSpeedMph.toStringAsFixed(maxSpeedMph >= 10 ? 0 : 1)} mph';
+
+  String get uxSubtitle {
+    if (isEmptyTrip) return 'No route points recorded';
+    return '$compactDistanceLabel · $formattedMovingTime moving · $routeQualityLabel route';
+  }
+
+  TripSummary sanitizedForUi({int maxPoints = 5000}) {
+    final Iterable<TripPoint> validPoints =
+        points.where((TripPoint point) => point.isValid);
+
+    final List<TripPoint> limited = maxPoints <= 0
+        ? validPoints.toList(growable: false)
+        : validPoints.take(maxPoints).toList(growable: false);
+
+    return TripSummary(
+      id: id.trim(),
+      date: date,
+      totalTime: safeTotalTime,
+      stoppedTime: safeStoppedTime,
+      movingTime: effectiveMovingTime,
+      maxSpeedMph: _safeNonNegative(maxSpeedMph),
+      avgSpeedMph: _safeNonNegative(avgSpeedMph),
+      altitudeGainFt: _safeNonNegative(altitudeGainFt),
+      maxAltitudeFt: _safeFinite(maxAltitudeFt),
+      minAltitudeFt: _safeFinite(minAltitudeFt),
+      distanceMiles: _safeNonNegative(distanceMiles),
+      points: List<TripPoint>.unmodifiable(limited),
+    );
+  }
+}

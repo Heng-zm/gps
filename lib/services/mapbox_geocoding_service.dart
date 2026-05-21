@@ -8,9 +8,13 @@ import 'package:latlong2/latlong.dart';
 import '../models/mapbox_route_models.dart';
 
 class MapboxGeocodingException implements Exception {
-  const MapboxGeocodingException(this.message);
+  const MapboxGeocodingException(
+    this.message, {
+    this.statusCode,
+  });
 
   final String message;
+  final int? statusCode;
 
   @override
   String toString() => message;
@@ -46,7 +50,7 @@ class MapboxGeocodingService {
         MapboxPlaceResult(
           name: 'Pinned coordinate',
           address:
-              '\${coordinate.latitude.toStringAsFixed(5)}, \${coordinate.longitude.toStringAsFixed(5)}',
+              '${coordinate.latitude.toStringAsFixed(5)}, ${coordinate.longitude.toStringAsFixed(5)}',
           position: coordinate,
         ),
       ];
@@ -63,24 +67,29 @@ class MapboxGeocodingService {
     };
 
     if (proximity != null && isValidLatLng(proximity)) {
-      params['proximity'] = '\${proximity.longitude},\${proximity.latitude}';
+      params['proximity'] = '${proximity.longitude},${proximity.latitude}';
     }
 
     final Uri uri = Uri.parse(
       'https://api.mapbox.com/geocoding/v5/mapbox.places/'
-      '\${Uri.encodeComponent(trimmed)}.json',
+      '${Uri.encodeComponent(trimmed)}.json',
     ).replace(queryParameters: params);
 
     try {
       final http.Response response = await http.get(uri).timeout(timeout);
 
       if (response.statusCode < 200 || response.statusCode >= 300) {
+        final String shortBody = _shortBody(response.body);
         debugPrint(
-          'MapboxGeocodingService status \${response.statusCode}: '
-          '\${_shortBody(response.body)}',
+          'MapboxGeocodingService status ${response.statusCode}: $shortBody',
         );
+
         throw MapboxGeocodingException(
-          'Location search failed (\${response.statusCode}).',
+          _friendlyStatusMessage(
+            response.statusCode,
+            fallback: 'Location search failed. Please try again.',
+          ),
+          statusCode: response.statusCode,
         );
       }
 
@@ -119,7 +128,7 @@ class MapboxGeocodingService {
         if (!isValidLatLng(position)) continue;
 
         final String key =
-            '\${lat.toStringAsFixed(5)},\${lng.toStringAsFixed(5)}:\$name';
+            '${lat.toStringAsFixed(5)},${lng.toStringAsFixed(5)}:$name';
         if (!seen.add(key)) continue;
 
         results.add(
@@ -139,7 +148,7 @@ class MapboxGeocodingService {
     } on MapboxGeocodingException {
       rethrow;
     } catch (error, stackTrace) {
-      debugPrint('MapboxGeocodingService failed: \$error\n\$stackTrace');
+      debugPrint('MapboxGeocodingService failed: $error\n$stackTrace');
       throw const MapboxGeocodingException('Location search failed.');
     }
   }
@@ -179,9 +188,33 @@ class MapboxGeocodingService {
     return null;
   }
 
+  static String _friendlyStatusMessage(
+    int statusCode, {
+    required String fallback,
+  }) {
+    switch (statusCode) {
+      case 401:
+      case 403:
+        return 'Mapbox token is invalid or not allowed for search.';
+      case 404:
+        return 'No location search endpoint was found.';
+      case 422:
+        return 'Search text is invalid. Try a place name or coordinates.';
+      case 429:
+        return 'Mapbox search limit reached. Please wait and try again.';
+      case 500:
+      case 502:
+      case 503:
+      case 504:
+        return 'Mapbox search server is busy. Please try again soon.';
+      default:
+        return '$fallback ($statusCode)';
+    }
+  }
+
   static String _shortBody(String value) {
     final String trimmed = value.trim();
     if (trimmed.length <= 300) return trimmed;
-    return '\${trimmed.substring(0, 300)}...';
+    return '${trimmed.substring(0, 300)}...';
   }
 }

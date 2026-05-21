@@ -12,3 +12,9 @@ export 'mapbox_3d_service.dart';
 export 'ai_object_tracking_service.dart';
 export 'ai_road_condition_service.dart';
 export 'ai_tracking_brain_service.dart';
+
+export 'ai_scene_understanding_service.dart';
+
+export '../models/ai_detection_models.dart';
+
+export 'ai_tflite_object_detection_service.dart';

@@ -24,6 +24,10 @@ class AiObjectTrackingService {
   double _relativeSpeedKmh = 0.0;
   int _stableTicks = 0;
   double _lastArea = 0.0;
+  bool _manualLock = false;
+  DateTime? _manualLockUntil;
+  DateTime? _lastAutoLockAt;
+  int _autoTrackTicks = 0;
 
   bool get hasLock => trackedObjectN.value != null;
 
@@ -34,6 +38,8 @@ class AiObjectTrackingService {
     required DateTime timestamp,
   }) {
     final Offset normalized = _normalize(point, screen);
+    _manualLock = true;
+    _manualLockUntil = timestamp.add(const Duration(seconds: 8));
     _lastTimestamp = timestamp;
     _boxScale = 1.0;
     _relativeSpeedKmh = math.max(0.0, userSpeedKmh * 0.35);
@@ -113,6 +119,118 @@ class AiObjectTrackingService {
       risk: _objectRiskFromScore(score),
       trend: trend,
       updatedAt: timestamp,
+    );
+  }
+
+  /// Auto-locks and tracks a likely forward object without requiring a tap.
+  ///
+  /// This is intentionally lightweight and dependency-free. It does not run
+  /// real object detection; instead it creates a stable center-screen target
+  /// when the phone is steady enough and the user is moving. The target box then
+  /// evolves through [updateTelemetry] using speed, motion and GPS accuracy.
+  ///
+  /// Manual tap locks always win for a short period so user intent is respected.
+  void updateAutoTracking({
+    required Size screen,
+    required double userSpeedKmh,
+    required double gpsAccuracyMeters,
+    required double motionScore,
+    required DateTime timestamp,
+    bool enabled = true,
+  }) {
+    if (!enabled || screen.width <= 0 || screen.height <= 0) return;
+
+    final DateTime? manualUntil = _manualLockUntil;
+    if (_manualLock && manualUntil != null && timestamp.isBefore(manualUntil)) {
+      return;
+    }
+
+    if (_manualLock && manualUntil != null && !timestamp.isBefore(manualUntil)) {
+      _manualLock = false;
+      _manualLockUntil = null;
+    }
+
+    final bool moving = userSpeedKmh.isFinite && userSpeedKmh >= 6.0;
+    final bool gpsUsable =
+        !gpsAccuracyMeters.isFinite || gpsAccuracyMeters <= 55.0;
+    final bool stableEnough = !motionScore.isFinite || motionScore <= 6.5;
+
+    if (!moving || !gpsUsable || !stableEnough) {
+      _autoTrackTicks = 0;
+      final AiTrackedObject? current = trackedObjectN.value;
+      if (current != null && current.id.startsWith('auto-')) {
+        updateTelemetry(
+          userSpeedKmh: userSpeedKmh,
+          gpsAccuracyMeters: gpsAccuracyMeters,
+          motionScore: motionScore,
+          timestamp: timestamp,
+        );
+      }
+      return;
+    }
+
+    final DateTime? lastAuto = _lastAutoLockAt;
+    if (lastAuto != null &&
+        timestamp.difference(lastAuto) < const Duration(milliseconds: 520)) {
+      updateTelemetry(
+        userSpeedKmh: userSpeedKmh,
+        gpsAccuracyMeters: gpsAccuracyMeters,
+        motionScore: motionScore,
+        timestamp: timestamp,
+      );
+      return;
+    }
+
+    _lastAutoLockAt = timestamp;
+    _autoTrackTicks++;
+
+    final AiTrackedObject? current = trackedObjectN.value;
+    if (current != null && !current.id.startsWith('auto-')) {
+      updateTelemetry(
+        userSpeedKmh: userSpeedKmh,
+        gpsAccuracyMeters: gpsAccuracyMeters,
+        motionScore: motionScore,
+        timestamp: timestamp,
+      );
+      return;
+    }
+
+    final double confidence = (0.54 +
+            (userSpeedKmh / 110.0).clamp(0.0, 0.18) -
+            (motionScore / 18.0).clamp(0.0, 0.22) -
+            (gpsAccuracyMeters.isFinite
+                ? (gpsAccuracyMeters / 120.0).clamp(0.0, 0.18)
+                : 0.08))
+        .clamp(0.36, 0.82)
+        .toDouble();
+
+    final double width = (0.22 + (userSpeedKmh / 180.0).clamp(0.0, 0.06))
+        .clamp(0.20, 0.30)
+        .toDouble();
+    final double height = (width * 0.72).clamp(0.16, 0.26).toDouble();
+
+    final double horizontalDrift =
+        math.sin(_autoTrackTicks * 0.55) * (motionScore / 28.0).clamp(0.0, 0.035);
+    final double verticalBias =
+        (userSpeedKmh / 160.0).clamp(0.0, 0.035).toDouble();
+
+    final Rect autoBox = Rect.fromCenter(
+      center: Offset(
+        (0.5 + horizontalDrift).clamp(0.18, 0.82).toDouble(),
+        (0.36 - verticalBias).clamp(0.18, 0.62).toDouble(),
+      ),
+      width: width,
+      height: height,
+    );
+
+    updateFromDetection(
+      normalizedBox: autoBox,
+      label: 'Auto object',
+      confidence: confidence,
+      userSpeedKmh: userSpeedKmh,
+      timestamp: timestamp,
+      gpsAccuracyMeters: gpsAccuracyMeters,
+      motionScore: motionScore,
     );
   }
 
@@ -208,6 +326,10 @@ class AiObjectTrackingService {
   }
 
   void clearLock() {
+    _manualLock = false;
+    _manualLockUntil = null;
+    _lastAutoLockAt = null;
+    _autoTrackTicks = 0;
     _lastTimestamp = null;
     _boxScale = 1.0;
     _relativeSpeedKmh = 0.0;

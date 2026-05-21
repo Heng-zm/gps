@@ -55,6 +55,7 @@ class _FullScreenLiveMapState extends State<_FullScreenLiveMap> {
 
   bool _styleLoaded = false;
   bool _locationReady = false;
+  bool _disposed = false;
   int _lastRouteCount = -1;
   int _lastRouteSignature = 0;
   int _lastPlannedRouteSignature = 0;
@@ -83,6 +84,7 @@ class _FullScreenLiveMapState extends State<_FullScreenLiveMap> {
 
   @override
   void dispose() {
+    _disposed = true;
     unawaited(_routeOuterManager?.deleteAll());
     unawaited(_routeCoreManager?.deleteAll());
     unawaited(_plannedOuterManager?.deleteAll());
@@ -104,7 +106,7 @@ class _FullScreenLiveMapState extends State<_FullScreenLiveMap> {
 
   Future<void> _configureMapboxMap() async {
     final mb.MapboxMap? map = _mapboxMap;
-    if (map == null) return;
+    if (_disposed || !mounted || map == null) return;
 
     try {
       await map.scaleBar.updateSettings(mb.ScaleBarSettings(enabled: false));
@@ -148,13 +150,16 @@ class _FullScreenLiveMapState extends State<_FullScreenLiveMap> {
 
   Future<void> _loadMapboxStyle() async {
     final mb.MapboxMap? map = _mapboxMap;
-    if (map == null) return;
+    if (_disposed || !mounted || map == null) return;
+
+    if (_disposed || !mounted) return;
 
     _styleLoaded = false;
     _lastRouteCount = -1;
 
     try {
       await map.loadStyleURI(_mapboxStyleUri(widget.settings.mapStyle));
+      if (_disposed || !mounted) return;
       _styleLoaded = true;
       _routeOuterManager = null;
       _routeCoreManager = null;
@@ -164,6 +169,7 @@ class _FullScreenLiveMapState extends State<_FullScreenLiveMap> {
       _lastPlannedRouteSignature = 0;
 
       await _configureStandardStyle();
+      if (_disposed || !mounted) return;
       await _configureNativeLocationPuck();
       await _rebuildPlannedRouteAnnotations(force: true);
       await _rebuildRouteAnnotations(force: true);
@@ -175,7 +181,7 @@ class _FullScreenLiveMapState extends State<_FullScreenLiveMap> {
 
   Future<void> _configureStandardStyle() async {
     final mb.MapboxMap? map = _mapboxMap;
-    if (map == null) return;
+    if (_disposed || !mounted || map == null) return;
 
     try {
       await map.style.setStyleImportConfigProperty(
@@ -233,6 +239,7 @@ class _FullScreenLiveMapState extends State<_FullScreenLiveMap> {
   }
 
   Future<void> _moveCameraToLatest({bool force = false}) async {
+    if (_disposed || !mounted) return;
     final mb.MapboxMap? map = _mapboxMap;
     final LatLng? position = widget.posN.value;
     if (map == null || position == null || !_isValid(position)) return;
@@ -282,6 +289,7 @@ class _FullScreenLiveMapState extends State<_FullScreenLiveMap> {
   }
 
   Future<void> _rebuildRouteAnnotations({bool force = false}) async {
+    if (_disposed || !mounted) return;
     final mb.MapboxMap? map = _mapboxMap;
     if (map == null || !_styleLoaded) return;
 
@@ -331,6 +339,7 @@ class _FullScreenLiveMapState extends State<_FullScreenLiveMap> {
           await map.annotations.createPolylineAnnotationManager();
       _routeCoreManager ??=
           await map.annotations.createPolylineAnnotationManager();
+      if (_disposed || !mounted) return;
 
       await _routeOuterManager?.deleteAll();
       await _routeCoreManager?.deleteAll();
@@ -366,6 +375,7 @@ class _FullScreenLiveMapState extends State<_FullScreenLiveMap> {
   }
 
   Future<void> _rebuildPlannedRouteAnnotations({bool force = false}) async {
+    if (_disposed || !mounted) return;
     final mb.MapboxMap? map = _mapboxMap;
     if (map == null || !_styleLoaded) return;
 
@@ -383,6 +393,7 @@ class _FullScreenLiveMapState extends State<_FullScreenLiveMap> {
           await map.annotations.createPolylineAnnotationManager();
       _plannedCoreManager ??=
           await map.annotations.createPolylineAnnotationManager();
+      if (_disposed || !mounted) return;
 
       await _plannedOuterManager?.deleteAll();
       await _plannedCoreManager?.deleteAll();

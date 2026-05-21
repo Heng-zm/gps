@@ -125,3 +125,64 @@ extension TrackingAccuracyModeX on TrackingAccuracyMode {
     return TrackingAccuracyMode.highAccuracy;
   }
 }
+
+extension TrackingAccuracyModeUxX on TrackingAccuracyMode {
+  TrackingAccuracyMode get next {
+    switch (this) {
+      case TrackingAccuracyMode.highAccuracy:
+        return TrackingAccuracyMode.balanced;
+      case TrackingAccuracyMode.balanced:
+        return TrackingAccuracyMode.batterySaver;
+      case TrackingAccuracyMode.batterySaver:
+        return TrackingAccuracyMode.highAccuracy;
+    }
+  }
+
+  int get batteryCostScore {
+    switch (this) {
+      case TrackingAccuracyMode.highAccuracy:
+        return 3;
+      case TrackingAccuracyMode.balanced:
+        return 2;
+      case TrackingAccuracyMode.batterySaver:
+        return 1;
+    }
+  }
+
+  int get routeQualityScore {
+    switch (this) {
+      case TrackingAccuracyMode.highAccuracy:
+        return 3;
+      case TrackingAccuracyMode.balanced:
+        return 2;
+      case TrackingAccuracyMode.batterySaver:
+        return 1;
+    }
+  }
+
+  bool recommendedForTrip(Duration expectedTripDuration) {
+    final Duration safeDuration =
+        expectedTripDuration.isNegative ? Duration.zero : expectedTripDuration;
+
+    if (safeDuration.inHours >= 3) {
+      return this == TrackingAccuracyMode.batterySaver;
+    }
+
+    if (safeDuration.inMinutes >= 45) {
+      return this == TrackingAccuracyMode.balanced;
+    }
+
+    return this == TrackingAccuracyMode.highAccuracy;
+  }
+
+  String get uxBadge {
+    switch (this) {
+      case TrackingAccuracyMode.highAccuracy:
+        return 'Best route';
+      case TrackingAccuracyMode.balanced:
+        return 'Recommended';
+      case TrackingAccuracyMode.batterySaver:
+        return 'Long trip';
+    }
+  }
+}

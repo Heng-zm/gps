@@ -383,3 +383,61 @@ double _safeNonNegative(double value) {
   if (!value.isFinite) return 0.0;
   return value < 0.0 ? 0.0 : value;
 }
+
+extension SavedRoutePointUxX on SavedRoutePoint {
+  String get coordinateLabel =>
+      '${lat.toStringAsFixed(5)}, ${lng.toStringAsFixed(5)}';
+
+  bool get hasGoodAccuracy => accuracyMeters <= 0.0 || accuracyMeters <= 25.0;
+
+  String get speedLabel => '${speedMph.toStringAsFixed(speedMph >= 10 ? 0 : 1)} mph';
+}
+
+extension SavedTripUxX on SavedTrip {
+  bool get isEmptyTrip => !hasRoute && distanceMiles <= 0.0;
+
+  double get distanceKm => distanceMiles * 1.609344;
+
+  String get compactDistanceLabel {
+    if (distanceMiles <= 0.0) return '0 mi';
+    if (distanceMiles < 0.1) return '${(distanceMiles * 5280).round()} ft';
+    return '${distanceMiles.toStringAsFixed(distanceMiles >= 10 ? 1 : 2)} mi';
+  }
+
+  String get compactDistanceMetricLabel {
+    if (distanceKm <= 0.0) return '0 m';
+    if (distanceKm < 1.0) return '${(distanceKm * 1000).round()} m';
+    return '${distanceKm.toStringAsFixed(distanceKm >= 10 ? 1 : 2)} km';
+  }
+
+  String get averageSpeedLabel =>
+      '${avgSpeedMph.toStringAsFixed(avgSpeedMph >= 10 ? 0 : 1)} mph';
+
+  String get maxSpeedLabel =>
+      '${maxSpeedMph.toStringAsFixed(maxSpeedMph >= 10 ? 0 : 1)} mph';
+
+  String get uxSubtitle {
+    if (isEmptyTrip) return 'No route points recorded';
+    return '$compactDistanceLabel · $formattedDuration · $pointCount points';
+  }
+
+  SavedTrip sanitizedForUi({int maxRoutePoints = 5000}) {
+    final Iterable<SavedRoutePoint> validPoints =
+        routePoints.where((SavedRoutePoint point) => point.isValid);
+
+    final List<SavedRoutePoint> limited = maxRoutePoints <= 0
+        ? validPoints.toList(growable: false)
+        : validPoints.take(maxRoutePoints).toList(growable: false);
+
+    return SavedTrip(
+      id: id.trim(),
+      date: date,
+      distanceMiles: _safeNonNegative(distanceMiles),
+      maxSpeedMph: _safeNonNegative(maxSpeedMph),
+      avgSpeedMph: _safeNonNegative(avgSpeedMph),
+      totalTime: totalTime.isNegative ? Duration.zero : totalTime,
+      altitudeGainFt: _safeNonNegative(altitudeGainFt),
+      routePoints: List<SavedRoutePoint>.unmodifiable(limited),
+    );
+  }
+}
