@@ -21,17 +21,22 @@ jobs:
         run: |
           set -e
 
-          if [ -f pubspec.yaml ]; then
-            python3 - <<'PY'
+          python3 - <<'PY'
           from pathlib import Path
+
           p = Path("pubspec.yaml")
           text = p.read_text()
+
+          # Pin Mapbox Flutter to avoid resolving 2.24.x, which requires newer MapboxMaps pods.
           text = text.replace("mapbox_maps_flutter: ^2.23.1", "mapbox_maps_flutter: 2.23.1")
           text = text.replace("mapbox_maps_flutter: ^2.24.2", "mapbox_maps_flutter: 2.23.1")
           text = text.replace("mapbox_maps_flutter: 2.24.2", "mapbox_maps_flutter: 2.23.1")
+
           p.write_text(text)
           PY
-          fi
+
+          echo "✅ mapbox_maps_flutter pinned:"
+          grep "mapbox_maps_flutter:" pubspec.yaml
 
       - name: 🛠️ Setup Flutter
         uses: subosito/flutter-action@v2
@@ -48,25 +53,22 @@ jobs:
             flutter create --platforms=ios .
           fi
 
-          # Add CocoaPods and Mapbox podspec sources.
-          # Required when CocoaPods cannot find MapboxMaps versions used by mapbox_maps_flutter.
+          # Use CocoaPods CDN only.
+          # Do NOT add https://github.com/mapbox/mapbox-pod-specs.git here;
+          # GitHub Actions can fail cloning it with: could not read Username.
           ruby <<'RUBY'
           path = 'ios/Podfile'
           podfile = File.read(path)
 
-          required_sources = [
-            "source 'https://cdn.cocoapods.org/'",
-            "source 'https://github.com/mapbox/mapbox-pod-specs.git'"
-          ]
-
-          # Remove duplicated source lines first.
+          # Remove older/duplicate source lines.
           podfile = podfile.lines.reject do |line|
-            line.strip == "source 'https://cdn.cocoapods.org/'" ||
-              line.strip == "source 'https://github.com/CocoaPods/Specs.git'" ||
-              line.strip == "source 'https://github.com/mapbox/mapbox-pod-specs.git'"
+            stripped = line.strip
+            stripped == "source 'https://github.com/mapbox/mapbox-pod-specs.git'" ||
+              stripped == "source 'https://github.com/CocoaPods/Specs.git'" ||
+              stripped == "source 'https://cdn.cocoapods.org/'"
           end.join
 
-          File.write(path, (required_sources + [podfile]).join("\n"))
+          File.write(path, "source 'https://cdn.cocoapods.org/'\n" + podfile)
           RUBY
 
           # Ensure platform is iOS 14.0+
@@ -159,15 +161,18 @@ jobs:
           echo "✅ Podfile patched with single post_install hook and iOS 14.0"
 
       - name: 📦 Install pub dependencies
-        run: flutter pub get
+        run: |
+          flutter pub get
+
+          echo "✅ Resolved Mapbox package:"
+          grep -A 3 "mapbox_maps_flutter:" pubspec.lock || true
 
       - name: 🧹 Clean iOS Pods
         run: |
           rm -rf ios/Pods
           rm -f ios/Podfile.lock
           rm -rf ~/Library/Developer/Xcode/DerivedData
-          rm -rf ~/Library/Caches/CocoaPods/Pods/External/MapboxMaps
-          rm -rf ~/Library/Caches/CocoaPods/Pods/Release/MapboxMaps
+          rm -rf ~/Library/Caches/CocoaPods
 
       - name: 🔧 Generate Xcode config
         run: |
@@ -178,7 +183,7 @@ jobs:
       - name: 🦕 Pod install
         run: |
           cd ios
-          pod repo update
+          pod repo update trunk
           pod install --repo-update --verbose
 
       - name: 🔓 Patch Xcode signing
