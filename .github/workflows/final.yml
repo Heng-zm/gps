@@ -17,6 +17,22 @@ jobs:
       - name: 📥 Checkout repository
         uses: actions/checkout@v4
 
+      - name: 🧷 Pin Mapbox Flutter version
+        run: |
+          set -e
+
+          if [ -f pubspec.yaml ]; then
+            python3 - <<'PY'
+          from pathlib import Path
+          p = Path("pubspec.yaml")
+          text = p.read_text()
+          text = text.replace("mapbox_maps_flutter: ^2.23.1", "mapbox_maps_flutter: 2.23.1")
+          text = text.replace("mapbox_maps_flutter: ^2.24.2", "mapbox_maps_flutter: 2.23.1")
+          text = text.replace("mapbox_maps_flutter: 2.24.2", "mapbox_maps_flutter: 2.23.1")
+          p.write_text(text)
+          PY
+          fi
+
       - name: 🛠️ Setup Flutter
         uses: subosito/flutter-action@v2
         with:
@@ -31,6 +47,27 @@ jobs:
           if [ ! -f ios/Podfile ]; then
             flutter create --platforms=ios .
           fi
+
+          # Add CocoaPods and Mapbox podspec sources.
+          # Required when CocoaPods cannot find MapboxMaps versions used by mapbox_maps_flutter.
+          ruby <<'RUBY'
+          path = 'ios/Podfile'
+          podfile = File.read(path)
+
+          required_sources = [
+            "source 'https://cdn.cocoapods.org/'",
+            "source 'https://github.com/mapbox/mapbox-pod-specs.git'"
+          ]
+
+          # Remove duplicated source lines first.
+          podfile = podfile.lines.reject do |line|
+            line.strip == "source 'https://cdn.cocoapods.org/'" ||
+              line.strip == "source 'https://github.com/CocoaPods/Specs.git'" ||
+              line.strip == "source 'https://github.com/mapbox/mapbox-pod-specs.git'"
+          end.join
+
+          File.write(path, (required_sources + [podfile]).join("\n"))
+          RUBY
 
           # Ensure platform is iOS 14.0+
           if grep -q "^platform :ios" ios/Podfile; then
@@ -129,6 +166,8 @@ jobs:
           rm -rf ios/Pods
           rm -f ios/Podfile.lock
           rm -rf ~/Library/Developer/Xcode/DerivedData
+          rm -rf ~/Library/Caches/CocoaPods/Pods/External/MapboxMaps
+          rm -rf ~/Library/Caches/CocoaPods/Pods/Release/MapboxMaps
 
       - name: 🔧 Generate Xcode config
         run: |
@@ -139,7 +178,8 @@ jobs:
       - name: 🦕 Pod install
         run: |
           cd ios
-          pod install --repo-update
+          pod repo update
+          pod install --repo-update --verbose
 
       - name: 🔓 Patch Xcode signing
         run: |
