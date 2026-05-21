@@ -9,6 +9,7 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+
   geolocator: ^13.0.1
   permission_handler: ^11.3.1
   flutter_map: ^8.0.0
@@ -25,7 +26,10 @@ dependencies:
   flutter_compass: ^0.8.1
   battery_plus: ^7.0.0
   path_provider: ^2.1.5
-  mapbox_maps_flutter: ^2.23.1
+
+  # Pin version to avoid CocoaPods resolving newer MapboxMaps unexpectedly.
+  mapbox_maps_flutter: 2.23.1
+
   camera: ^0.11.0
   sensors_plus: ^7.0.0
   share_plus: ^12.0.2
@@ -39,7 +43,8 @@ dev_dependencies:
   flutter_lints: ^5.0.0
 
 flutter:
+  uses-material-design: true
+
   assets:
     - assets/models/object_detector.tflite
     - assets/models/labels.txt
-  uses-material-design: true
