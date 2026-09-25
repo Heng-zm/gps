@@ -2,6 +2,13 @@ name: iOS-ipa-build
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - '.github/workflows/desktop.yml'
 
 permissions:
   contents: write
@@ -11,7 +18,7 @@ permissions:
 jobs:
   build-ios:
     name: 🎉 iOS Release Build
-    runs-on: macos-latest
+    runs-on: macos-14
 
     steps:
       - name: 📥 Checkout repository
@@ -27,7 +34,7 @@ jobs:
           p = Path("pubspec.yaml")
           text = p.read_text()
 
-          # Pin Mapbox Flutter to avoid resolving 2.24.x, which requires newer MapboxMaps pods.
+          # Pin Mapbox Flutter to avoid resolving newer versions that require incompatible MapboxMaps pods.
           text = text.replace("mapbox_maps_flutter: ^2.23.1", "mapbox_maps_flutter: 2.23.1")
           text = text.replace("mapbox_maps_flutter: ^2.24.2", "mapbox_maps_flutter: 2.23.1")
           text = text.replace("mapbox_maps_flutter: 2.24.2", "mapbox_maps_flutter: 2.23.1")
@@ -53,9 +60,7 @@ jobs:
             flutter create --platforms=ios .
           fi
 
-          # Use CocoaPods CDN only.
-          # Do NOT add https://github.com/mapbox/mapbox-pod-specs.git here;
-          # GitHub Actions can fail cloning it with: could not read Username.
+          # Use CocoaPods CDN source.
           ruby <<'RUBY'
           path = 'ios/Podfile'
           podfile = File.read(path)
@@ -71,15 +76,14 @@ jobs:
           File.write(path, "source 'https://cdn.cocoapods.org/'\n" + podfile)
           RUBY
 
-          # Ensure platform is iOS 14.0+
+          # Ensure deployment target is iOS 14.0+
           if grep -q "^platform :ios" ios/Podfile; then
             sed -i '' "s/^platform :ios.*/platform :ios, '14.0'/" ios/Podfile
           else
             sed -i '' "1s/^/platform :ios, '14.0'\n/" ios/Podfile
           fi
 
-          # CocoaPods supports only ONE post_install hook.
-          # This script removes every existing post_install block and appends one clean unified hook.
+          # Clean and replace post_install hook with unified settings.
           ruby <<'RUBY'
           path = 'ios/Podfile'
           podfile = File.read(path)
@@ -106,7 +110,6 @@ jobs:
                 next_line_end = text.index("\n", j) || text.length
                 line = text[j...next_line_end]
 
-                # Count Ruby do/end enough for normal Flutter Podfile hook blocks.
                 depth += line.scan(/\bdo\b/).length
                 depth -= line.scan(/^\s*end\s*$/).length
 
@@ -140,7 +143,7 @@ jobs:
           File.write(path, podfile + "\n" + unified_hook)
           RUBY
 
-          # Patch Xcode project deployment target too.
+          # Patch Xcode project deployment target.
           PBX="ios/Runner.xcodeproj/project.pbxproj"
           if [ -f "$PBX" ]; then
             sed -i '' 's/IPHONEOS_DEPLOYMENT_TARGET = [0-9.]*;/IPHONEOS_DEPLOYMENT_TARGET = 14.0;/g' "$PBX"
@@ -178,13 +181,12 @@ jobs:
         run: |
           flutter build ios --release --config-only --no-codesign \
             --build-number=${{ github.run_number }} \
-            --build-name=1.1.${{ github.run_number }}
+            --build-name=1.2.${{ github.run_number }}
 
       - name: 🦕 Pod install
         run: |
           cd ios
-          pod repo update trunk
-          pod install --repo-update --verbose
+          pod install --repo-update --verbose || pod install --verbose
 
       - name: 🔓 Patch Xcode signing
         run: |
@@ -217,6 +219,7 @@ jobs:
             -workspace ios/Runner.xcworkspace \
             -scheme Runner \
             -configuration Release \
+            -destination 'generic/platform=iOS' \
             -sdk iphoneos \
             -derivedDataPath build/DerivedData \
             CODE_SIGNING_ALLOWED=NO \
@@ -225,8 +228,9 @@ jobs:
             DEVELOPMENT_TEAM="" \
             PROVISIONING_PROFILE_SPECIFIER="" \
             IPHONEOS_DEPLOYMENT_TARGET=14.0 \
+            COMPILER_INDEX_STORE_ENABLE=NO \
             CURRENT_PROJECT_VERSION=${{ github.run_number }} \
-            MARKETING_VERSION=1.1.${{ github.run_number }} \
+            MARKETING_VERSION=1.2.${{ github.run_number }} \
             build
 
       - name: 📦 Package IPA
@@ -246,14 +250,15 @@ jobs:
           rm -rf Payload
           mkdir -p Payload
           cp -r "$APP_PATH" Payload/Runner.app
-          zip -qq -r -9 GPS-Tracker.ipa Payload
-          echo "✅ IPA size: $(du -sh GPS-Tracker.ipa | cut -f1)"
+          zip -qq -r -9 TrackPro-AI.ipa Payload
+          cp TrackPro-AI.ipa GPS-Tracker.ipa
+          echo "✅ IPA size: $(du -sh TrackPro-AI.ipa | cut -f1)"
 
       - name: 📤 Upload IPA as workflow artifact
         uses: actions/upload-artifact@v4
         with:
-          name: GPS-Tracker-IPA-v1.1.${{ github.run_number }}
-          path: GPS-Tracker.ipa
+          name: TrackPro-AI-IPA-v1.2.${{ github.run_number }}
+          path: TrackPro-AI.ipa
           if-no-files-found: error
           retention-days: 30
 
@@ -261,11 +266,11 @@ jobs:
         run: |
           REPO="${{ github.repository }}"
           RUN="${{ github.run_number }}"
-          VERSION="1.1.${RUN}"
+          VERSION="1.2.${RUN}"
           OWNER="${{ github.repository_owner }}"
           REPO_NAME="${{ github.event.repository.name }}"
 
-          IPA_URL="https://github.com/${REPO}/releases/download/v${VERSION}/GPS-Tracker.ipa"
+          IPA_URL="https://github.com/${REPO}/releases/download/v${VERSION}/TrackPro-AI.ipa"
           PAGES_URL="https://${OWNER}.github.io/${REPO_NAME}"
           MANIFEST_URL="${PAGES_URL}/manifest.plist"
 
@@ -292,7 +297,7 @@ jobs:
                   <key>bundle-identifier</key><string>com.example.gpsTracker</string>
                   <key>bundle-version</key><string>${VERSION}</string>
                   <key>kind</key><string>software</string>
-                  <key>title</key><string>GPS Tracker</string>
+                  <key>title</key><string>TrackPro AI</string>
                 </dict>
               </dict>
             </array>
@@ -306,22 +311,23 @@ jobs:
           <head>
             <meta charset="UTF-8"/>
             <meta name="viewport" content="width=device-width, initial-scale=1"/>
-            <title>GPS Tracker — Install</title>
+            <title>TrackPro AI — Install</title>
             <style>
-              body{font-family:-apple-system,sans-serif;background:#000;color:#fff;
+              body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;background:#000;color:#fff;
                    display:flex;flex-direction:column;align-items:center;
                    justify-content:center;min-height:100vh;margin:0;padding:24px;box-sizing:border-box;}
-              h1{font-size:1.6rem;margin-bottom:4px;}
-              p{color:#aaa;margin-bottom:32px;font-size:.95rem;}
+              h1{font-size:1.8rem;margin-bottom:4px;font-weight:700;}
+              p{color:#8e8e93;margin-bottom:32px;font-size:.95rem;}
               a.btn{display:inline-block;background:#007aff;color:#fff;
-                    padding:16px 40px;border-radius:14px;font-size:1.1rem;
-                    font-weight:600;text-decoration:none;letter-spacing:.3px;}
-              .note{margin-top:24px;color:#666;font-size:.8rem;text-align:center;}
+                    padding:16px 44px;border-radius:16px;font-size:1.1rem;
+                    font-weight:600;text-decoration:none;letter-spacing:.3px;
+                    box-shadow:0 8px 24px rgba(0,122,255,0.35);}
+              .note{margin-top:28px;color:#636366;font-size:.8rem;text-align:center;line-height:1.5;}
             </style>
           </head>
           <body>
-            <h1>📍 GPS Tracker</h1>
-            <p>v${VERSION} · Unsigned OTA Build</p>
+            <h1>📍 TrackPro AI</h1>
+            <p>v${VERSION} · iOS Release Build</p>
             <a class="btn"
                href="itms-services://?action=download-manifest&url=${MANIFEST_URL}">
               ⬇️ Install on iPhone
@@ -329,8 +335,8 @@ jobs:
             <p class="note">
               Open this page in <strong>Safari</strong> on your iPhone.<br/>
               Chrome and Firefox cannot trigger OTA installs.<br/><br/>
-              ⚠️ Device must be registered in Apple Developer portal<br/>
-              or use AltStore / Sideloadly for truly unsigned install.
+              ⚠️ Unsigned build — device must be registered in Apple Developer portal<br/>
+              or use AltStore / Sideloadly / TrollStore.
             </p>
           </body>
           </html>
@@ -343,43 +349,50 @@ jobs:
         run: |
           set -e
           ls -lah
+          test -f TrackPro-AI.ipa
           test -f GPS-Tracker.ipa
           echo "✅ IPA exists:"
-          du -sh GPS-Tracker.ipa
+          du -sh TrackPro-AI.ipa GPS-Tracker.ipa
 
       - name: 🚀 Upload IPA to GitHub Releases
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.1.${{ github.run_number }}
-          name: GPS Tracker v1.1.${{ github.run_number }}
-          files: GPS-Tracker.ipa
+          tag_name: v1.2.${{ github.run_number }}
+          name: TrackPro AI v1.2.${{ github.run_number }}
+          files: |
+            TrackPro-AI.ipa
+            GPS-Tracker.ipa
           fail_on_unmatched_files: true
           make_latest: true
           body: |
-            ## 📍 GPS Tracker — v1.1.${{ github.run_number }}
+            ## 📍 TrackPro AI — v1.2.${{ github.run_number }}
 
             | Field | Value |
             |---|---|
-            | Platform | iOS 14.0+ unsigned OTA |
+            | Platform | iOS 14.0+ (Universal iPhone) |
+            | UI/UX | Apple Human Interface Guidelines (HIG) Cupertino |
+            | Live Activities | Apple ActivityKit & Dynamic Island Ready |
+            | Map Engine | Hardware GPU Mapbox GeoJSON Layers |
             | Flutter | 3.27.4 |
             | Build | ${{ github.run_number }} |
 
-            ### 📲 Direct Install
+            ### 📲 Direct OTA Install
             Open this link **in Safari on your iPhone**:
 
             👉 ${{ env.PAGES_URL }}
 
             ### 📦 IPA Asset
-            Download the IPA from this release asset:
+            Download the IPA from this release:
+            * `TrackPro-AI.ipa`
+            * `GPS-Tracker.ipa`
 
-            `GPS-Tracker.ipa`
-
-            > ⚠️ Unsigned build — device UDID must be registered, or use Sideloadly/AltStore.
+            > ⚠️ Unsigned build — install via TrollStore, AltStore, Sideloadly, or Apple Developer UDID provisioning.
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: 📤 Deploy OTA page to GitHub Pages
         uses: peaceiris/actions-gh-pages@v4
+        continue-on-error: true
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_dir: ./ota
