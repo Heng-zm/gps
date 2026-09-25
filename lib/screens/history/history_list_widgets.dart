@@ -240,33 +240,46 @@ class _LifetimeSummary extends StatelessWidget {
                     ),
                   ),
                 ),
-                Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                  decoration: BoxDecoration(
-                    color: _kGreen.withValues(alpha: 0.13),
-                    borderRadius: BorderRadius.circular(999),
-                    border: Border.all(color: _kGreen.withValues(alpha: 0.18)),
-                  ),
-                  child: const Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: <Widget>[
-                      Icon(CupertinoIcons.check_mark_circled_solid,
-                          color: _kGreen, size: 13),
-                      SizedBox(width: 5),
-                      _SafeText(
-                        'SYNCED',
-                        maxLines: 1,
-                        style: TextStyle(decoration: TextDecoration.none,
-
-                          color: _kGreen,
-                          fontSize: 9,
-                          fontWeight: FontWeight.w900,
-                          letterSpacing: 0.7,
-                        ),
+                ValueListenableBuilder<int>(
+                  valueListenable: OfflineSyncQueue.instance.pendingCount,
+                  builder: (BuildContext context, int pending, Widget? _) {
+                    final bool isSynced = pending == 0;
+                    final Color color = isSynced ? _kGreen : _kGoldSoft;
+                    return Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 10, vertical: 6),
+                      decoration: BoxDecoration(
+                        color: color.withValues(alpha: 0.13),
+                        borderRadius: BorderRadius.circular(999),
+                        border:
+                            Border.all(color: color.withValues(alpha: 0.22)),
                       ),
-                    ],
-                  ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: <Widget>[
+                          Icon(
+                            isSynced
+                                ? CupertinoIcons.check_mark_circled_solid
+                                : CupertinoIcons.cloud_upload_fill,
+                            color: color,
+                            size: 13,
+                          ),
+                          const SizedBox(width: 5),
+                          _SafeText(
+                            isSynced ? 'CLOUD SYNCED' : '$pending QUEUED',
+                            maxLines: 1,
+                            style: TextStyle(
+                              decoration: TextDecoration.none,
+                              color: color,
+                              fontSize: 9,
+                              fontWeight: FontWeight.w900,
+                              letterSpacing: 0.7,
+                            ),
+                          ),
+                        ],
+                      ),
+                    );
+                  },
                 ),
               ],
             ),

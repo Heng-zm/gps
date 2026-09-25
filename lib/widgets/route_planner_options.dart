@@ -1,5 +1,4 @@
 import 'package:flutter/cupertino.dart';
-import 'package:flutter/material.dart';
 
 import '../models/mapbox_route_models.dart';
 import 'route_planner_sheet.dart';
@@ -34,7 +33,7 @@ class RoutePlannerOptions {
       value: DirectionsProfile.cycling,
       label: 'CYCLING',
       shortLabel: 'Cycling',
-      icon: Icons.directions_bike_rounded,
+      icon: CupertinoIcons.bolt_horizontal_fill,
       description: 'Cycling route',
     ),
   ];

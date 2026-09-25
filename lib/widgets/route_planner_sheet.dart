@@ -596,7 +596,7 @@ class _RoutePlannerHeader extends StatelessWidget {
             ],
           ),
           child: const Icon(
-            Icons.navigation_rounded,
+            CupertinoIcons.location_north_fill,
             color: _RoutePlannerSheetState._blue,
             size: 25,
           ),

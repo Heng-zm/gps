@@ -95,7 +95,14 @@ class AiObjectTrackingService {
     );
 
     final AiObjectTrend trend = _trendFor(areaDelta, _relativeSpeedKmh);
-    final int score = _riskScoreFor(
+    final double? ttc = _calculateTtc(
+      boxHeight: normalizedBox.height,
+      relativeSpeedKmh: _relativeSpeedKmh,
+      userSpeedKmh: userSpeedKmh,
+      trend: trend,
+    );
+
+    int score = _riskScoreFor(
       userSpeedKmh: userSpeedKmh,
       relativeSpeedKmh: _relativeSpeedKmh,
       boxArea: nextArea,
@@ -105,6 +112,10 @@ class AiObjectTrackingService {
       gpsAccuracyMeters: gpsAccuracyMeters,
       trend: trend,
     );
+
+    if (ttc != null && ttc <= 3.2) {
+      score = math.max(score, 84);
+    }
 
     _lastArea = nextArea;
     _lastTimestamp = timestamp;
@@ -119,7 +130,28 @@ class AiObjectTrackingService {
       risk: _objectRiskFromScore(score),
       trend: trend,
       updatedAt: timestamp,
+      estimatedTtcSeconds: ttc,
     );
+  }
+
+  double? _calculateTtc({
+    required double boxHeight,
+    required double relativeSpeedKmh,
+    required double userSpeedKmh,
+    required AiObjectTrend trend,
+  }) {
+    if (trend != AiObjectTrend.closing) return null;
+    final double closingSpeedKmh =
+        relativeSpeedKmh > 0 ? relativeSpeedKmh : userSpeedKmh * 0.45;
+    if (closingSpeedKmh < 4.0) return null;
+
+    final double estDistanceM =
+        (1.8 / math.max(0.04, boxHeight)).clamp(2.0, 120.0);
+    final double closingSpeedMs = closingSpeedKmh / 3.6;
+    if (closingSpeedMs <= 0.2) return null;
+
+    final double ttc = estDistanceM / closingSpeedMs;
+    return ttc.clamp(0.4, 30.0);
   }
 
   /// Auto-locks and tracks a likely forward object without requiring a tap.
@@ -468,6 +500,7 @@ class AiTrackedObject {
     required this.risk,
     required this.trend,
     required this.updatedAt,
+    this.estimatedTtcSeconds,
   });
 
   final String id;
@@ -480,6 +513,17 @@ class AiTrackedObject {
   final AiObjectRisk risk;
   final AiObjectTrend trend;
   final DateTime updatedAt;
+  final double? estimatedTtcSeconds;
+
+  bool get isCollisionImminent =>
+      (estimatedTtcSeconds != null && estimatedTtcSeconds! <= 3.2) ||
+      riskScore >= 78;
+
+  String? get ttcLabel {
+    final double? ttc = estimatedTtcSeconds;
+    if (ttc == null || ttc > 12.0) return null;
+    return 'TTC: ${ttc.toStringAsFixed(1)}s';
+  }
 
   String get speedLabel {
     if (confidence < 0.45) return 'Tracking...';
@@ -489,6 +533,13 @@ class AiTrackedObject {
   String get riskLabel => 'Risk $riskScore%';
 
   String get advice {
+    if (isCollisionImminent) {
+      final double? ttc = estimatedTtcSeconds;
+      return ttc != null
+          ? 'COLLISION RISK · Impact in ${ttc.toStringAsFixed(1)}s · BRAKE'
+          : 'CLOSING FAST · Slow down immediately';
+    }
+
     switch (trend) {
       case AiObjectTrend.closing:
         return 'Object appears closer · keep distance';
@@ -534,6 +585,7 @@ class AiTrackedObject {
     AiObjectRisk? risk,
     AiObjectTrend? trend,
     DateTime? updatedAt,
+    double? estimatedTtcSeconds,
   }) {
     return AiTrackedObject(
       id: id ?? this.id,
@@ -546,6 +598,7 @@ class AiTrackedObject {
       risk: risk ?? this.risk,
       trend: trend ?? this.trend,
       updatedAt: updatedAt ?? this.updatedAt,
+      estimatedTtcSeconds: estimatedTtcSeconds ?? this.estimatedTtcSeconds,
     );
   }
 }

@@ -99,6 +99,12 @@
 		<true/>
 	</dict>
 
+	<!-- ActivityKit / Live Activities & Dynamic Island -->
+	<key>NSSupportsLiveActivities</key>
+	<true/>
+	<key>NSSupportsLiveActivitiesFrequentUpdates</key>
+	<true/>
+
 	<!-- App Store Compliance -->
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>

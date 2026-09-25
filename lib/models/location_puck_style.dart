@@ -103,7 +103,7 @@ enum LocationPuckStyle {
   rider(
     label: 'Rider',
     description: 'Rider style for motorcycle and delivery trips.',
-    icon: Icons.motorcycle,
+    icon: CupertinoIcons.speedometer,
     accentColor: Color(0xFFF97316),
     centerColor: Color(0xFF431407),
     showsHeadingCone: true,

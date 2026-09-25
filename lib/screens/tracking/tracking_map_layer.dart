@@ -56,6 +56,8 @@ class _FullScreenLiveMapState extends State<_FullScreenLiveMap> {
   bool _styleLoaded = false;
   bool _locationReady = false;
   bool _disposed = false;
+  bool _routeGeoJsonInitialized = false;
+  bool _plannedGeoJsonInitialized = false;
   int _lastRouteCount = -1;
   int _lastRouteSignature = 0;
   int _lastPlannedRouteSignature = 0;
@@ -165,6 +167,8 @@ class _FullScreenLiveMapState extends State<_FullScreenLiveMap> {
       _routeCoreManager = null;
       _plannedOuterManager = null;
       _plannedCoreManager = null;
+      _routeGeoJsonInitialized = false;
+      _plannedGeoJsonInitialized = false;
       _lastRouteSignature = 0;
       _lastPlannedRouteSignature = 0;
 
@@ -334,12 +338,108 @@ class _FullScreenLiveMapState extends State<_FullScreenLiveMap> {
         .map((LatLng point) => mb.Position(point.longitude, point.latitude))
         .toList(growable: false);
 
+    // High-performance GPU GeoJSON Line Layer
+    final bool updated = await _updateRouteGeoJson(coordinates);
+    if (!updated) {
+      await _fallbackRouteAnnotations(coordinates);
+    }
+  }
+
+  Future<bool> _updateRouteGeoJson(List<mb.Position> coordinates) async {
+    final mb.MapboxMap? map = _mapboxMap;
+    if (map == null || !_styleLoaded || _disposed) return false;
+
+    try {
+      if (!_routeGeoJsonInitialized) {
+        final bool sourceExists =
+            await map.style.styleSourceExists('live-route-source');
+        if (!sourceExists) {
+          await map.style.addSource(
+            mb.GeoJsonSource(
+              id: 'live-route-source',
+              data: jsonEncode(<String, dynamic>{
+                'type': 'FeatureCollection',
+                'features': <dynamic>[],
+              }),
+            ),
+          );
+        }
+
+        final bool casingExists =
+            await map.style.styleLayerExists('live-route-casing');
+        if (!casingExists) {
+          await map.style.addLayer(
+            mb.LineLayer(
+              id: 'live-route-casing',
+              sourceId: 'live-route-source',
+              lineColor: Colors.white.value,
+              lineWidth: 12.0,
+              lineOpacity: 0.90,
+              lineJoin: mb.LineJoin.ROUND,
+              lineCap: mb.LineCap.ROUND,
+            ),
+          );
+        }
+
+        final bool coreExists =
+            await map.style.styleLayerExists('live-route-core');
+        if (!coreExists) {
+          await map.style.addLayer(
+            mb.LineLayer(
+              id: 'live-route-core',
+              sourceId: 'live-route-source',
+              lineColor: AppColors.blue.value,
+              lineWidth: 6.5,
+              lineOpacity: 0.98,
+              lineJoin: mb.LineJoin.ROUND,
+              lineCap: mb.LineCap.ROUND,
+            ),
+          );
+        }
+
+        _routeGeoJsonInitialized = true;
+      }
+
+      final Map<String, dynamic> geoJson = <String, dynamic>{
+        'type': 'FeatureCollection',
+        'features': coordinates.length < 2
+            ? <dynamic>[]
+            : <dynamic>[
+                <String, dynamic>{
+                  'type': 'Feature',
+                  'geometry': <String, dynamic>{
+                    'type': 'LineString',
+                    'coordinates': coordinates
+                        .map((mb.Position p) =>
+                            <double>[p.lng.toDouble(), p.lat.toDouble()])
+                        .toList(growable: false),
+                  },
+                },
+              ],
+      };
+
+      await map.style.setStyleSourceProperty(
+        'live-route-source',
+        'data',
+        jsonEncode(geoJson),
+      );
+      return true;
+    } catch (e) {
+      debugPrint('Mapbox GeoJSON line layer fallback: $e');
+      _routeGeoJsonInitialized = false;
+      return false;
+    }
+  }
+
+  Future<void> _fallbackRouteAnnotations(List<mb.Position> coordinates) async {
+    final mb.MapboxMap? map = _mapboxMap;
+    if (map == null || _disposed || !mounted) return;
+
     try {
       _routeOuterManager ??=
           await map.annotations.createPolylineAnnotationManager();
       _routeCoreManager ??=
           await map.annotations.createPolylineAnnotationManager();
-      if (_disposed || !mounted) return;
 
       await _routeOuterManager?.deleteAll();
       await _routeCoreManager?.deleteAll();
@@ -388,22 +488,118 @@ class _FullScreenLiveMapState extends State<_FullScreenLiveMap> {
 
     _lastPlannedRouteSignature = signature;
 
+    final List<mb.Position> coordinates = (route == null || route.points.length < 2)
+        ? const <mb.Position>[]
+        : route.points
+            .where(_isValid)
+            .map((LatLng point) => mb.Position(point.longitude, point.latitude))
+            .toList(growable: false);
+
+    final bool updated = await _updatePlannedRouteGeoJson(coordinates);
+    if (!updated) {
+      await _fallbackPlannedRouteAnnotations(coordinates);
+    }
+  }
+
+  Future<bool> _updatePlannedRouteGeoJson(List<mb.Position> coordinates) async {
+    final mb.MapboxMap? map = _mapboxMap;
+    if (map == null || !_styleLoaded || _disposed) return false;
+
+    try {
+      if (!_plannedGeoJsonInitialized) {
+        final bool sourceExists =
+            await map.style.styleSourceExists('planned-route-source');
+        if (!sourceExists) {
+          await map.style.addSource(
+            mb.GeoJsonSource(
+              id: 'planned-route-source',
+              data: jsonEncode(<String, dynamic>{
+                'type': 'FeatureCollection',
+                'features': <dynamic>[],
+              }),
+            ),
+          );
+        }
+
+        final bool casingExists =
+            await map.style.styleLayerExists('planned-route-casing');
+        if (!casingExists) {
+          await map.style.addLayer(
+            mb.LineLayer(
+              id: 'planned-route-casing',
+              sourceId: 'planned-route-source',
+              lineColor: Colors.white.value,
+              lineWidth: 11.0,
+              lineOpacity: 0.85,
+              lineJoin: mb.LineJoin.ROUND,
+              lineCap: mb.LineCap.ROUND,
+            ),
+          );
+        }
+
+        final bool coreExists =
+            await map.style.styleLayerExists('planned-route-core');
+        if (!coreExists) {
+          await map.style.addLayer(
+            mb.LineLayer(
+              id: 'planned-route-core',
+              sourceId: 'planned-route-source',
+              lineColor: _kBlue.value,
+              lineWidth: 5.5,
+              lineOpacity: 0.94,
+              lineJoin: mb.LineJoin.ROUND,
+              lineCap: mb.LineCap.ROUND,
+            ),
+          );
+        }
+
+        _plannedGeoJsonInitialized = true;
+      }
+
+      final Map<String, dynamic> geoJson = <String, dynamic>{
+        'type': 'FeatureCollection',
+        'features': coordinates.length < 2
+            ? <dynamic>[]
+            : <dynamic>[
+                <String, dynamic>{
+                  'type': 'Feature',
+                  'geometry': <String, dynamic>{
+                    'type': 'LineString',
+                    'coordinates': coordinates
+                        .map((mb.Position p) =>
+                            <double>[p.lng.toDouble(), p.lat.toDouble()])
+                        .toList(growable: false),
+                  },
+                },
+              ],
+      };
+
+      await map.style.setStyleSourceProperty(
+        'planned-route-source',
+        'data',
+        jsonEncode(geoJson),
+      );
+      return true;
+    } catch (e) {
+      debugPrint('Planned route GeoJSON fallback: $e');
+      _plannedGeoJsonInitialized = false;
+      return false;
+    }
+  }
+
+  Future<void> _fallbackPlannedRouteAnnotations(
+      List<mb.Position> coordinates) async {
+    final mb.MapboxMap? map = _mapboxMap;
+    if (map == null || _disposed || !mounted) return;
+
     try {
       _plannedOuterManager ??=
           await map.annotations.createPolylineAnnotationManager();
       _plannedCoreManager ??=
           await map.annotations.createPolylineAnnotationManager();
-      if (_disposed || !mounted) return;
 
       await _plannedOuterManager?.deleteAll();
       await _plannedCoreManager?.deleteAll();
-
-      if (route == null || route.points.length < 2) return;
-
-      final List<mb.Position> coordinates = route.points
-          .where(_isValid)
-          .map((LatLng point) => mb.Position(point.longitude, point.latitude))
-          .toList(growable: false);
 
       if (coordinates.length < 2) return;
 

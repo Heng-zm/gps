@@ -596,7 +596,7 @@ class _SheetTitle extends StatelessWidget {
               ],
             ),
             child: const Icon(
-              Icons.auto_awesome,
+              CupertinoIcons.sparkles,
               color: Colors.white,
               size: 17,
             ),
@@ -724,7 +724,7 @@ class _EmptyCoachState extends StatelessWidget {
                       color: _AppColors.dark.withValues(alpha: 0.28)),
                 ),
                 child: const Icon(
-                  Icons.psychology_alt_rounded,
+                  CupertinoIcons.lightbulb_fill,
                   color: _AppColors.bright,
                   size: 28,
                 ),

@@ -10,6 +10,7 @@ import 'package:geolocator/geolocator.dart';
 import 'package:latlong2/latlong.dart';
 
 import '../models/trip_data.dart';
+import 'live_activity_service.dart';
 import 'settings_service.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -206,10 +207,17 @@ class GpsService {
       _tickSw.start();
       _cachedLocationSettings = null; // Pick up the latest GPS accuracy setting.
 
+      unawaited(
+        LiveActivityService.instance.startActivity(
+          tripName: 'TrackPro Journey',
+        ),
+      );
+
       _positionSubscription();
     } catch (e, st) {
       debugPrint('GpsService.startTracking: $e\n$st');
       _isTracking = false;
+      unawaited(LiveActivityService.instance.stopActivity());
       _tripStartTime = null;
       _tripSw
         ..stop()
@@ -256,6 +264,8 @@ class GpsService {
     _tripSw.stop();
     _stoppedSw.stop();
     _tickSw.stop();
+
+    unawaited(LiveActivityService.instance.stopActivity());
 
     // [FIX-1] Cancel stream first so no late points corrupt the summary
     await _cancelSub();
@@ -859,6 +869,16 @@ class GpsService {
     if (ctrl == null || ctrl.isClosed || !_isTracking) return;
     try {
       ctrl.add(point);
+
+      unawaited(
+        LiveActivityService.instance.updateActivity(
+          speedMph: point.speedMph,
+          distanceMiles: currentDistanceMiles,
+          elapsedTime: _tripSw.elapsed,
+          maxSpeedMph: _maxSpeedMph,
+          avgSpeedMph: currentAvgSpeedMph,
+        ),
+      );
     } catch (e, st) {
       debugPrint('GpsService._emit: $e\n$st');
     }
@@ -898,6 +918,7 @@ class GpsService {
     _tripSw.stop();
     _stoppedSw.stop();
     _tickSw.stop();
+    unawaited(LiveActivityService.instance.stopActivity());
     await _cancelSub();
     await _closeCtrl();
     _tripStartTime = null;

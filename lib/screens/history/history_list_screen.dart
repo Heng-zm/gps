@@ -320,29 +320,12 @@ class _HistoryScreenState extends State<HistoryScreen> {
     HapticFeedback.lightImpact();
 
     Navigator.of(context).push(
-      PageRouteBuilder<void>(
-        transitionDuration: const Duration(milliseconds: 350),
-        reverseTransitionDuration: const Duration(milliseconds: 300),
-        pageBuilder: (BuildContext context, Animation<double> animation,
-            Animation<double> secondaryAnimation) {
+      CupertinoPageRoute<void>(
+        builder: (BuildContext context) {
           return TripDetailScreen(
             trip: trip,
             settings: _settings,
             onExport: _openExportSheet,
-          );
-        },
-        transitionsBuilder: (BuildContext context, Animation<double> animation,
-            Animation<double> secondaryAnimation, Widget child) {
-          return FadeTransition(
-            opacity: animation,
-            child: SlideTransition(
-              position: Tween<Offset>(
-                begin: const Offset(0.0, 0.05),
-                end: Offset.zero,
-              ).animate(CurvedAnimation(
-                  parent: animation, curve: Curves.easeOutCubic)),
-              child: child,
-            ),
           );
         },
       ),

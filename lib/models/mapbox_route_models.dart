@@ -203,7 +203,7 @@ extension DirectionsProfileX on DirectionsProfile {
       case DirectionsProfile.walking:
         return CupertinoIcons.person_fill;
       case DirectionsProfile.cycling:
-        return Icons.directions_bike_rounded;
+        return CupertinoIcons.bolt_horizontal_fill;
     }
   }
 

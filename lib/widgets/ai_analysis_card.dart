@@ -211,7 +211,7 @@ class _CardHeader extends StatelessWidget {
                 ),
               ],
             ),
-            child: const Icon(Icons.auto_awesome, color: _Gold.ink, size: 14),
+            child: const Icon(CupertinoIcons.sparkles, color: _Gold.ink, size: 14),
           ),
           const SizedBox(width: 10),
           const Text(
@@ -246,7 +246,7 @@ class _CardHeader extends StatelessWidget {
                   ),
                 ),
                 child: const Icon(
-                  Icons.refresh_rounded,
+                  CupertinoIcons.arrow_clockwise,
                   color: _Gold.dark,
                   size: 14,
                 ),
@@ -414,7 +414,7 @@ class _ErrorBody extends StatelessWidget {
             color: _Gold.red.withValues(alpha: 0.1),
             border: Border.all(color: _Gold.red.withValues(alpha: 0.3)),
           ),
-          child: const Icon(Icons.wifi_off_rounded, color: _Gold.red, size: 20),
+          child: const Icon(CupertinoIcons.wifi_slash, color: _Gold.red, size: 20),
         ),
         const SizedBox(height: 12),
         Text(
@@ -468,7 +468,7 @@ class _IdleBody extends StatelessWidget {
             border: Border.all(color: _Gold.dark.withValues(alpha: 0.25)),
           ),
           child:
-              const Icon(Icons.insights_rounded, color: _Gold.dark, size: 22),
+              const Icon(CupertinoIcons.chart_bar_alt_fill, color: _Gold.dark, size: 22),
         ),
         Text(
           'Unlock your trip intelligence',
@@ -502,7 +502,7 @@ class _IdleBody extends StatelessWidget {
             child: const Row(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                Icon(Icons.auto_awesome, color: _Gold.ink, size: 14),
+                Icon(CupertinoIcons.sparkles, color: _Gold.ink, size: 14),
                 SizedBox(width: 8),
                 Text(
                   'ANALYSE TRIP PERFORMANCE',

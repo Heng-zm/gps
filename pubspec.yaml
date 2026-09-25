@@ -46,5 +46,4 @@ flutter:
   uses-material-design: true
 
   assets:
-    - assets/models/object_detector.tflite
-    - assets/models/labels.txt
+    - assets/models/

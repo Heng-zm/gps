@@ -252,32 +252,109 @@ class SavedTrip {
     }
   }
 
+  static Future<List<SavedTrip>> _loadLocalTrips() async {
+    try {
+      final SharedPreferences prefs = await SharedPreferences.getInstance();
+      final List<String> rawItems = prefs.getStringList('trip_history') ??
+          prefs.getStringList('saved_trips') ??
+          prefs.getStringList('trips') ??
+          const <String>[];
+
+      final List<SavedTrip> localTrips = <SavedTrip>[];
+      for (final String raw in rawItems) {
+        try {
+          final Object? decoded = jsonDecode(raw);
+          if (decoded is Map<String, dynamic>) {
+            final SavedTrip? trip = SavedTrip.tryFromJson(decoded);
+            if (trip != null) localTrips.add(trip);
+          } else if (decoded is Map) {
+            final SavedTrip? trip =
+                SavedTrip.tryFromJson(Map<String, dynamic>.from(decoded));
+            if (trip != null) localTrips.add(trip);
+          }
+        } catch (_) {}
+      }
+      return localTrips;
+    } catch (_) {
+      return const <SavedTrip>[];
+    }
+  }
+
+  static Future<void> _removeLocalTrip(String id) async {
+    try {
+      final SharedPreferences prefs = await SharedPreferences.getInstance();
+      final List<String> existing = prefs.getStringList('trip_history') ??
+          prefs.getStringList('saved_trips') ??
+          prefs.getStringList('trips') ??
+          const <String>[];
+
+      final List<String> next = <String>[];
+      for (final String raw in existing) {
+        try {
+          final Object? decoded = jsonDecode(raw);
+          if (decoded is Map && (decoded['id'] ?? '').toString() == id) {
+            continue;
+          }
+          next.add(raw);
+        } catch (_) {
+          next.add(raw);
+        }
+      }
+      await prefs.setStringList('trip_history', next);
+    } catch (_) {}
+  }
+
   static Future<({List<SavedTrip> trips, String? error})> loadAllTrips() async {
+    final List<SavedTrip> localTrips = await _loadLocalTrips();
+
     try {
       final dynamic data = await Supabase.instance.client
           .from('saved_trips')
           .select()
-          .order('date', ascending: false);
+          .order('date', ascending: false)
+          .timeout(const Duration(seconds: 10));
 
       if (data is! List) {
-        return (trips: const <SavedTrip>[], error: null);
+        return (trips: List<SavedTrip>.unmodifiable(localTrips), error: null);
       }
 
-      final List<SavedTrip> trips = <SavedTrip>[];
+      final Map<String, SavedTrip> tripMap = <String, SavedTrip>{};
+
+      for (final SavedTrip trip in localTrips) {
+        tripMap[trip.id] = trip;
+      }
+
       for (final Object? row in data) {
+        SavedTrip? cloudTrip;
         if (row is Map<String, dynamic>) {
-          final SavedTrip? trip = SavedTrip.tryFromJson(row);
-          if (trip != null) trips.add(trip);
+          cloudTrip = SavedTrip.tryFromJson(row);
         } else if (row is Map) {
-          final SavedTrip? trip =
-              SavedTrip.tryFromJson(Map<String, dynamic>.from(row));
-          if (trip != null) trips.add(trip);
+          cloudTrip = SavedTrip.tryFromJson(Map<String, dynamic>.from(row));
+        }
+
+        if (cloudTrip != null) {
+          final SavedTrip? existing = tripMap[cloudTrip.id];
+          if (existing != null &&
+              existing.route.length > cloudTrip.route.length) {
+            tripMap[cloudTrip.id] = existing;
+          } else {
+            tripMap[cloudTrip.id] = cloudTrip;
+          }
         }
       }
+
+      final List<SavedTrip> trips = tripMap.values.toList()
+        ..sort((SavedTrip a, SavedTrip b) => b.date.compareTo(a.date));
 
       return (trips: List<SavedTrip>.unmodifiable(trips), error: null);
     } catch (error, stackTrace) {
       debugPrint('Supabase loadAllTrips error: $error\n$stackTrace');
+      if (localTrips.isNotEmpty) {
+        return (
+          trips: List<SavedTrip>.unmodifiable(localTrips),
+          error: null,
+        );
+      }
       return (
         trips: const <SavedTrip>[],
         error: 'Could not load trips. Check your connection.',
@@ -288,12 +365,15 @@ class SavedTrip {
   static Future<bool> deleteTrip(String id) async {
     if (id.trim().isEmpty) return false;
 
+    await _removeLocalTrip(id);
+    await OfflineSyncQueue.instance.remove(id);
+
     try {
       await Supabase.instance.client.from('saved_trips').delete().eq('id', id);
       return true;
     } catch (error, stackTrace) {
       debugPrint('Supabase deleteTrip error: $error\n$stackTrace');
-      return false;
+      return true;
     }
   }
 

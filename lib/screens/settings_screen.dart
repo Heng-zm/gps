@@ -9,6 +9,7 @@ import 'package:geolocator/geolocator.dart';
 
 import '../models/location_puck_style.dart';
 import '../navigation/app_routes.dart';
+import '../services/offline_sync_queue.dart';
 import '../services/settings_service.dart';
 import '../widgets/app_console_widget.dart';
 import '../widgets/location_puck_widget.dart';
@@ -330,6 +331,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
     try {
       await _s.clearAllData();
+      await OfflineSyncQueue.instance.clear();
       AppConsole.warn('Factory settings reset complete', tag: 'SETTINGS');
       if (!mounted) return;
       _showSnack(message: 'Settings reset complete.', color: _green);

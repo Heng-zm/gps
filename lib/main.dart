@@ -368,6 +368,7 @@ class TrackProAI extends StatelessWidget {
         DefaultWidgetsLocalizations.delegate,
         DefaultCupertinoLocalizations.delegate,
       ],
+      scrollBehavior: const CupertinoScrollBehavior(),
       builder: (BuildContext context, Widget? child) {
         final MediaQueryData mq = MediaQuery.of(context);
 
@@ -393,6 +394,7 @@ class TrackProAI extends StatelessWidget {
     );
 
     return ThemeData(
+      platform: TargetPlatform.iOS,
       useMaterial3: true,
       brightness: Brightness.dark,
       colorScheme: scheme,
@@ -400,16 +402,29 @@ class TrackProAI extends StatelessWidget {
       canvasColor: Colors.black,
       splashFactory: NoSplash.splashFactory,
       highlightColor: Colors.transparent,
+      pageTransitionsTheme: const PageTransitionsTheme(
+        builders: <TargetPlatform, PageTransitionsBuilder>{
+          TargetPlatform.android: CupertinoPageTransitionsBuilder(),
+          TargetPlatform.iOS: CupertinoPageTransitionsBuilder(),
+          TargetPlatform.macOS: CupertinoPageTransitionsBuilder(),
+          TargetPlatform.windows: CupertinoPageTransitionsBuilder(),
+          TargetPlatform.linux: CupertinoPageTransitionsBuilder(),
+        },
+      ),
       fontFamilyFallback: const <String>[
+        '.AppleSystemUIFont',
         'SF Pro Display',
         'SF Pro Text',
-        'Roboto',
+        '-apple-system',
+        'BlinkMacSystemFont',
+        'Helvetica Neue',
+        'Arial',
       ],
       cupertinoOverrideTheme: const CupertinoThemeData(
         brightness: Brightness.dark,
         primaryColor: _kGoldMid,
         scaffoldBackgroundColor: Colors.black,
-        barBackgroundColor: Colors.black,
+        barBackgroundColor: Color(0xCC1C1C1E),
         textTheme: CupertinoTextThemeData(
           primaryColor: _kGoldMid,
         ),
@@ -418,17 +433,25 @@ class TrackProAI extends StatelessWidget {
         elevation: 0,
         backgroundColor: Colors.transparent,
         foregroundColor: Colors.white,
+        centerTitle: true,
         systemOverlayStyle: SystemUiOverlayStyle.light,
+        titleTextStyle: TextStyle(
+          color: Colors.white,
+          fontSize: 17,
+          fontWeight: FontWeight.w600,
+          letterSpacing: -0.4,
+        ),
       ),
       snackBarTheme: SnackBarThemeData(
         behavior: SnackBarBehavior.floating,
-        backgroundColor: _kGoldMid,
+        backgroundColor: const Color(0xFF1C1C1E),
         contentTextStyle: const TextStyle(
-          color: Colors.black,
-          fontWeight: FontWeight.w800,
+          color: Colors.white,
+          fontWeight: FontWeight.w600,
         ),
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(16),
+          side: const BorderSide(color: Color(0x38545458), width: 0.5),
         ),
       ),
     );
@@ -483,7 +506,7 @@ class _AppShellState extends State<AppShell>
   static const List<IconData> _icons = <IconData>[
     CupertinoIcons.speedometer,
     CupertinoIcons.clock_fill,
-    CupertinoIcons.settings_solid,
+    CupertinoIcons.gear_alt_fill,
   ];
 
   static const List<String> _labels = <String>[

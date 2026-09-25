@@ -407,10 +407,16 @@ class SettingsService extends ChangeNotifier {
 
   /// Backward-compatible method name.
   ///
-  /// Previously this cleared every SharedPreferences key. Now it safely resets
-  /// settings only, to avoid deleting unrelated app data by accident.
+  /// Safely resets settings to defaults and clears local trip cache.
   Future<void> clearAllData() async {
     await resetSettings();
+    try {
+      final SharedPreferences prefs =
+          _prefs ?? await SharedPreferences.getInstance();
+      await prefs.remove('trip_history');
+      await prefs.remove('saved_trips');
+      await prefs.remove('trips');
+    } catch (_) {}
   }
 
   // ───────────────────────────────────────────────────────────────────────────

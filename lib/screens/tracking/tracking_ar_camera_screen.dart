@@ -102,13 +102,13 @@ extension _ArModelStatusX on _ArModelStatus {
   String get label {
     switch (this) {
       case _ArModelStatus.loading:
-        return 'MODEL LOAD';
+        return 'AI LOADING';
       case _ArModelStatus.ready:
-        return 'MODEL OK';
+        return 'TFLITE AI';
       case _ArModelStatus.webFallback:
-        return 'WEB AUTO';
+        return 'VISION AUTO';
       case _ArModelStatus.failed:
-        return 'MODEL FAIL';
+        return 'HEURISTIC';
     }
   }
 
@@ -119,9 +119,9 @@ extension _ArModelStatusX on _ArModelStatus {
       case _ArModelStatus.ready:
         return _kArGreen;
       case _ArModelStatus.webFallback:
-        return _kArBlueSoft;
+        return _kArBlue;
       case _ArModelStatus.failed:
-        return _kArRed;
+        return _kArGold;
     }
   }
 
@@ -132,9 +132,9 @@ extension _ArModelStatusX on _ArModelStatus {
       case _ArModelStatus.ready:
         return CupertinoIcons.checkmark_shield_fill;
       case _ArModelStatus.webFallback:
-        return CupertinoIcons.globe;
+        return CupertinoIcons.viewfinder;
       case _ArModelStatus.failed:
-        return CupertinoIcons.exclamationmark_triangle_fill;
+        return CupertinoIcons.bolt_fill;
     }
   }
 }
@@ -370,7 +370,17 @@ class _TrackingArCameraScreenState extends State<TrackingArCameraScreen>
   }
 
   Future<void> _initTfliteDetector() async {
-    await _tfliteDetector.load();
+    _modelStatusN.value = _ArModelStatus.loading;
+    try {
+      await _tfliteDetector.load();
+      if (!mounted) return;
+      _modelStatusN.value = _tfliteDetector.isLoaded
+          ? _ArModelStatus.ready
+          : _ArModelStatus.webFallback;
+    } catch (_) {
+      if (!mounted) return;
+      _modelStatusN.value = _ArModelStatus.webFallback;
+    }
   }
 
   void _startObjectTrackingTicker() {

@@ -338,7 +338,7 @@ class _CompactErrorState extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           children: <Widget>[
             const Icon(
-              Icons.cloud_off_rounded,
+              CupertinoIcons.cloud,
               color: Colors.white30,
               size: 32,
             ),
@@ -535,7 +535,7 @@ class _FullErrorState extends StatelessWidget {
               mainAxisAlignment: MainAxisAlignment.center,
               children: <Widget>[
                 Icon(
-                  Icons.cloud_off_rounded,
+                  CupertinoIcons.cloud,
                   color: Colors.white24,
                   size: 24,
                 ),
@@ -623,13 +623,13 @@ class _WeatherContent extends StatelessWidget {
           Row(
             children: <Widget>[
               _DetailChip(
-                icon: Icons.air_rounded,
+                icon: CupertinoIcons.wind,
                 label: 'WIND SPEED',
                 value: '${windValue.round()} $windUnit',
               ),
               const SizedBox(width: 18),
               _DetailChip(
-                icon: Icons.water_drop_outlined,
+                icon: CupertinoIcons.drop_fill,
                 label: 'HUMIDITY',
                 value: '${weather.humidity}%',
               ),
@@ -640,19 +640,19 @@ class _WeatherContent extends StatelessWidget {
             children: <Widget>[
               _ForecastCol(
                 label: 'Later',
-                icon: Icons.wb_cloudy_outlined,
+                icon: CupertinoIcons.cloud_sun_fill,
                 temp: weather.forecastLater,
                 unit: tempUnit,
               ),
               _ForecastCol(
                 label: 'Evening',
-                icon: Icons.location_city_outlined,
+                icon: CupertinoIcons.sunset_fill,
                 temp: weather.forecastEvening,
                 unit: tempUnit,
               ),
               _ForecastCol(
                 label: 'Night',
-                icon: Icons.nightlight_round_outlined,
+                icon: CupertinoIcons.moon_stars_fill,
                 temp: weather.forecastNight,
                 unit: tempUnit,
               ),
@@ -1025,7 +1025,7 @@ _WeatherIconData _resolveWeatherIcon(String condition) {
 
   if (value.contains('clear') || value.contains('sun')) {
     return const _WeatherIconData(
-      icon: Icons.wb_sunny_rounded,
+      icon: CupertinoIcons.sun_max_fill,
       color: Color(0xFFFFD60A),
     );
   }
@@ -1034,7 +1034,7 @@ _WeatherIconData _resolveWeatherIcon(String condition) {
       value.contains('partly') ||
       value.contains('scattered')) {
     return const _WeatherIconData(
-      icon: Icons.wb_cloudy_rounded,
+      icon: CupertinoIcons.cloud_sun_fill,
       color: Color(0xFFFFD60A),
     );
   }
@@ -1043,21 +1043,21 @@ _WeatherIconData _resolveWeatherIcon(String condition) {
       value.contains('drizzle') ||
       value.contains('shower')) {
     return const _WeatherIconData(
-      icon: Icons.water_drop_rounded,
+      icon: CupertinoIcons.cloud_rain_fill,
       color: _kBlue,
     );
   }
 
   if (value.contains('thunder') || value.contains('storm')) {
     return const _WeatherIconData(
-      icon: Icons.thunderstorm_rounded,
+      icon: CupertinoIcons.cloud_bolt_rain_fill,
       color: Color(0xFFFFCC00),
     );
   }
 
   if (value.contains('snow') || value.contains('sleet')) {
     return const _WeatherIconData(
-      icon: Icons.ac_unit_rounded,
+      icon: CupertinoIcons.snow,
       color: Colors.white,
     );
   }
@@ -1068,20 +1068,20 @@ _WeatherIconData _resolveWeatherIcon(String condition) {
       value.contains('smoke') ||
       value.contains('dust')) {
     return const _WeatherIconData(
-      icon: Icons.cloud_rounded,
+      icon: CupertinoIcons.cloud_fog_fill,
       color: Colors.white60,
     );
   }
 
   if (value.contains('overcast') || value.contains('cloud')) {
     return const _WeatherIconData(
-      icon: Icons.cloud_rounded,
+      icon: CupertinoIcons.cloud_fill,
       color: Colors.white70,
     );
   }
 
   return const _WeatherIconData(
-    icon: Icons.cloud_outlined,
+    icon: CupertinoIcons.cloud_fill,
     color: Colors.white70,
   );
 }
