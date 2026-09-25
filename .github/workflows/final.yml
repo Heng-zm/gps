@@ -304,7 +304,7 @@ jobs:
       - name: 🩹 Patch MapboxMaps Concurrency
         run: |
           python3 - <<'PY'
-          import os, re, subprocess
+              import os, re, subprocess
             path = "build/DerivedData/SourcePackages/checkouts/mapbox-maps-ios/Sources/MapboxMaps/Style/StyleManager.swift"
             if os.path.exists(path):
                 print(f"Found {path}, patching concurrency error...")
