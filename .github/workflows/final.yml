@@ -184,6 +184,31 @@ jobs:
           echo "✅ Resolved camera_avfoundation package:"
           grep -A 3 "camera_avfoundation:" pubspec.lock || true
 
+          python3 - <<'PY'
+          import glob, os
+
+          patterns = [os.path.expanduser("~/.pub-cache/**/DefaultCamera.swift")]
+          for pat in patterns:
+              for f in glob.glob(pat, recursive=True):
+                  try:
+                      os.chmod(f, 0o666)
+                  except Exception:
+                      pass
+                  with open(f, "r", encoding="utf-8") as fp:
+                      content = fp.read()
+                  patched = content.replace(
+                      "AVCaptureSession.wasInterruptedNotification",
+                      "AVFoundation.AVCaptureSession.wasInterruptedNotification"
+                  ).replace(
+                      "AVCaptureSession.runtimeErrorNotification",
+                      "AVFoundation.AVCaptureSession.runtimeErrorNotification"
+                  )
+                  if patched != content:
+                      with open(f, "w", encoding="utf-8") as fp:
+                          fp.write(patched)
+                      print(f"✅ Patched pub-cache: {f}")
+          PY
+
       - name: 🧹 Clean iOS Pods
         run: |
           rm -rf ios/Pods
@@ -204,11 +229,38 @@ jobs:
 
       - name: 🩹 Patch camera_avfoundation Xcode 15.4 compatibility
         run: |
-          find ios -name "DefaultCamera.swift" -exec sed -i '' \
-            's/AVCaptureSession\.wasInterruptedNotification/AVFoundation.AVCaptureSession.wasInterruptedNotification/g' {} + || true
-          find ios -name "DefaultCamera.swift" -exec sed -i '' \
-            's/AVCaptureSession\.runtimeErrorNotification/AVFoundation.AVCaptureSession.runtimeErrorNotification/g' {} + || true
-          echo "✅ Checked and patched DefaultCamera.swift for Xcode 15.4 compatibility"
+          python3 - <<'PY'
+          import glob, os
+
+          patterns = [
+              os.path.expanduser("~/.pub-cache/**/DefaultCamera.swift"),
+              "ios/**/DefaultCamera.swift",
+          ]
+          found = 0
+          for pat in patterns:
+              for f in glob.glob(pat, recursive=True):
+                  found += 1
+                  try:
+                      os.chmod(f, 0o666)
+                  except Exception:
+                      pass
+                  with open(f, "r", encoding="utf-8") as fp:
+                      content = fp.read()
+                  patched = content.replace(
+                      "AVCaptureSession.wasInterruptedNotification",
+                      "AVFoundation.AVCaptureSession.wasInterruptedNotification"
+                  ).replace(
+                      "AVCaptureSession.runtimeErrorNotification",
+                      "AVFoundation.AVCaptureSession.runtimeErrorNotification"
+                  )
+                  if patched != content:
+                      with open(f, "w", encoding="utf-8") as fp:
+                          fp.write(patched)
+                      print(f"✅ Patched: {f}")
+                  else:
+                      print(f"ℹ️ Already patched: {f}")
+          print(f"Total DefaultCamera.swift files examined: {found}")
+          PY
 
       - name: 🔓 Patch Xcode signing
         run: |
