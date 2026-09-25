@@ -42,10 +42,7 @@ public struct TrackProActivityAttributes: ActivityAttributes {
 
 @main
 @objc class AppDelegate: FlutterAppDelegate {
-#if canImport(ActivityKit)
-  @available(iOS 16.1, *)
   private var currentActivityId: String?
-#endif
 
   override func application(
     _ application: UIApplication,
@@ -75,19 +72,19 @@ public struct TrackProActivityAttributes: ActivityAttributes {
 
       switch call.method {
       case "isSupported":
+        #if canImport(ActivityKit)
         if #available(iOS 16.1, *) {
-          #if canImport(ActivityKit)
           result(ActivityAuthorizationInfo().areActivitiesEnabled)
-          #else
-          result(false)
-          #endif
         } else {
           result(false)
         }
+        #else
+        result(false)
+        #endif
 
       case "startActivity":
+        #if canImport(ActivityKit)
         if #available(iOS 16.1, *) {
-          #if canImport(ActivityKit)
           guard ActivityAuthorizationInfo().areActivitiesEnabled else {
             result(FlutterError(code: "DISABLED", message: "Live Activities are disabled", details: nil))
             return
@@ -115,30 +112,41 @@ public struct TrackProActivityAttributes: ActivityAttributes {
           do {
             for activity in Activity<TrackProActivityAttributes>.activities {
               Task {
-                await activity.end(using: nil, dismissalPolicy: .immediate)
+                await activity.end(dismissalPolicy: .immediate)
               }
             }
 
-            let activity = try Activity<TrackProActivityAttributes>.request(
-              attributes: attributes,
-              contentState: initialContentState,
-              pushType: nil
-            )
-            self.currentActivityId = activity.id
-            result(activity.id)
+            if #available(iOS 16.2, *) {
+              let content = ActivityContent(state: initialContentState, staleDate: nil)
+              let activity = try Activity<TrackProActivityAttributes>.request(
+                attributes: attributes,
+                content: content,
+                pushType: nil
+              )
+              self.currentActivityId = activity.id
+              result(activity.id)
+            } else {
+              let activity = try Activity<TrackProActivityAttributes>.request(
+                attributes: attributes,
+                contentState: initialContentState,
+                pushType: nil
+              )
+              self.currentActivityId = activity.id
+              result(activity.id)
+            }
           } catch {
             result(FlutterError(code: "START_FAILED", message: error.localizedDescription, details: nil))
           }
-          #else
-          result(FlutterError(code: "UNSUPPORTED", message: "ActivityKit unavailable", details: nil))
-          #endif
         } else {
           result(FlutterError(code: "UNSUPPORTED", message: "Requires iOS 16.1+", details: nil))
         }
+        #else
+        result(FlutterError(code: "UNSUPPORTED", message: "ActivityKit unavailable", details: nil))
+        #endif
 
       case "updateActivity":
+        #if canImport(ActivityKit)
         if #available(iOS 16.1, *) {
-          #if canImport(ActivityKit)
           let args = call.arguments as? [String: Any] ?? [:]
           let speedMph = args["speedMph"] as? Double ?? 0.0
           let distanceMiles = args["distanceMiles"] as? Double ?? 0.0
@@ -157,34 +165,41 @@ public struct TrackProActivityAttributes: ActivityAttributes {
           )
 
           Task {
-            for activity in Activity<TrackProActivityAttributes>.activities {
-              await activity.update(using: updatedState)
+            if #available(iOS 16.2, *) {
+              let content = ActivityContent(state: updatedState, staleDate: nil)
+              for activity in Activity<TrackProActivityAttributes>.activities {
+                await activity.update(content)
+              }
+            } else {
+              for activity in Activity<TrackProActivityAttributes>.activities {
+                await activity.update(using: updatedState)
+              }
             }
           }
           result(true)
-          #else
-          result(false)
-          #endif
         } else {
           result(false)
         }
+        #else
+        result(false)
+        #endif
 
       case "stopActivity":
+        #if canImport(ActivityKit)
         if #available(iOS 16.1, *) {
-          #if canImport(ActivityKit)
           Task {
             for activity in Activity<TrackProActivityAttributes>.activities {
-              await activity.end(using: nil, dismissalPolicy: .immediate)
+              await activity.end(dismissalPolicy: .immediate)
             }
             self.currentActivityId = nil
           }
           result(true)
-          #else
-          result(false)
-          #endif
         } else {
           result(false)
         }
+        #else
+        result(false)
+        #endif
 
       default:
         result(FlutterMethodNotImplemented)
