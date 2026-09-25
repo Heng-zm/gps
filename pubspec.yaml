@@ -42,6 +42,9 @@ dev_dependencies:
   hive_generator: ^2.0.1
   flutter_lints: ^5.0.0
 
+dependency_overrides:
+  camera_avfoundation: 0.9.23+1
+
 flutter:
   uses-material-design: true
 

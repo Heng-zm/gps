@@ -45,4 +45,16 @@ post_install do |installer|
       config.build_settings['CODE_SIGN_IDENTITY'] = ''
     end
   end
+
+  # Fix Xcode 15.4 Swift compilation error in camera_avfoundation:
+  # 'type AVCaptureSession has no member wasInterruptedNotification/runtimeErrorNotification'
+  Dir.glob("Pods/**/DefaultCamera.swift").each do |file|
+    if File.exist?(file)
+      content = File.read(file)
+      patched = content
+        .gsub("AVCaptureSession.wasInterruptedNotification", "AVFoundation.AVCaptureSession.wasInterruptedNotification")
+        .gsub("AVCaptureSession.runtimeErrorNotification", "AVFoundation.AVCaptureSession.runtimeErrorNotification")
+      File.write(file, patched) if patched != content
+    end
+  end
 end

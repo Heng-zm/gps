@@ -136,6 +136,17 @@ jobs:
                   config.build_settings['CODE_SIGN_IDENTITY'] = ''
                 end
               end
+
+              # Fix Xcode 15.4 Swift compilation error in camera_avfoundation
+              Dir.glob("Pods/**/DefaultCamera.swift").each do |file|
+                if File.exist?(file)
+                  content = File.read(file)
+                  patched = content
+                    .gsub("AVCaptureSession.wasInterruptedNotification", "AVFoundation.AVCaptureSession.wasInterruptedNotification")
+                    .gsub("AVCaptureSession.runtimeErrorNotification", "AVFoundation.AVCaptureSession.runtimeErrorNotification")
+                  File.write(file, patched) if patched != content
+                end
+              end
             end
           HOOK
 
@@ -169,6 +180,9 @@ jobs:
           echo "✅ Resolved Mapbox package:"
           grep -A 3 "mapbox_maps_flutter:" pubspec.lock || true
 
+          echo "✅ Resolved camera_avfoundation package:"
+          grep -A 3 "camera_avfoundation:" pubspec.lock || true
+
       - name: 🧹 Clean iOS Pods
         run: |
           rm -rf ios/Pods
@@ -186,6 +200,14 @@ jobs:
         run: |
           cd ios
           pod install --repo-update --verbose || pod install --verbose
+
+      - name: 🩹 Patch camera_avfoundation Xcode 15.4 compatibility
+        run: |
+          find ios -name "DefaultCamera.swift" -exec sed -i '' \
+            's/AVCaptureSession\.wasInterruptedNotification/AVFoundation.AVCaptureSession.wasInterruptedNotification/g' {} + || true
+          find ios -name "DefaultCamera.swift" -exec sed -i '' \
+            's/AVCaptureSession\.runtimeErrorNotification/AVFoundation.AVCaptureSession.runtimeErrorNotification/g' {} + || true
+          echo "✅ Checked and patched DefaultCamera.swift for Xcode 15.4 compatibility"
 
       - name: 🔓 Patch Xcode signing
         run: |
