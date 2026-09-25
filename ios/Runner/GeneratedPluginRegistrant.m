@@ -12,12 +12,6 @@
 @import app_links;
 #endif
 
-#if __has_include(<apple_maps_flutter/AppleMapsFlutterPlugin.h>)
-#import <apple_maps_flutter/AppleMapsFlutterPlugin.h>
-#else
-@import apple_maps_flutter;
-#endif
-
 #if __has_include(<battery_plus/FPPBatteryPlusPlugin.h>)
 #import <battery_plus/FPPBatteryPlusPlugin.h>
 #else
@@ -94,7 +88,6 @@
 
 + (void)registerWithRegistry:(NSObject<FlutterPluginRegistry>*)registry {
   [AppLinksIosPlugin registerWithRegistrar:[registry registrarForPlugin:@"AppLinksIosPlugin"]];
-  [AppleMapsFlutterPlugin registerWithRegistrar:[registry registrarForPlugin:@"AppleMapsFlutterPlugin"]];
   [FPPBatteryPlusPlugin registerWithRegistrar:[registry registrarForPlugin:@"FPPBatteryPlusPlugin"]];
   [CameraPlugin registerWithRegistrar:[registry registrarForPlugin:@"CameraPlugin"]];
   [FlutterCompassPlugin registerWithRegistrar:[registry registrarForPlugin:@"FlutterCompassPlugin"]];
