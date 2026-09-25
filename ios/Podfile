@@ -53,8 +53,8 @@ post_install do |installer|
     if File.exist?(file)
       content = File.read(file)
       patched = content
-        .gsub(/(?:AVFoundation\.)*AVCaptureSession\.wasInterruptedNotification/, "AVFoundation.AVCaptureSession.wasInterruptedNotification")
-        .gsub(/(?:AVFoundation\.)*AVCaptureSession\.runtimeErrorNotification/, "AVFoundation.AVCaptureSession.runtimeErrorNotification")
+        .gsub(/(?:AVFoundation\.)*AVCaptureSession\.wasInterruptedNotification/, "NSNotification.Name.AVCaptureSessionWasInterrupted")
+        .gsub(/(?:AVFoundation\.)*AVCaptureSession\.runtimeErrorNotification/, "NSNotification.Name.AVCaptureSessionRuntimeError")
       File.write(file, patched) if patched != content
     end
   end

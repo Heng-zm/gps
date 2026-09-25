@@ -143,8 +143,8 @@ jobs:
                 if File.exist?(file)
                   content = File.read(file)
                   patched = content
-                    .gsub(/(?:AVFoundation\.)*AVCaptureSession\.wasInterruptedNotification/, "AVFoundation.AVCaptureSession.wasInterruptedNotification")
-                    .gsub(/(?:AVFoundation\.)*AVCaptureSession\.runtimeErrorNotification/, "AVFoundation.AVCaptureSession.runtimeErrorNotification")
+                    .gsub(/(?:AVFoundation\.)*AVCaptureSession\.wasInterruptedNotification/, "NSNotification.Name.AVCaptureSessionWasInterrupted")
+                    .gsub(/(?:AVFoundation\.)*AVCaptureSession\.runtimeErrorNotification/, "NSNotification.Name.AVCaptureSessionRuntimeError")
                   File.write(file, patched) if patched != content
                 end
               end
@@ -198,12 +198,12 @@ jobs:
                       content = fp.read()
                   patched = re.sub(
                       r'(?:\bAVFoundation\.)*AVCaptureSession\.wasInterruptedNotification',
-                      'AVFoundation.AVCaptureSession.wasInterruptedNotification',
+                      'NSNotification.Name.AVCaptureSessionWasInterrupted',
                       content
                   )
                   patched = re.sub(
                       r'(?:\bAVFoundation\.)*AVCaptureSession\.runtimeErrorNotification',
-                      'AVFoundation.AVCaptureSession.runtimeErrorNotification',
+                      'NSNotification.Name.AVCaptureSessionRuntimeError',
                       patched
                   )
                   if patched != content:
@@ -251,12 +251,12 @@ jobs:
                       content = fp.read()
                   patched = re.sub(
                       r'(?:\bAVFoundation\.)*AVCaptureSession\.wasInterruptedNotification',
-                      'AVFoundation.AVCaptureSession.wasInterruptedNotification',
+                      'NSNotification.Name.AVCaptureSessionWasInterrupted',
                       content
                   )
                   patched = re.sub(
                       r'(?:\bAVFoundation\.)*AVCaptureSession\.runtimeErrorNotification',
-                      'AVFoundation.AVCaptureSession.runtimeErrorNotification',
+                      'NSNotification.Name.AVCaptureSessionRuntimeError',
                       patched
                   )
                   if patched != content:
