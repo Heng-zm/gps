@@ -44,6 +44,8 @@ class LiveActivityService {
     Duration elapsedTime = Duration.zero,
     double maxSpeedMph = 0.0,
     double avgSpeedMph = 0.0,
+    String speedUnit = 'MPH',
+    String distanceUnit = 'mi',
   }) async {
     if (kIsWeb || defaultTargetPlatform != TargetPlatform.iOS) {
       _isActive = true;
@@ -60,6 +62,8 @@ class LiveActivityService {
         'formattedTime': formattedTime,
         'maxSpeedMph': maxSpeedMph,
         'avgSpeedMph': avgSpeedMph,
+        'speedUnit': speedUnit,
+        'distanceUnit': distanceUnit,
       });
 
       _isActive = true;
@@ -82,6 +86,8 @@ class LiveActivityService {
     required Duration elapsedTime,
     double maxSpeedMph = 0.0,
     double avgSpeedMph = 0.0,
+    String speedUnit = 'MPH',
+    String distanceUnit = 'mi',
     Duration minThrottleDuration = const Duration(milliseconds: 900),
     bool force = false,
   }) async {
@@ -105,6 +111,8 @@ class LiveActivityService {
         'formattedTime': formattedTime,
         'maxSpeedMph': maxSpeedMph,
         'avgSpeedMph': avgSpeedMph,
+        'speedUnit': speedUnit,
+        'distanceUnit': distanceUnit,
       });
     } catch (e) {
       debugPrint('[LiveActivityService] updateActivity error: $e');

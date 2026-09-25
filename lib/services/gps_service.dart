@@ -207,9 +207,12 @@ class GpsService {
       _tickSw.start();
       _cachedLocationSettings = null; // Pick up the latest GPS accuracy setting.
 
+      final bool useKmh = SettingsService.instance.useKmh;
       unawaited(
         LiveActivityService.instance.startActivity(
           tripName: 'TrackPro Journey',
+          speedUnit: useKmh ? 'KM/H' : 'MPH',
+          distanceUnit: useKmh ? 'km' : 'mi',
         ),
       );
 
@@ -870,13 +873,24 @@ class GpsService {
     try {
       ctrl.add(point);
 
+      final bool useKmh = SettingsService.instance.useKmh;
+      final double displaySpeed = useKmh ? point.speedKmh : point.speedMph;
+      final double displayDistance =
+          useKmh ? currentDistanceMiles * 1.609344 : currentDistanceMiles;
+      final double displayMaxSpeed =
+          useKmh ? _maxSpeedMph * 1.609344 : _maxSpeedMph;
+      final double displayAvgSpeed =
+          useKmh ? currentAvgSpeedMph * 1.609344 : currentAvgSpeedMph;
+
       unawaited(
         LiveActivityService.instance.updateActivity(
-          speedMph: point.speedMph,
-          distanceMiles: currentDistanceMiles,
+          speedMph: displaySpeed,
+          distanceMiles: displayDistance,
           elapsedTime: _tripSw.elapsed,
-          maxSpeedMph: _maxSpeedMph,
-          avgSpeedMph: currentAvgSpeedMph,
+          maxSpeedMph: displayMaxSpeed,
+          avgSpeedMph: displayAvgSpeed,
+          speedUnit: useKmh ? 'KM/H' : 'MPH',
+          distanceUnit: useKmh ? 'km' : 'mi',
         ),
       );
     } catch (e, st) {

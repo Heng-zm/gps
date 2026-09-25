@@ -603,7 +603,6 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
 
   bool _followMode = true;
   bool _showSpeedGradient = false;
-  bool _panelExpanded = true;
 
   // PREMIUM FEATURE STATE
   _PanelDockMode _panelDockMode = _PanelDockMode.expanded;
@@ -1070,7 +1069,6 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
     HapticFeedback.selectionClick();
     setState(() {
       _panelDockMode = mode;
-      _panelExpanded = mode != _PanelDockMode.mini;
     });
 
     if (mode == _PanelDockMode.expanded) {
@@ -1981,7 +1979,238 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
     );
   }
 
+  // ─────────────────────────────────────────────────────────────────────────────
+  // PREMIUM OVERLAYS — Floating HUD + Quick Action Wheel
+  // ─────────────────────────────────────────────────────────────────────────────
 
+  Widget _buildFloatingSpeedHud() {
+    return ValueListenableBuilder<double>(
+      valueListenable: _hudSpeed,
+      builder: (_, double speed, __) {
+        final Color color = _speedColor(speed);
+        final String speedLabel = speed.toStringAsFixed(0);
+
+        return Positioned(
+          left: _floatingHudOffset.dx,
+          top: _floatingHudOffset.dy,
+          child: GestureDetector(
+            onPanUpdate: _updateFloatingHudOffset,
+            onPanEnd: (_) => _snapFloatingHudToEdge(),
+            onDoubleTap: _toggleFloatingHudMini,
+            onLongPress: _toggleFloatingHudLock,
+            child: RepaintBoundary(
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 220),
+                curve: Curves.easeOutCubic,
+                width: _floatingHudMini ? 78 : 120,
+                padding: EdgeInsets.symmetric(
+                  horizontal: _floatingHudMini ? 10 : 14,
+                  vertical: _floatingHudMini ? 8 : 12,
+                ),
+                decoration: BoxDecoration(
+                  color: Colors.black.withValues(alpha: 0.68),
+                  borderRadius: BorderRadius.circular(_floatingHudMini ? 22 : 28),
+                  border: Border.all(
+                    color: (_floatingHudLocked ? _kRed : color)
+                        .withValues(alpha: 0.34),
+                  ),
+                  boxShadow: <BoxShadow>[
+                    BoxShadow(
+                      color: color.withValues(alpha: 0.22),
+                      blurRadius: 22,
+                      offset: const Offset(0, 10),
+                    ),
+                  ],
+                ),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(_floatingHudMini ? 22 : 28),
+                  child: BackdropFilter(
+                    filter: ui.ImageFilter.blur(sigmaX: 18, sigmaY: 18),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: <Widget>[
+                        Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: <Widget>[
+                            Icon(
+                              _floatingHudLocked
+                                  ? CupertinoIcons.lock_fill
+                                  : CupertinoIcons.speedometer,
+                              color: color,
+                              size: _floatingHudMini ? 12 : 15,
+                            ),
+                            if (!_floatingHudMini) ...<Widget>[
+                              const SizedBox(width: 5),
+                              Text(
+                                widget.isLive ? 'LIVE' : _replayCameraMode.label,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  color: Colors.white.withValues(alpha: 0.52),
+                                  fontSize: 9,
+                                  fontWeight: FontWeight.w900,
+                                  letterSpacing: 1.0,
+                                ),
+                              ),
+                            ],
+                          ],
+                        ),
+                        SizedBox(height: _floatingHudMini ? 2 : 5),
+                        FittedBox(
+                          fit: BoxFit.scaleDown,
+                          child: Text(
+                            speedLabel,
+                            maxLines: 1,
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: _floatingHudMini ? 28 : 42,
+                              height: 0.92,
+                              letterSpacing: -2.0,
+                              fontWeight: FontWeight.w900,
+                            ),
+                          ),
+                        ),
+                        if (!_floatingHudMini) ...<Widget>[
+                          const SizedBox(height: 2),
+                          Text(
+                            'KM/H',
+                            style: TextStyle(
+                              color: color,
+                              fontSize: 10,
+                              fontWeight: FontWeight.w900,
+                              letterSpacing: 1.2,
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildQuickActionWheel() {
+    return ValueListenableBuilder<double>(
+      valueListenable: _bottomPanelHeight,
+      builder: (_, double panelHeight, __) {
+        final bool open = _quickActionMenuState == _QuickActionMenuState.open;
+        final EdgeInsets safe = MediaQuery.paddingOf(context);
+        final Size screen = MediaQuery.sizeOf(context);
+        final double panelAwareBottom = panelHeight + 20.0;
+        final double minBottom = safe.bottom + (_panelDockMode.isMini ? 92.0 : 148.0);
+        final double bottom = math.min(
+          math.max(panelAwareBottom, minBottom),
+          math.max(96.0, screen.height * 0.58),
+        );
+
+        return Positioned(
+          right: 16,
+          bottom: bottom,
+          child: RepaintBoundary(
+            child: SizedBox(
+              width: 190,
+              height: 190,
+              child: Stack(
+                alignment: Alignment.bottomRight,
+                clipBehavior: Clip.none,
+                children: <Widget>[
+                  _QuickActionBubble(
+                    open: open,
+                    offset: const Offset(-128, -12),
+                    icon: CupertinoIcons.arrow_down_right_arrow_up_left,
+                    label: 'Fit',
+                    onTap: () {
+                      _closeQuickActionMenu();
+                      _fitRoute();
+                    },
+                  ),
+                  _QuickActionBubble(
+                    open: open,
+                    offset: const Offset(-112, -72),
+                    icon: _followMode
+                        ? CupertinoIcons.location_fill
+                        : CupertinoIcons.location,
+                    label: 'Follow',
+                    active: _followMode,
+                    onTap: () {
+                      _closeQuickActionMenu();
+                      _toggleFollow();
+                    },
+                  ),
+                  _QuickActionBubble(
+                    open: open,
+                    offset: const Offset(-62, -118),
+                    icon: CupertinoIcons.map_fill,
+                    label: 'Style',
+                    onTap: () {
+                      _closeQuickActionMenu();
+                      setState(() => _stylePickerOpen = !_stylePickerOpen);
+                    },
+                  ),
+                  _QuickActionBubble(
+                    open: open,
+                    offset: const Offset(0, -132),
+                    icon: CupertinoIcons.location_north_line_fill,
+                    label: 'Route',
+                    active: _plannedRoute != null,
+                    onTap: () {
+                      _closeQuickActionMenu();
+                      _openMapboxControls();
+                    },
+                  ),
+                  if (!widget.isLive)
+                    _QuickActionBubble(
+                      open: open,
+                      offset: const Offset(-12, -68),
+                      icon: _replayCameraMode.icon,
+                      label: _replayCameraMode.label,
+                      active: _replayCameraMode != _ReplayCameraMode.follow,
+                      onTap: _cycleReplayCameraMode,
+                    ),
+                  _PressableButton(
+                    onTap: _toggleQuickActionMenu,
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 220),
+                      width: 58,
+                      height: 58,
+                      decoration: BoxDecoration(
+                        gradient: open
+                            ? const LinearGradient(colors: <Color>[_kRed, _kBlue])
+                            : _kBlueGlassGradient,
+                        shape: BoxShape.circle,
+                        boxShadow: <BoxShadow>[
+                          BoxShadow(
+                            color: (open ? _kRed : _kBlue).withValues(alpha: 0.34),
+                            blurRadius: 24,
+                            offset: const Offset(0, 10),
+                          ),
+                        ],
+                        border: Border.all(
+                          color: Colors.white.withValues(alpha: 0.18),
+                        ),
+                      ),
+                      child: Icon(
+                        open
+                            ? CupertinoIcons.xmark
+                            : CupertinoIcons.slider_horizontal_3,
+                        color: Colors.white,
+                        size: 24,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
 }
 
 class LatLngTween extends Tween<LatLng> {
@@ -2820,243 +3049,6 @@ class _EmptyMapStateState extends State<_EmptyMapState>
       ],
     );
   }
-}
-
-
-// ─────────────────────────────────────────────────────────────────────────────
-// PREMIUM OVERLAYS — Floating HUD + Quick Action Wheel
-// ─────────────────────────────────────────────────────────────────────────────
-
-extension _MapScreenPremiumOverlays on _MapScreenState {
-  Widget _buildFloatingSpeedHud() {
-    return ValueListenableBuilder<double>(
-      valueListenable: _hudSpeed,
-      builder: (_, double speed, __) {
-        final Color color = _speedColor(speed);
-        final String speedLabel = speed.toStringAsFixed(0);
-
-        return Positioned(
-          left: _floatingHudOffset.dx,
-          top: _floatingHudOffset.dy,
-          child: GestureDetector(
-            onPanUpdate: _updateFloatingHudOffset,
-            onPanEnd: (_) => _snapFloatingHudToEdge(),
-            onDoubleTap: _toggleFloatingHudMini,
-            onLongPress: _toggleFloatingHudLock,
-            child: RepaintBoundary(
-              child: AnimatedContainer(
-                duration: const Duration(milliseconds: 220),
-                curve: Curves.easeOutCubic,
-                width: _floatingHudMini ? 78 : 120,
-                padding: EdgeInsets.symmetric(
-                  horizontal: _floatingHudMini ? 10 : 14,
-                  vertical: _floatingHudMini ? 8 : 12,
-                ),
-                decoration: BoxDecoration(
-                  color: Colors.black.withValues(alpha: 0.68),
-                  borderRadius: BorderRadius.circular(_floatingHudMini ? 22 : 28),
-                  border: Border.all(
-                    color: (_floatingHudLocked ? _kRed : color)
-                        .withValues(alpha: 0.34),
-                  ),
-                  boxShadow: <BoxShadow>[
-                    BoxShadow(
-                      color: color.withValues(alpha: 0.22),
-                      blurRadius: 22,
-                      offset: const Offset(0, 10),
-                    ),
-                  ],
-                ),
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(_floatingHudMini ? 22 : 28),
-                  child: BackdropFilter(
-                    filter: ui.ImageFilter.blur(sigmaX: 18, sigmaY: 18),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: <Widget>[
-                        Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: <Widget>[
-                            Icon(
-                              _floatingHudLocked
-                                  ? CupertinoIcons.lock_fill
-                                  : CupertinoIcons.speedometer,
-                              color: color,
-                              size: _floatingHudMini ? 12 : 15,
-                            ),
-                            if (!_floatingHudMini) ...<Widget>[
-                              const SizedBox(width: 5),
-                              Text(
-                                widget.isLive ? 'LIVE' : _replayCameraMode.label,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: TextStyle(
-                                  color: Colors.white.withValues(alpha: 0.52),
-                                  fontSize: 9,
-                                  fontWeight: FontWeight.w900,
-                                  letterSpacing: 1.0,
-                                ),
-                              ),
-                            ],
-                          ],
-                        ),
-                        SizedBox(height: _floatingHudMini ? 2 : 5),
-                        FittedBox(
-                          fit: BoxFit.scaleDown,
-                          child: Text(
-                            speedLabel,
-                            maxLines: 1,
-                            style: TextStyle(
-                              color: Colors.white,
-                              fontSize: _floatingHudMini ? 28 : 42,
-                              height: 0.92,
-                              letterSpacing: -2.0,
-                              fontWeight: FontWeight.w900,
-                            ),
-                          ),
-                        ),
-                        if (!_floatingHudMini) ...<Widget>[
-                          const SizedBox(height: 2),
-                          Text(
-                            'KM/H',
-                            style: TextStyle(
-                              color: color,
-                              fontSize: 10,
-                              fontWeight: FontWeight.w900,
-                              letterSpacing: 1.2,
-                            ),
-                          ),
-                        ],
-                      ],
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          ),
-        );
-      },
-    );
-  }
-
-  Widget _buildQuickActionWheel() {
-    return ValueListenableBuilder<double>(
-      valueListenable: _bottomPanelHeight,
-      builder: (_, double panelHeight, __) {
-        final bool open = _quickActionMenuState == _QuickActionMenuState.open;
-        final EdgeInsets safe = MediaQuery.paddingOf(context);
-        final Size screen = MediaQuery.sizeOf(context);
-        final double panelAwareBottom = panelHeight + 20.0;
-        final double minBottom = safe.bottom + (_panelDockMode.isMini ? 92.0 : 148.0);
-        final double bottom = math.min(
-          math.max(panelAwareBottom, minBottom),
-          math.max(96.0, screen.height * 0.58),
-        );
-
-        return Positioned(
-          right: 16,
-          bottom: bottom,
-          child: RepaintBoundary(
-            child: SizedBox(
-              width: 190,
-              height: 190,
-              child: Stack(
-                alignment: Alignment.bottomRight,
-                clipBehavior: Clip.none,
-                children: <Widget>[
-                  _QuickActionBubble(
-                    open: open,
-                    offset: const Offset(-128, -12),
-                    icon: CupertinoIcons.arrow_down_right_arrow_up_left,
-                    label: 'Fit',
-                    onTap: () {
-                      _closeQuickActionMenu();
-                      _fitRoute();
-                    },
-                  ),
-                  _QuickActionBubble(
-                    open: open,
-                    offset: const Offset(-112, -72),
-                    icon: _followMode
-                        ? CupertinoIcons.location_fill
-                        : CupertinoIcons.location,
-                    label: 'Follow',
-                    active: _followMode,
-                    onTap: () {
-                      _closeQuickActionMenu();
-                      _toggleFollow();
-                    },
-                  ),
-                  _QuickActionBubble(
-                    open: open,
-                    offset: const Offset(-62, -118),
-                    icon: CupertinoIcons.map_fill,
-                    label: 'Style',
-                    onTap: () {
-                      _closeQuickActionMenu();
-                      setState(() => _stylePickerOpen = !_stylePickerOpen);
-                    },
-                  ),
-                  _QuickActionBubble(
-                    open: open,
-                    offset: const Offset(0, -132),
-                    icon: CupertinoIcons.location_north_line_fill,
-                    label: 'Route',
-                    active: _plannedRoute != null,
-                    onTap: () {
-                      _closeQuickActionMenu();
-                      _openMapboxControls();
-                    },
-                  ),
-                  if (!widget.isLive)
-                    _QuickActionBubble(
-                      open: open,
-                      offset: const Offset(-12, -68),
-                      icon: _replayCameraMode.icon,
-                      label: _replayCameraMode.label,
-                      active: _replayCameraMode != _ReplayCameraMode.follow,
-                      onTap: _cycleReplayCameraMode,
-                    ),
-                  _PressableButton(
-                    onTap: _toggleQuickActionMenu,
-                    child: AnimatedContainer(
-                      duration: const Duration(milliseconds: 220),
-                      width: 58,
-                      height: 58,
-                      decoration: BoxDecoration(
-                        gradient: open
-                            ? const LinearGradient(colors: <Color>[_kRed, _kBlue])
-                            : _kBlueGlassGradient,
-                        shape: BoxShape.circle,
-                        boxShadow: <BoxShadow>[
-                          BoxShadow(
-                            color: (open ? _kRed : _kBlue).withValues(alpha: 0.34),
-                            blurRadius: 24,
-                            offset: const Offset(0, 10),
-                          ),
-                        ],
-                        border: Border.all(
-                          color: Colors.white.withValues(alpha: 0.18),
-                        ),
-                      ),
-                      child: Icon(
-                        open
-                            ? CupertinoIcons.xmark
-                            : CupertinoIcons.slider_horizontal_3,
-                        color: Colors.white,
-                        size: 24,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        );
-      },
-    );
-  }
-
 }
 
 class _QuickActionBubble extends StatelessWidget {

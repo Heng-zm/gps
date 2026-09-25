@@ -4,6 +4,46 @@ import WidgetKit
 import SwiftUI
 
 @available(iOS 16.1, *)
+public struct TrackProActivityAttributes: ActivityAttributes {
+    public struct ContentState: Codable, Hashable {
+        public var speedMph: Double
+        public var distanceMiles: Double
+        public var elapsedSeconds: Int
+        public var formattedTime: String
+        public var maxSpeedMph: Double
+        public var avgSpeedMph: Double
+        public var speedUnit: String
+        public var distanceUnit: String
+
+        public init(
+            speedMph: Double,
+            distanceMiles: Double,
+            elapsedSeconds: Int,
+            formattedTime: String,
+            maxSpeedMph: Double,
+            avgSpeedMph: Double,
+            speedUnit: String = "MPH",
+            distanceUnit: String = "mi"
+        ) {
+            self.speedMph = speedMph
+            self.distanceMiles = distanceMiles
+            self.elapsedSeconds = elapsedSeconds
+            self.formattedTime = formattedTime
+            self.maxSpeedMph = maxSpeedMph
+            self.avgSpeedMph = avgSpeedMph
+            self.speedUnit = speedUnit
+            self.distanceUnit = distanceUnit
+        }
+    }
+
+    public var tripName: String
+
+    public init(tripName: String) {
+        self.tripName = tripName
+    }
+}
+
+@available(iOS 16.1, *)
 public struct TrackProLiveActivityWidget: Widget {
     public init() {}
 
@@ -19,7 +59,7 @@ public struct TrackProLiveActivityWidget: Widget {
                         Text(String(format: "%.1f", context.state.speedMph))
                             .font(.system(size: 34, weight: .black, design: .rounded))
                             .foregroundColor(.white)
-                        Text("MPH")
+                        Text(context.state.speedUnit)
                             .font(.system(size: 11, weight: .bold))
                             .foregroundColor(Color.gray)
                     }
@@ -33,7 +73,7 @@ public struct TrackProLiveActivityWidget: Widget {
                             Text("DISTANCE")
                                 .font(.system(size: 9, weight: .bold))
                                 .foregroundColor(.gray)
-                            Text(String(format: "%.2f mi", context.state.distanceMiles))
+                            Text(String(format: "%.2f %@", context.state.distanceMiles, context.state.distanceUnit))
                                 .font(.system(size: 13, weight: .bold, design: .rounded))
                                 .foregroundColor(.white)
                         }
@@ -71,7 +111,7 @@ public struct TrackProLiveActivityWidget: Widget {
                             Text(String(format: "%.1f", context.state.speedMph))
                                 .font(.system(size: 26, weight: .heavy, design: .rounded))
                                 .foregroundColor(.white)
-                            Text("mph")
+                            Text(context.state.speedUnit.lowercased())
                                 .font(.system(size: 10, weight: .semibold))
                                 .foregroundColor(.gray)
                         }
@@ -84,7 +124,7 @@ public struct TrackProLiveActivityWidget: Widget {
                         Text("DISTANCE")
                             .font(.system(size: 9, weight: .bold))
                             .foregroundColor(.gray)
-                        Text(String(format: "%.2f mi", context.state.distanceMiles))
+                        Text(String(format: "%.2f %@", context.state.distanceMiles, context.state.distanceUnit))
                             .font(.system(size: 16, weight: .bold, design: .rounded))
                             .foregroundColor(.white)
                     }
@@ -118,7 +158,7 @@ public struct TrackProLiveActivityWidget: Widget {
                         .foregroundColor(.white)
                 }
             } compactTrailing: {
-                Text(String(format: "%.1f mi", context.state.distanceMiles))
+                Text(String(format: "%.1f %@", context.state.distanceMiles, context.state.distanceUnit))
                     .font(.system(size: 11, weight: .semibold, design: .rounded))
                     .foregroundColor(.white)
             } minimal: {

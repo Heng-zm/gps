@@ -33,7 +33,9 @@ class WeatherData {
     if (_c.contains('snow') ||
         _c.contains('ice') ||
         _c.contains('blizzard') ||
-        _c.contains('sleet')) return '❄️';
+        _c.contains('sleet')) {
+      return '❄️';
+    }
     if (_c.contains('freezing')) return '🌨️';
     if (_c.contains('shower')) return '🌦️';
     if (_c.contains('rain')) return '🌧️';
@@ -137,7 +139,9 @@ class WeatherData {
     if (_c.contains('snow') ||
         _c.contains('freezing') ||
         _c.contains('sleet') ||
-        _c.contains('heavy')) return 1;
+        _c.contains('heavy')) {
+      return 1;
+    }
     if (hasPrecipRisk) return 1;
     return 0;
   }

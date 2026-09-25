@@ -48,7 +48,6 @@ jobs:
       - name: 🛠️ Setup Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.27.4'
           channel: 'stable'
           cache: true
 
@@ -232,7 +231,7 @@ jobs:
             MARKETING_VERSION=1.2.${{ github.run_number }} \
             build | tee xcodebuild.log || {
               echo "❌ xcodebuild failed. Diagnostics summary:"
-              grep -E "error:|fatal error:" xcodebuild.log || true
+              grep -i -E "error:|fatal error:" xcodebuild.log || true
               echo "--- Last 200 lines of xcodebuild log ---"
               tail -n 200 xcodebuild.log
               exit 1

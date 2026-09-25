@@ -14,6 +14,8 @@ public struct TrackProActivityAttributes: ActivityAttributes {
     public var formattedTime: String
     public var maxSpeedMph: Double
     public var avgSpeedMph: Double
+    public var speedUnit: String
+    public var distanceUnit: String
 
     public init(
       speedMph: Double,
@@ -21,7 +23,9 @@ public struct TrackProActivityAttributes: ActivityAttributes {
       elapsedSeconds: Int,
       formattedTime: String,
       maxSpeedMph: Double,
-      avgSpeedMph: Double
+      avgSpeedMph: Double,
+      speedUnit: String = "MPH",
+      distanceUnit: String = "mi"
     ) {
       self.speedMph = speedMph
       self.distanceMiles = distanceMiles
@@ -29,6 +33,8 @@ public struct TrackProActivityAttributes: ActivityAttributes {
       self.formattedTime = formattedTime
       self.maxSpeedMph = maxSpeedMph
       self.avgSpeedMph = avgSpeedMph
+      self.speedUnit = speedUnit
+      self.distanceUnit = distanceUnit
     }
   }
 
@@ -98,6 +104,8 @@ public struct TrackProActivityAttributes: ActivityAttributes {
           let formattedTime = args["formattedTime"] as? String ?? "00:00"
           let maxSpeedMph = args["maxSpeedMph"] as? Double ?? 0.0
           let avgSpeedMph = args["avgSpeedMph"] as? Double ?? 0.0
+          let speedUnit = args["speedUnit"] as? String ?? "MPH"
+          let distanceUnit = args["distanceUnit"] as? String ?? "mi"
 
           let attributes = TrackProActivityAttributes(tripName: tripName)
           let initialContentState = TrackProActivityAttributes.ContentState(
@@ -106,13 +114,19 @@ public struct TrackProActivityAttributes: ActivityAttributes {
             elapsedSeconds: elapsedSeconds,
             formattedTime: formattedTime,
             maxSpeedMph: maxSpeedMph,
-            avgSpeedMph: avgSpeedMph
+            avgSpeedMph: avgSpeedMph,
+            speedUnit: speedUnit,
+            distanceUnit: distanceUnit
           )
 
           do {
             for activity in Activity<TrackProActivityAttributes>.activities {
               Task {
-                await activity.end(dismissalPolicy: .immediate)
+                if #available(iOS 16.2, *) {
+                  await activity.end(nil, dismissalPolicy: .immediate)
+                } else {
+                  await activity.end(using: nil, dismissalPolicy: .immediate)
+                }
               }
             }
 
@@ -154,6 +168,8 @@ public struct TrackProActivityAttributes: ActivityAttributes {
           let formattedTime = args["formattedTime"] as? String ?? "00:00"
           let maxSpeedMph = args["maxSpeedMph"] as? Double ?? 0.0
           let avgSpeedMph = args["avgSpeedMph"] as? Double ?? 0.0
+          let speedUnit = args["speedUnit"] as? String ?? "MPH"
+          let distanceUnit = args["distanceUnit"] as? String ?? "mi"
 
           let updatedState = TrackProActivityAttributes.ContentState(
             speedMph: speedMph,
@@ -161,7 +177,9 @@ public struct TrackProActivityAttributes: ActivityAttributes {
             elapsedSeconds: elapsedSeconds,
             formattedTime: formattedTime,
             maxSpeedMph: maxSpeedMph,
-            avgSpeedMph: avgSpeedMph
+            avgSpeedMph: avgSpeedMph,
+            speedUnit: speedUnit,
+            distanceUnit: distanceUnit
           )
 
           Task {
@@ -189,7 +207,11 @@ public struct TrackProActivityAttributes: ActivityAttributes {
         if #available(iOS 16.1, *) {
           Task {
             for activity in Activity<TrackProActivityAttributes>.activities {
-              await activity.end(dismissalPolicy: .immediate)
+              if #available(iOS 16.2, *) {
+                await activity.end(nil, dismissalPolicy: .immediate)
+              } else {
+                await activity.end(using: nil, dismissalPolicy: .immediate)
+              }
             }
             self.currentActivityId = nil
           }

@@ -397,19 +397,6 @@ class AiTfliteObjectDetectionService {
     return isFloat ? f32Buf!.buffer : u8Buf!;
   }
 
-  Object _buildZeroInput(int inputWidth, int inputHeight) {
-    return List<List<List<List<double>>>>.generate(
-      1,
-      (_) => List<List<List<double>>>.generate(
-        inputHeight,
-        (_) => List<List<double>>.generate(
-          inputWidth,
-          (_) => List<double>.filled(3, 0.0),
-        ),
-      ),
-    );
-  }
-
   void dispose() {
     _interpreter?.close();
     _interpreter = null;
