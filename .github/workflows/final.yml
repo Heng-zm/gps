@@ -18,7 +18,7 @@ permissions:
 jobs:
   build-ios:
     name: 🎉 iOS Release Build
-    runs-on: macos-14
+    runs-on: macos-13
 
     steps:
       - name: 📥 Checkout repository
@@ -308,6 +308,7 @@ jobs:
             DEVELOPMENT_TEAM="" \
             PROVISIONING_PROFILE_SPECIFIER="" \
             IPHONEOS_DEPLOYMENT_TARGET=14.0 \
+            SWIFT_STRICT_CONCURRENCY=minimal \
             CURRENT_PROJECT_VERSION=${{ github.run_number }} \
             MARKETING_VERSION=1.2.${{ github.run_number }} \
             build | tee xcodebuild.log || {
