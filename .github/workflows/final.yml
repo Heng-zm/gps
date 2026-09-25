@@ -143,8 +143,8 @@ jobs:
                 if File.exist?(file)
                   content = File.read(file)
                   patched = content
-                    .gsub("AVCaptureSession.wasInterruptedNotification", "AVFoundation.AVCaptureSession.wasInterruptedNotification")
-                    .gsub("AVCaptureSession.runtimeErrorNotification", "AVFoundation.AVCaptureSession.runtimeErrorNotification")
+                    .gsub(/(?:AVFoundation\.)*AVCaptureSession\.wasInterruptedNotification/, "AVFoundation.AVCaptureSession.wasInterruptedNotification")
+                    .gsub(/(?:AVFoundation\.)*AVCaptureSession\.runtimeErrorNotification/, "AVFoundation.AVCaptureSession.runtimeErrorNotification")
                   File.write(file, patched) if patched != content
                 end
               end
@@ -185,7 +185,7 @@ jobs:
           grep -A 3 "camera_avfoundation:" pubspec.lock || true
 
           python3 - <<'PY'
-          import glob, os
+          import glob, os, re
 
           patterns = [os.path.expanduser("~/.pub-cache/**/DefaultCamera.swift")]
           for pat in patterns:
@@ -196,12 +196,15 @@ jobs:
                       pass
                   with open(f, "r", encoding="utf-8") as fp:
                       content = fp.read()
-                  patched = content.replace(
-                      "AVCaptureSession.wasInterruptedNotification",
-                      "AVFoundation.AVCaptureSession.wasInterruptedNotification"
-                  ).replace(
-                      "AVCaptureSession.runtimeErrorNotification",
-                      "AVFoundation.AVCaptureSession.runtimeErrorNotification"
+                  patched = re.sub(
+                      r'(?:\bAVFoundation\.)*AVCaptureSession\.wasInterruptedNotification',
+                      'AVFoundation.AVCaptureSession.wasInterruptedNotification',
+                      content
+                  )
+                  patched = re.sub(
+                      r'(?:\bAVFoundation\.)*AVCaptureSession\.runtimeErrorNotification',
+                      'AVFoundation.AVCaptureSession.runtimeErrorNotification',
+                      patched
                   )
                   if patched != content:
                       with open(f, "w", encoding="utf-8") as fp:
@@ -230,7 +233,7 @@ jobs:
       - name: 🩹 Patch camera_avfoundation Xcode 15.4 compatibility
         run: |
           python3 - <<'PY'
-          import glob, os
+          import glob, os, re
 
           patterns = [
               os.path.expanduser("~/.pub-cache/**/DefaultCamera.swift"),
@@ -246,19 +249,22 @@ jobs:
                       pass
                   with open(f, "r", encoding="utf-8") as fp:
                       content = fp.read()
-                  patched = content.replace(
-                      "AVCaptureSession.wasInterruptedNotification",
-                      "AVFoundation.AVCaptureSession.wasInterruptedNotification"
-                  ).replace(
-                      "AVCaptureSession.runtimeErrorNotification",
-                      "AVFoundation.AVCaptureSession.runtimeErrorNotification"
+                  patched = re.sub(
+                      r'(?:\bAVFoundation\.)*AVCaptureSession\.wasInterruptedNotification',
+                      'AVFoundation.AVCaptureSession.wasInterruptedNotification',
+                      content
+                  )
+                  patched = re.sub(
+                      r'(?:\bAVFoundation\.)*AVCaptureSession\.runtimeErrorNotification',
+                      'AVFoundation.AVCaptureSession.runtimeErrorNotification',
+                      patched
                   )
                   if patched != content:
                       with open(f, "w", encoding="utf-8") as fp:
                           fp.write(patched)
                       print(f"✅ Patched: {f}")
                   else:
-                      print(f"ℹ️ Already patched: {f}")
+                      print(f"ℹ️ Already correctly formatted: {f}")
           print(f"Total DefaultCamera.swift files examined: {found}")
           PY
 
