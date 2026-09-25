@@ -24,6 +24,11 @@ jobs:
       - name: 📥 Checkout repository
         uses: actions/checkout@v4
 
+      - name: Select Xcode 15.2
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: '15.2.0'
+
       - name: 🧷 Pin Mapbox Flutter version
         run: |
           set -e
