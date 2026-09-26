@@ -30,6 +30,14 @@ class AntiTheftService {
   String? _telegramBotToken;
   String? _telegramChatId;
 
+  String? get telegramBotToken => _telegramBotToken;
+  String? get telegramChatId => _telegramChatId;
+  bool get isTelegramConfigured =>
+      _telegramBotToken != null &&
+      _telegramBotToken!.isNotEmpty &&
+      _telegramChatId != null &&
+      _telegramChatId!.isNotEmpty;
+
   StreamSubscription<AccelerometerEvent>? _accelSub;
   double? _baseX;
   double? _baseY;
@@ -57,6 +65,28 @@ class AntiTheftService {
     final SharedPreferences prefs = await SharedPreferences.getInstance();
     await prefs.setString('antitheft_tg_token', _telegramBotToken!);
     await prefs.setString('antitheft_tg_chat_id', _telegramChatId!);
+  }
+
+  Future<bool> sendTestAlert() async {
+    final String? token = _telegramBotToken;
+    final String? chat = _telegramChatId;
+    if (token == null || token.isEmpty || chat == null || chat.isEmpty) {
+      return false;
+    }
+    try {
+      final Uri url = Uri.parse('https://api.telegram.org/bot$token/sendMessage');
+      final http.Response res = await http.post(
+        url,
+        body: <String, String>{
+          'chat_id': chat,
+          'text': '🛡️ *TrackPro AI Sentry Test Alert*\n\nYour Telegram anti-theft webhook is active and verified!',
+          'parse_mode': 'Markdown',
+        },
+      ).timeout(const Duration(seconds: 8));
+      return res.statusCode == 200;
+    } catch (_) {
+      return false;
+    }
   }
 
   void arm(LatLng position, {double? radiusMeters}) {
