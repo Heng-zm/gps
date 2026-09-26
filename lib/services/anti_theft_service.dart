@@ -1,7 +1,10 @@
 import 'dart:async';
+import 'dart:math' as math;
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
+import 'package:sensors_plus/sensors_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 enum SentryState {
@@ -26,6 +29,12 @@ class AntiTheftService {
 
   String? _telegramBotToken;
   String? _telegramChatId;
+
+  StreamSubscription<AccelerometerEvent>? _accelSub;
+  double? _baseX;
+  double? _baseY;
+  double? _baseZ;
+  DateTime? _lastTamperAt;
 
   static const Distance _distance = Distance();
 
@@ -57,14 +66,68 @@ class AntiTheftService {
     anchorPosN.value = position;
     driftMetersN.value = 0.0;
     stateN.value = SentryState.armed;
+    _baseX = null;
+    _baseY = null;
+    _baseZ = null;
+
     _logEvent('🛡️ Sentry Guard ARMED at ${position.latitude.toStringAsFixed(4)}, ${position.longitude.toStringAsFixed(4)} (Radius: ${geofenceRadiusN.value.round()}m)');
+
+    // Start real physical shock & vibration sensor monitoring
+    _startAccelerometerGuard();
   }
 
   void disarm() {
     stateN.value = SentryState.disarmed;
     anchorPosN.value = null;
     driftMetersN.value = 0.0;
+    _stopAccelerometerGuard();
     _logEvent('🔓 Sentry Guard DISARMED');
+  }
+
+  void _startAccelerometerGuard() {
+    _stopAccelerometerGuard();
+    try {
+      _accelSub = accelerometerEventStream().listen((AccelerometerEvent event) {
+        if (stateN.value != SentryState.armed) return;
+
+        // Initialize baseline orientation
+        if (_baseX == null) {
+          _baseX = event.x;
+          _baseY = event.y;
+          _baseZ = event.z;
+          return;
+        }
+
+        // Calculate physical shock magnitude delta from resting position
+        final double dx = event.x - _baseX!;
+        final double dy = event.y - _baseY!;
+        final double dz = event.z - _baseZ!;
+        final double shockDelta = math.sqrt(dx * dx + dy * dy + dz * dz);
+
+        // Filter out tiny ambient micro-jitters (< 0.15 m/s)
+        _baseX = _baseX! * 0.96 + event.x * 0.04;
+        _baseY = _baseY! * 0.96 + event.y * 0.04;
+        _baseZ = _baseZ! * 0.96 + event.z * 0.04;
+
+        // Sudden impact / break-in / vehicle towing spike (> 2.4 m/s²)
+        final DateTime now = DateTime.now();
+        if (shockDelta > 2.4 &&
+            (_lastTamperAt == null || now.difference(_lastTamperAt!) > const Duration(seconds: 5))) {
+          _lastTamperAt = now;
+          reportPhysicalTampering(shockMagnitude: shockDelta);
+        }
+      }, onError: (Object err) => debugPrint('Sentry sensor error: $err'));
+    } catch (e) {
+      debugPrint('Cannot start Sentry accelerometer: $e');
+    }
+  }
+
+  void _stopAccelerometerGuard() {
+    _accelSub?.cancel();
+    _accelSub = null;
+    _baseX = null;
+    _baseY = null;
+    _baseZ = null;
   }
 
   void updateLocation(LatLng currentPos) {
@@ -78,6 +141,9 @@ class AntiTheftService {
 
     if (drift > geofenceRadiusN.value) {
       stateN.value = SentryState.breached;
+      SystemSound.play(SystemSoundType.alert);
+      HapticFeedback.heavyImpact();
+
       final String alertMsg =
           '🚨 SENTRY BREACH: Vehicle moved ${drift.round()}m away from parking spot!';
       _logEvent(alertMsg);
@@ -90,16 +156,19 @@ class AntiTheftService {
     }
   }
 
-  void reportPhysicalTampering() {
+  void reportPhysicalTampering({double shockMagnitude = 2.5}) {
     if (stateN.value != SentryState.armed) return;
     stateN.value = SentryState.tampered;
+    SystemSound.play(SystemSoundType.alert);
+    HapticFeedback.heavyImpact();
+
     final String alertMsg =
-        '⚠️ SHOCK DETECTED: Physical intrusion / tampering detected on vehicle!';
+        '⚠️ SHOCK DETECTED (${shockMagnitude.toStringAsFixed(1)} m/s²): Physical intrusion / tampering detected on vehicle!';
     _logEvent(alertMsg);
     final LatLng? pos = anchorPosN.value;
     _dispatchTelegramAlert(
       title: '⚠️ SENTRY TAMPER / SHOCK ALERT',
-      message: 'Suspicious physical impact or vibration detected on your parked vehicle!\n'
+      message: 'Suspicious physical impact or vibration detected on your parked vehicle! (${shockMagnitude.toStringAsFixed(1)} m/s²)\n'
           '${pos != null ? "📍 Last Known Location: https://maps.google.com/?q=${pos.latitude},${pos.longitude}\n" : ""}'
           '⏰ Time: ${DateTime.now().toLocal().toString().split(".")[0]}',
     );

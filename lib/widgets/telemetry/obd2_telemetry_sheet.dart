@@ -58,82 +58,140 @@ class _Obd2TelemetrySheetState extends State<Obd2TelemetrySheet> {
 
   Widget _buildConnectionBar(Obd2ConnectionState state) {
     final bool isSim = state == Obd2ConnectionState.simulating;
-    return Row(
+    final bool isConn = state == Obd2ConnectionState.connected;
+    final bool isBusy = state == Obd2ConnectionState.connecting;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: <Widget>[
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-          decoration: BoxDecoration(
-            color: isSim
-                ? AppColors.blueSoft.withValues(alpha: 0.15)
-                : state == Obd2ConnectionState.connected
-                    ? AppColors.green.withValues(alpha: 0.15)
-                    : Colors.white.withValues(alpha: 0.08),
-            borderRadius: BorderRadius.circular(10),
-            border: Border.all(
-              color: isSim
-                  ? AppColors.blueSoft.withValues(alpha: 0.3)
-                  : state == Obd2ConnectionState.connected
-                      ? AppColors.green.withValues(alpha: 0.4)
-                      : Colors.white.withValues(alpha: 0.12),
-            ),
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: <Widget>[
-              Icon(
-                CupertinoIcons.circle_filled,
-                size: 8,
+        Row(
+          children: <Widget>[
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+              decoration: BoxDecoration(
                 color: isSim
-                    ? AppColors.blueSoft
-                    : state == Obd2ConnectionState.connected
-                        ? AppColors.green
-                        : Colors.white54,
-              ),
-              const SizedBox(width: 6),
-              Text(
-                isSim
-                    ? 'SIMULATION'
-                    : state == Obd2ConnectionState.connected
-                        ? 'CONNECTED (ELM327)'
-                        : 'DISCONNECTED',
-                style: TextStyle(
+                    ? AppColors.blueSoft.withValues(alpha: 0.15)
+                    : isConn
+                        ? AppColors.green.withValues(alpha: 0.15)
+                        : isBusy
+                            ? Colors.amber.withValues(alpha: 0.15)
+                            : Colors.white.withValues(alpha: 0.08),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(
                   color: isSim
-                      ? AppColors.blueSoft
-                      : state == Obd2ConnectionState.connected
-                          ? AppColors.green
-                          : Colors.white70,
-                  fontSize: 11,
-                  fontWeight: FontWeight.w900,
-                  letterSpacing: 0.5,
+                      ? AppColors.blueSoft.withValues(alpha: 0.3)
+                      : isConn
+                          ? AppColors.green.withValues(alpha: 0.4)
+                          : isBusy
+                              ? Colors.amber.withValues(alpha: 0.4)
+                              : Colors.white.withValues(alpha: 0.12),
                 ),
               ),
-            ],
-          ),
-        ),
-        const Spacer(),
-        CupertinoButton(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-          color: isSim
-              ? Colors.red.withValues(alpha: 0.2)
-              : AppColors.blue.withValues(alpha: 0.25),
-          borderRadius: BorderRadius.circular(12),
-          minSize: 32,
-          onPressed: () {
-            HapticFeedback.lightImpact();
-            if (isSim) {
-              _service.stop();
-            } else {
-              _service.startSimulation();
-            }
-          },
-          child: Text(
-            isSim ? 'Stop Sim' : 'Live Demo Sim',
-            style: TextStyle(
-              color: isSim ? Colors.redAccent : AppColors.blueSoft,
-              fontSize: 12,
-              fontWeight: FontWeight.w800,
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: <Widget>[
+                  Icon(
+                    CupertinoIcons.circle_filled,
+                    size: 8,
+                    color: isSim
+                        ? AppColors.blueSoft
+                        : isConn
+                            ? AppColors.green
+                            : isBusy
+                                ? Colors.amber
+                                : Colors.white54,
+                  ),
+                  const SizedBox(width: 6),
+                  Text(
+                    isSim
+                        ? 'SIMULATION'
+                        : isConn
+                            ? 'CONNECTED (ELM327)'
+                            : isBusy
+                                ? 'CONNECTING...'
+                                : 'DISCONNECTED',
+                    style: TextStyle(
+                      color: isSim
+                          ? AppColors.blueSoft
+                          : isConn
+                              ? AppColors.green
+                              : isBusy
+                                  ? Colors.amber
+                                  : Colors.white70,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w900,
+                      letterSpacing: 0.5,
+                    ),
+                  ),
+                ],
+              ),
             ),
-          ),
+            const Spacer(),
+            // Real Connect / Disconnect button
+            CupertinoButton(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              color: isConn
+                  ? Colors.red.withValues(alpha: 0.2)
+                  : AppColors.green.withValues(alpha: 0.25),
+              borderRadius: BorderRadius.circular(12),
+              minSize: 32,
+              onPressed: () {
+                HapticFeedback.lightImpact();
+                if (isConn) {
+                  _service.stop();
+                } else {
+                  _service.connectReal();
+                }
+              },
+              child: Text(
+                isConn ? 'Disconnect' : 'Connect Real ELM327',
+                style: TextStyle(
+                  color: isConn ? Colors.redAccent : AppColors.green,
+                  fontSize: 11.5,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+            ),
+            const SizedBox(width: 6),
+            // Demo Sim Button
+            CupertinoButton(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+              color: isSim
+                  ? Colors.orange.withValues(alpha: 0.2)
+                  : Colors.white.withValues(alpha: 0.08),
+              borderRadius: BorderRadius.circular(12),
+              minSize: 32,
+              onPressed: () {
+                HapticFeedback.lightImpact();
+                if (isSim) {
+                  _service.stop();
+                } else {
+                  _service.startSimulation();
+                }
+              },
+              child: Text(
+                isSim ? 'Stop Sim' : 'Demo Sim',
+                style: TextStyle(
+                  color: isSim ? Colors.orange : Colors.white70,
+                  fontSize: 11,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 6),
+        ValueListenableBuilder<String>(
+          valueListenable: _service.statusMessageN,
+          builder: (_, String msg, __) {
+            return Text(
+              msg,
+              style: TextStyle(
+                color: Colors.white.withValues(alpha: 0.55),
+                fontSize: 10.5,
+              ),
+            );
+          },
         ),
       ],
     );
