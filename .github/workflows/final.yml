@@ -126,21 +126,27 @@ jobs:
           unified_hook = <<~HOOK
 
             post_install do |installer|
-              installer.pods_project.build_configurations.each do |config|
-                config.build_settings['ENABLE_USER_SCRIPT_SANDBOXING'] = 'NO'
-              end
+              projects = [installer.pods_project]
+              projects += installer.generated_projects if installer.respond_to?(:generated_projects)
 
-              installer.pods_project.targets.each do |target|
-                flutter_additional_ios_build_settings(target)
-
-                target.build_configurations.each do |config|
-                  config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '14.0'
-                  config.build_settings['SWIFT_VERSION'] = '5.0'
-                  config.build_settings['CODE_SIGNING_ALLOWED'] = 'NO'
-                  config.build_settings['CODE_SIGNING_REQUIRED'] = 'NO'
-                  config.build_settings['CODE_SIGN_IDENTITY'] = ''
+              projects.each do |proj|
+                proj.build_configurations.each do |config|
                   config.build_settings['ENABLE_USER_SCRIPT_SANDBOXING'] = 'NO'
                 end
+
+                proj.targets.each do |target|
+                  flutter_additional_ios_build_settings(target) if defined?(flutter_additional_ios_build_settings)
+
+                  target.build_configurations.each do |config|
+                    config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '14.0'
+                    config.build_settings['SWIFT_VERSION'] = '5.0'
+                    config.build_settings['CODE_SIGNING_ALLOWED'] = 'NO'
+                    config.build_settings['CODE_SIGNING_REQUIRED'] = 'NO'
+                    config.build_settings['CODE_SIGN_IDENTITY'] = ''
+                    config.build_settings['ENABLE_USER_SCRIPT_SANDBOXING'] = 'NO'
+                  end
+                end
+                proj.save
               end
 
               # Fix Xcode 15.4 Swift compilation error in camera_avfoundation
@@ -285,18 +291,41 @@ jobs:
           sed -i '' 's/CODE_SIGN_IDENTITY = [^;]*;//g'                             "$PBX"
           sed -i '' '/CODE_SIGNING_ALLOWED = YES;/d'                               "$PBX"
 
-          # Disable user script sandboxing across all targets to allow Mapbox bundle copies
-          sed -i '' 's/ENABLE_USER_SCRIPT_SANDBOXING = YES;/ENABLE_USER_SCRIPT_SANDBOXING = NO;/g' "$PBX"
-          if ! grep -q "ENABLE_USER_SCRIPT_SANDBOXING" "$PBX"; then
-            sed -i '' 's/IPHONEOS_DEPLOYMENT_TARGET = 14.0;/IPHONEOS_DEPLOYMENT_TARGET = 14.0; ENABLE_USER_SCRIPT_SANDBOXING = NO;/g' "$PBX"
-          fi
+          # Recursively ensure ENABLE_USER_SCRIPT_SANDBOXING = NO in EVERY buildSettings block of every project
+          python3 - <<'PY'
+          import glob, re
 
-          # Also disable sandboxing and enforce iOS 14.0 in Pods.xcodeproj (where MapboxMaps target resides)
-          if [ -d "ios/Pods" ]; then
-            find ios/Pods -name "project.pbxproj" -exec sed -i '' 's/ENABLE_USER_SCRIPT_SANDBOXING = YES;/ENABLE_USER_SCRIPT_SANDBOXING = NO;/g' {} + || true
-            find ios/Pods -name "project.pbxproj" -exec sed -i '' 's/ENABLE_USER_SCRIPT_SANDBOXING = [A-Za-z]*;/ENABLE_USER_SCRIPT_SANDBOXING = NO;/g' {} + || true
-            find ios/Pods -name "project.pbxproj" -exec sed -i '' 's/CODE_SIGNING_ALLOWED = YES;/CODE_SIGNING_ALLOWED = NO;/g' {} + || true
-          fi
+          for pbx in glob.glob("ios/**/*.pbxproj", recursive=True):
+              with open(pbx, "r", encoding="utf-8") as f:
+                  text = f.read()
+
+              # 1. Replace any existing ENABLE_USER_SCRIPT_SANDBOXING setting
+              text = re.sub(
+                  r'ENABLE_USER_SCRIPT_SANDBOXING\s*=\s*[A-Za-z]+;',
+                  'ENABLE_USER_SCRIPT_SANDBOXING = NO;',
+                  text
+              )
+
+              # 2. Inject into any buildSettings block missing it
+              def inject_sandboxing(match):
+                  block = match.group(0)
+                  if "ENABLE_USER_SCRIPT_SANDBOXING" not in block:
+                      return block.replace(
+                          "buildSettings = {",
+                          "buildSettings = {\n\t\t\t\tENABLE_USER_SCRIPT_SANDBOXING = NO;",
+                          1
+                      )
+                  return block
+
+              text = re.sub(r'buildSettings\s*=\s*\{[^}]*\}', inject_sandboxing, text)
+
+              # 3. Disable code signing across pods targets
+              text = re.sub(r'CODE_SIGNING_ALLOWED\s*=\s*YES;', 'CODE_SIGNING_ALLOWED = NO;', text)
+
+              with open(pbx, "w", encoding="utf-8") as f:
+                  f.write(text)
+              print(f"✅ Enforced ENABLE_USER_SCRIPT_SANDBOXING = NO in {pbx}")
+          PY
 
           {
             echo ""
@@ -371,9 +400,9 @@ jobs:
             MARKETING_VERSION=1.2.${{ github.run_number }} \
             build | tee xcodebuild.log || {
               echo "❌ xcodebuild failed. Diagnostics summary:"
-              grep -i -C 2 -E "error:|fatal error:|\*\* BUILD FAILED \*\*|The following build commands failed:" xcodebuild.log || true
-              echo "--- Last 200 lines of xcodebuild log ---"
-              tail -n 200 xcodebuild.log
+              grep -i -C 3 -E "error:|fatal error:|\*\* BUILD FAILED \*\*|The following build commands failed:|builtin-copy|Sandbox:" xcodebuild.log || true
+              echo "--- Last 250 lines of xcodebuild log ---"
+              tail -n 250 xcodebuild.log
               exit 1
             }
 
