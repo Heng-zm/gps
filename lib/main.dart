@@ -18,46 +18,35 @@ import 'services/offline_sync_queue.dart';
 import 'widgets/app_console_widget.dart';
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// DESIGN TOKENS — PREMIUM LIQUID GLASS OLED
+// DESIGN TOKENS — APPLE HIG LIQUID GLASS OLED
 // ═══════════════════════════════════════════════════════════════════════════════
 
-const Color _kGoldCore = Color(0xFFEDD068);
-const Color _kGoldMid = Color(0xFFD4A843);
-const Color _kGoldDim = Color(0xFF6B5016);
+const Color _kAppleBlue = Color(0xFF0A84FF);
+const Color _kAppleCyan = Color(0xFF00C7BE);
 
-const Color _kGlassBorder = Color(0x33FFFFFF);
-const Color _kGlassInner = Color(0x1AFFFFFF);
-const Color _kGlassBodyTint = Color(0x10C89B3C);
+const Color _kGlassBorder = Color(0x2EFFFFFF);
+const Color _kGlassInner = Color(0x14FFFFFF);
+const Color _kGlassBodyTint = Color(0xD9121216);
 
-const Color _kPillFill = Color(0x2AD4A843);
-const Color _kPillRim = Color(0x80D4A843);
-const Color _kPillShadow = Color(0x44000000);
-const Color _kPillShine = Color(0x55EDD068);
+const Color _kPillFill = Color(0x280A84FF);
+const Color _kPillRim = Color(0x4D0A84FF);
+const Color _kPillShine = Color(0x4064D2FF);
 
-const double _kBarHeight = 72.0;
-const double _kBarRadius = 36.0;
+const double _kBarHeight = 68.0;
+const double _kBarRadius = 34.0;
 const int _kItemCount = 3;
 
-const double _kPillW = 82.0;
-const double _kPillH = 46.0;
-const double _kPillRadius = 23.0;
+const double _kPillW = 88.0;
+const double _kPillH = 48.0;
+const double _kPillRadius = 24.0;
 
 const double _kBarOffsetWithNav = 12.0;
-const double _kBarOffsetWithoutNav = 22.0;
-const double _kBarSideMargin = 16.0;
-const double _kMaxBarWidth = 520.0;
+const double _kBarOffsetWithoutNav = 20.0;
+const double _kBarSideMargin = 18.0;
+const double _kMaxBarWidth = 480.0;
 
-const double _kBarBlurX = 32.0;
-const double _kBarBlurY = 32.0;
-
-const double _kSharpness = 26.0;
-const double _kBias = 80.0;
-
-const double _kBlobRestOuter = 15.0;
-const double _kBlobActiveOuter = 34.0;
-const double _kBlobRestInner = 6.0;
-const double _kBlobActiveInner = 18.0;
-const double _kMinBlurSigma = 1.0;
+const double _kBarBlurX = 28.0;
+const double _kBarBlurY = 28.0;
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // SUPABASE CONFIG
@@ -287,6 +276,7 @@ Future<void> _initSupabase() async {
   try {
     await Supabase.initialize(
       url: _kSupabaseUrl,
+      // ignore: deprecated_member_use
       anonKey: _kSupabaseAnonKey,
     );
 
@@ -388,7 +378,7 @@ class TrackProAI extends StatelessWidget {
 
   ThemeData _buildTheme() {
     final ColorScheme scheme = ColorScheme.fromSeed(
-      seedColor: _kGoldMid,
+      seedColor: _kAppleBlue,
       brightness: Brightness.dark,
       surface: Colors.black,
     );
@@ -422,11 +412,11 @@ class TrackProAI extends StatelessWidget {
       ],
       cupertinoOverrideTheme: const CupertinoThemeData(
         brightness: Brightness.dark,
-        primaryColor: _kGoldMid,
+        primaryColor: _kAppleBlue,
         scaffoldBackgroundColor: Colors.black,
         barBackgroundColor: Color(0xCC1C1C1E),
         textTheme: CupertinoTextThemeData(
-          primaryColor: _kGoldMid,
+          primaryColor: _kAppleBlue,
         ),
       ),
       appBarTheme: const AppBarTheme(
@@ -489,11 +479,6 @@ class _AppShellState extends State<AppShell>
     curve: Curves.easeInOutCubic,
   );
 
-  late final Animation<double> _blobAnim = CurvedAnimation(
-    parent: _ctrl,
-    curve: Curves.easeOutBack,
-  );
-
   late final Animation<double> _shimmerAnim = CurvedAnimation(
     parent: _ctrl,
     curve: const Interval(
@@ -503,10 +488,16 @@ class _AppShellState extends State<AppShell>
     ),
   );
 
-  static const List<IconData> _icons = <IconData>[
+  static const List<IconData> _activeIcons = <IconData>[
     CupertinoIcons.speedometer,
     CupertinoIcons.clock_fill,
     CupertinoIcons.gear_alt_fill,
+  ];
+
+  static const List<IconData> _inactiveIcons = <IconData>[
+    CupertinoIcons.speedometer,
+    CupertinoIcons.clock,
+    CupertinoIcons.gear_alt,
   ];
 
   static const List<String> _labels = <String>[
@@ -693,9 +684,9 @@ class _AppShellState extends State<AppShell>
                           previousIndex: _previous,
                           pillT: _pillAnim.value.clamp(0.0, 1.0),
                           pillStartFraction: _pillStartFraction.clamp(0.0, 1.0),
-                          blobT: _blobAnim.value.clamp(0.0, 1.10),
                           shimmerT: _shimmerAnim.value.clamp(0.0, 1.0),
-                          icons: _icons,
+                          activeIcons: _activeIcons,
+                          inactiveIcons: _inactiveIcons,
                           labels: _labels,
                           onTap: _onTap,
                         );
@@ -767,7 +758,7 @@ class _TabPageWrapperState extends State<_TabPageWrapper>
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// LIQUID GLASS BAR
+// APPLE HIG LIQUID GLASS NAVIGATION BAR
 // ═══════════════════════════════════════════════════════════════════════════════
 
 class _LiquidGlassBar extends StatelessWidget {
@@ -776,9 +767,9 @@ class _LiquidGlassBar extends StatelessWidget {
     required this.previousIndex,
     required this.pillT,
     required this.pillStartFraction,
-    required this.blobT,
     required this.shimmerT,
-    required this.icons,
+    required this.activeIcons,
+    required this.inactiveIcons,
     required this.labels,
     required this.onTap,
   });
@@ -787,30 +778,36 @@ class _LiquidGlassBar extends StatelessWidget {
   final int previousIndex;
   final double pillT;
   final double pillStartFraction;
-  final double blobT;
   final double shimmerT;
-  final List<IconData> icons;
+  final List<IconData> activeIcons;
+  final List<IconData> inactiveIcons;
   final List<String> labels;
   final ValueChanged<int> onTap;
 
   @override
   Widget build(BuildContext context) {
-    return SizedBox(
+    return Container(
       height: _kBarHeight,
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(_kBarRadius),
+        boxShadow: <BoxShadow>[
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.65),
+            blurRadius: 32.0,
+            offset: const Offset(0, 10),
+            spreadRadius: -2.0,
+          ),
+          BoxShadow(
+            color: _kAppleBlue.withValues(alpha: 0.08),
+            blurRadius: 24.0,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
       child: Stack(
         clipBehavior: Clip.none,
         children: <Widget>[
-          Positioned.fill(
-            child: CustomPaint(
-              isComplex: true,
-              willChange: true,
-              painter: _MetaballPainter(
-                current: currentIndex,
-                previous: previousIndex,
-                t: blobT,
-              ),
-            ),
-          ),
+          // 1. Frosted Glass Backdrop
           Positioned.fill(
             child: ClipRRect(
               borderRadius: BorderRadius.circular(_kBarRadius),
@@ -826,11 +823,15 @@ class _LiquidGlassBar extends StatelessWidget {
               ),
             ),
           ),
+
+          // 2. Glass Surface & Specular Highlights Painter
           const Positioned.fill(
             child: CustomPaint(
               painter: _GlassSurfacePainter(),
             ),
           ),
+
+          // 3. Sliding Fluid Pill (Active Tab Highlight)
           Positioned.fill(
             child: _SlidingPill(
               currentIndex: currentIndex,
@@ -839,6 +840,8 @@ class _LiquidGlassBar extends StatelessWidget {
               startFraction: pillStartFraction,
             ),
           ),
+
+          // 4. Subtle Shimmer / Specular Sweep
           Positioned.fill(
             child: CustomPaint(
               painter: _ShimmerPainter(
@@ -850,6 +853,8 @@ class _LiquidGlassBar extends StatelessWidget {
               ),
             ),
           ),
+
+          // 5. Interactive Tab Items
           Positioned.fill(
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceAround,
@@ -857,7 +862,8 @@ class _LiquidGlassBar extends StatelessWidget {
                 _kItemCount,
                 (int index) {
                   return _NavItem(
-                    icon: icons[index],
+                    activeIcon: activeIcons[index],
+                    inactiveIcon: inactiveIcons[index],
                     label: labels[index],
                     isActive: currentIndex == index,
                     onTap: () => onTap(index),
@@ -889,6 +895,7 @@ class _GlassSurfacePainter extends CustomPainter {
       const Radius.circular(_kBarRadius),
     );
 
+    // Subtle internal surface gradient
     canvas.drawRRect(
       rr,
       Paint()
@@ -896,12 +903,13 @@ class _GlassSurfacePainter extends CustomPainter {
           begin: Alignment.topCenter,
           end: Alignment.bottomCenter,
           colors: <Color>[
-            Color(0x12FFFFFF),
-            Color(0x02FFFFFF),
+            Color(0x18FFFFFF),
+            Color(0x04FFFFFF),
           ],
         ).createShader(rect),
     );
 
+    // Outer hairline glass border
     canvas.drawRRect(
       rr,
       Paint()
@@ -910,6 +918,7 @@ class _GlassSurfacePainter extends CustomPainter {
         ..color = _kGlassBorder,
     );
 
+    // Inner rim stroke
     final RRect inner = RRect.fromRectAndRadius(
       Rect.fromLTWH(1, 1, size.width - 2, size.height - 2),
       const Radius.circular(_kBarRadius - 1),
@@ -923,25 +932,15 @@ class _GlassSurfacePainter extends CustomPainter {
         ..color = _kGlassInner,
     );
 
+    // Top specular highlight (physical light reflection on curved glass rim)
     canvas.save();
     canvas.clipRect(Rect.fromLTWH(0, 0, size.width, 3));
     canvas.drawRRect(
       rr,
       Paint()
         ..style = PaintingStyle.stroke
-        ..strokeWidth = 2.0
-        ..color = const Color(0x47FFFFFF),
-    );
-    canvas.restore();
-
-    canvas.save();
-    canvas.clipRect(Rect.fromLTWH(0, size.height - 4, size.width, 4));
-    canvas.drawRRect(
-      rr,
-      Paint()
-        ..style = PaintingStyle.stroke
         ..strokeWidth = 1.5
-        ..color = const Color(0x0FFFFFFF),
+        ..color = const Color(0x66FFFFFF),
     );
     canvas.restore();
   }
@@ -1021,52 +1020,51 @@ class _PillPainter extends CustomPainter {
       const Radius.circular(_kPillRadius),
     );
 
-    canvas.drawRRect(
-      rr,
-      Paint()..color = _kPillFill,
-    );
-
+    // Pill fill with subtle electric blue / cyan glow
     canvas.drawRRect(
       rr,
       Paint()
-        ..shader = const RadialGradient(
-          center: Alignment(-0.65, -0.65),
-          radius: 1.0,
+        ..shader = const LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
           colors: <Color>[
-            _kPillShadow,
-            Colors.transparent,
+            _kPillFill,
+            Color(0x1800C7BE),
           ],
         ).createShader(rect),
     );
 
+    // Pill border
     canvas.drawRRect(
       rr,
       Paint()
         ..style = PaintingStyle.stroke
-        ..strokeWidth = 1.5
+        ..strokeWidth = 1.0
         ..color = _kPillRim,
     );
 
+    // Top specular shine of the pill
     canvas.save();
     canvas.clipRect(Rect.fromLTWH(0, 0, size.width, 2.5));
     canvas.drawRRect(
       rr,
       Paint()
         ..style = PaintingStyle.stroke
-        ..strokeWidth = 2.0
-        ..color = _kGoldCore.withValues(alpha: 0.65),
+        ..strokeWidth = 1.5
+        ..color = _kPillShine,
     );
     canvas.restore();
 
+    // Soft subtle radial glow in the center-top
     canvas.drawOval(
       Rect.fromCenter(
-        center: Offset(size.width * 0.68, size.height * 0.72),
-        width: size.width * 0.40,
-        height: size.height * 0.26,
+        center: Offset(size.width * 0.5, size.height * 0.35),
+        width: size.width * 0.55,
+        height: size.height * 0.40,
       ),
       Paint()
-        ..color = _kPillShine
-        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4.0),
+        ..color = _kAppleBlue.withValues(alpha: 0.15)
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 6.0),
     );
   }
 
@@ -1122,17 +1120,17 @@ class _ShimmerPainter extends CustomPainter {
 
     canvas.save();
     canvas.translate(shimmerX, shimmerY);
-    canvas.rotate(-0.42);
+    canvas.rotate(-0.35);
     canvas.translate(-shimmerX, -shimmerY);
 
     canvas.drawOval(
       Rect.fromCenter(
         center: Offset(shimmerX, shimmerY),
-        width: 7.0,
-        height: _kBarHeight * 1.5,
+        width: 8.0,
+        height: _kBarHeight * 1.4,
       ),
       Paint()
-        ..color = _kGoldCore.withValues(alpha: opacity * 0.16)
+        ..color = _kAppleCyan.withValues(alpha: opacity * 0.22)
         ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 5.0),
     );
 
@@ -1140,10 +1138,10 @@ class _ShimmerPainter extends CustomPainter {
       Rect.fromCenter(
         center: Offset(shimmerX, shimmerY),
         width: 2.0,
-        height: _kBarHeight * 1.2,
+        height: _kBarHeight * 1.1,
       ),
       Paint()
-        ..color = Colors.white.withValues(alpha: opacity * 0.28)
+        ..color = Colors.white.withValues(alpha: opacity * 0.35)
         ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 1.5),
     );
 
@@ -1166,26 +1164,28 @@ class _ShimmerPainter extends CustomPainter {
 
 class _NavItem extends StatelessWidget {
   const _NavItem({
-    required this.icon,
+    required this.activeIcon,
+    required this.inactiveIcon,
     required this.label,
     required this.isActive,
     required this.onTap,
   });
 
-  final IconData icon;
+  final IconData activeIcon;
+  final IconData inactiveIcon;
   final String label;
   final bool isActive;
   final VoidCallback onTap;
 
   static const Map<String, double> _indicatorWidths = <String, double>{
-    'TRACK': 36.0,
-    'HISTORY': 48.0,
-    'SETTINGS': 54.0,
+    'TRACK': 18.0,
+    'HISTORY': 22.0,
+    'SETTINGS': 22.0,
   };
 
   @override
   Widget build(BuildContext context) {
-    final Color inactiveText = Colors.white.withValues(alpha: 0.28);
+    final Color inactiveText = Colors.white.withValues(alpha: 0.38);
 
     return Expanded(
       child: Semantics(
@@ -1201,12 +1201,12 @@ class _NavItem extends StatelessWidget {
               mainAxisAlignment: MainAxisAlignment.center,
               children: <Widget>[
                 AnimatedScale(
-                  scale: isActive ? 1.10 : 1.0,
+                  scale: isActive ? 1.12 : 1.0,
                   duration: const Duration(milliseconds: 240),
                   curve: Curves.easeOutBack,
                   child: AnimatedOpacity(
-                    opacity: isActive ? 1.0 : 0.34,
-                    duration: const Duration(milliseconds: 200),
+                    opacity: isActive ? 1.0 : 0.40,
+                    duration: const Duration(milliseconds: 180),
                     child: isActive
                         ? ShaderMask(
                             blendMode: BlendMode.srcIn,
@@ -1215,40 +1215,40 @@ class _NavItem extends StatelessWidget {
                                 begin: Alignment.topLeft,
                                 end: Alignment.bottomRight,
                                 colors: <Color>[
-                                  _kGoldCore,
-                                  _kGoldMid,
+                                  _kAppleBlue,
+                                  _kAppleCyan,
                                 ],
                               ).createShader(bounds);
                             },
                             child: Icon(
-                              icon,
-                              size: 22,
+                              activeIcon,
+                              size: 21,
                               color: Colors.white,
                             ),
                           )
                         : Icon(
-                            icon,
-                            size: 22,
+                            inactiveIcon,
+                            size: 21,
                             color: Colors.white,
                           ),
                   ),
                 ),
-                const SizedBox(height: 4),
+                const SizedBox(height: 3),
                 AnimatedDefaultTextStyle(
-                  duration: const Duration(milliseconds: 200),
+                  duration: const Duration(milliseconds: 180),
                   curve: Curves.easeOut,
                   style: TextStyle(
                     color: isActive ? Colors.white : inactiveText,
-                    fontSize: 10.5,
-                    fontWeight: isActive ? FontWeight.w800 : FontWeight.w600,
-                    letterSpacing: 0.6,
+                    fontSize: 10.0,
+                    fontWeight: isActive ? FontWeight.w800 : FontWeight.w500,
+                    letterSpacing: isActive ? 0.4 : 0.2,
                     height: 1.0,
                   ),
                   child: Text(label),
                 ),
-                const SizedBox(height: 5),
+                const SizedBox(height: 4),
                 _ActiveIndicator(
-                  width: _indicatorWidths[label] ?? 34.0,
+                  targetWidth: _indicatorWidths[label] ?? 20.0,
                   isActive: isActive,
                 ),
               ],
@@ -1262,237 +1262,40 @@ class _NavItem extends StatelessWidget {
 
 class _ActiveIndicator extends StatelessWidget {
   const _ActiveIndicator({
-    required this.width,
+    required this.targetWidth,
     required this.isActive,
   });
 
-  final double width;
+  final double targetWidth;
   final bool isActive;
 
   @override
   Widget build(BuildContext context) {
     return AnimatedContainer(
-      duration: const Duration(milliseconds: 300),
+      duration: const Duration(milliseconds: 240),
       curve: Curves.easeOutCubic,
-      width: isActive ? width : 4.0,
+      width: isActive ? targetWidth : 0.0,
       height: 2.5,
       decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(1.5),
+        borderRadius: BorderRadius.circular(2.0),
         gradient: isActive
             ? const LinearGradient(
                 colors: <Color>[
-                  _kGoldCore,
-                  _kGoldMid,
+                  _kAppleBlue,
+                  _kAppleCyan,
                 ],
               )
             : null,
-        color: isActive ? null : _kGoldDim.withValues(alpha: 0.0),
+        boxShadow: isActive
+            ? <BoxShadow>[
+                BoxShadow(
+                  color: _kAppleBlue.withValues(alpha: 0.60),
+                  blurRadius: 6.0,
+                  offset: const Offset(0, 1),
+                ),
+              ]
+            : null,
       ),
     );
-  }
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// METABALL PAINTER
-// ═══════════════════════════════════════════════════════════════════════════════
-
-class _MetaballPainter extends CustomPainter {
-  const _MetaballPainter({
-    required this.current,
-    required this.previous,
-    required this.t,
-  });
-
-  final int current;
-  final int previous;
-  final double t;
-
-  static Paint _thresholdPaint() {
-    return Paint()
-      ..colorFilter = const ColorFilter.matrix(
-        <double>[
-          1,
-          0,
-          0,
-          0,
-          0,
-          0,
-          1,
-          0,
-          0,
-          0,
-          0,
-          0,
-          1,
-          0,
-          0,
-          0,
-          0,
-          0,
-          _kSharpness,
-          -_kBias * _kSharpness,
-        ],
-      );
-  }
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    if (size.isEmpty) return;
-
-    final Rect rect = Offset.zero & size;
-    final double itemW = size.width / _kItemCount;
-    final double cy = size.height / 2;
-    final double tPos = t.clamp(0.0, 1.0);
-
-    canvas.saveLayer(rect, _thresholdPaint());
-
-    for (int i = 0; i < _kItemCount; i++) {
-      _drawBlob(
-        canvas,
-        Offset(itemW * i + itemW / 2, cy),
-        _outerRadiusFor(i, tPos),
-        alpha: 0.50,
-        sigmaFactor: 0.88,
-      );
-    }
-
-    _drawBridge(
-      canvas,
-      itemW,
-      cy,
-      tPos,
-      base: 13.0,
-      peak: 14.0,
-      alpha: 0.36,
-      sigmaFactor: 0.88,
-    );
-
-    canvas.restore();
-
-    canvas.saveLayer(rect, _thresholdPaint());
-
-    for (int i = 0; i < _kItemCount; i++) {
-      _drawBlob(
-        canvas,
-        Offset(itemW * i + itemW / 2, cy),
-        _innerRadiusFor(i, tPos),
-        alpha: 0.80,
-        sigmaFactor: 0.50,
-      );
-    }
-
-    _drawBridge(
-      canvas,
-      itemW,
-      cy,
-      tPos,
-      base: 6.0,
-      peak: 8.0,
-      alpha: 0.65,
-      sigmaFactor: 0.50,
-    );
-
-    canvas.restore();
-  }
-
-  double _outerRadiusFor(int index, double tPos) {
-    if (previous == current) {
-      return index == current ? _kBlobActiveOuter : _kBlobRestOuter;
-    }
-
-    if (index == current) {
-      final double value =
-          ui.lerpDouble(_kBlobRestOuter, _kBlobActiveOuter, t) ??
-              _kBlobActiveOuter;
-
-      return value.clamp(_kBlobRestOuter, _kBlobActiveOuter * 1.10);
-    }
-
-    if (index == previous) {
-      return ui.lerpDouble(_kBlobActiveOuter, _kBlobRestOuter, tPos) ??
-          _kBlobRestOuter;
-    }
-
-    return _kBlobRestOuter;
-  }
-
-  double _innerRadiusFor(int index, double tPos) {
-    if (previous == current) {
-      return index == current ? _kBlobActiveInner : _kBlobRestInner;
-    }
-
-    if (index == current) {
-      final double value =
-          ui.lerpDouble(_kBlobRestInner, _kBlobActiveInner, t) ??
-              _kBlobActiveInner;
-
-      return value.clamp(_kBlobRestInner, _kBlobActiveInner * 1.10);
-    }
-
-    if (index == previous) {
-      return ui.lerpDouble(_kBlobActiveInner, _kBlobRestInner, tPos) ??
-          _kBlobRestInner;
-    }
-
-    return _kBlobRestInner;
-  }
-
-  void _drawBridge(
-    Canvas canvas,
-    double itemW,
-    double cy,
-    double tPos, {
-    required double base,
-    required double peak,
-    required double alpha,
-    required double sigmaFactor,
-  }) {
-    if (previous == current) return;
-
-    final double fromX = itemW * previous + itemW / 2;
-    final double toX = itemW * current + itemW / 2;
-    final double bx = ui.lerpDouble(fromX, toX, tPos) ?? toX;
-    final double sinT = math.sin(math.pi * tPos);
-
-    final double radius = (base + sinT * peak).clamp(0.0, base + peak);
-    final double opacity = (alpha * sinT).clamp(0.0, alpha);
-
-    if (radius > 1.0 && opacity > 0.01) {
-      _drawBlob(
-        canvas,
-        Offset(bx, cy),
-        radius,
-        alpha: opacity,
-        sigmaFactor: sigmaFactor,
-      );
-    }
-  }
-
-  void _drawBlob(
-    Canvas canvas,
-    Offset center,
-    double radius, {
-    required double alpha,
-    required double sigmaFactor,
-  }) {
-    if (radius <= 0.0) return;
-
-    canvas.drawCircle(
-      center,
-      radius,
-      Paint()
-        ..color = _kGoldMid.withValues(alpha: alpha)
-        ..maskFilter = ui.MaskFilter.blur(
-          ui.BlurStyle.normal,
-          math.max(radius * sigmaFactor, _kMinBlurSigma),
-        ),
-    );
-  }
-
-  @override
-  bool shouldRepaint(covariant _MetaballPainter oldDelegate) {
-    return oldDelegate.current != current ||
-        oldDelegate.previous != previous ||
-        oldDelegate.t != t;
   }
 }
