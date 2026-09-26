@@ -35,6 +35,8 @@ import '../../widgets/common/app_action_button.dart';
 import '../../widgets/common/app_glass_card.dart';
 import '../../widgets/common/app_metric_card.dart';
 import '../../widgets/common/app_status_pill.dart';
+import '../../widgets/telemetry/advanced_features_sheet.dart';
+import '../../services/anti_theft_service.dart';
 
 part 'tracking_map_layer.dart';
 part 'tracking_top_hud.dart';
@@ -669,6 +671,7 @@ class _TrackingScreenState extends State<TrackingScreen>
 
     _setN(_speedN, speed);
     _setN(_posN, point.position);
+    AntiTheftService.instance.updateLocation(point.position);
     _updateAutoPause(speed);
 
     if (speed > _maxSpeedN.value) {
@@ -1054,6 +1057,11 @@ class _TrackingScreenState extends State<TrackingScreen>
     );
   }
 
+  void _openProHub({int initialTab = 0}) {
+    HapticFeedback.mediumImpact();
+    AdvancedFeaturesSheet.show(context, initialTab: initialTab);
+  }
+
   void _openMap() {
     HapticFeedback.lightImpact();
 
@@ -1421,11 +1429,13 @@ class _TrackingScreenState extends State<TrackingScreen>
               autoPausedN: _autoPausedN,
               posN: _posN,
               settings: _settings,
+              onSpeedHudTap: _openProHub,
             ),
             _MapFirstFloatingActions(
               followModeN: _followModeN,
               onFollowModeTap: _cycleMapFollowMode,
               onMapTap: _openMap,
+              onProHubTap: _openProHub,
               onMapboxTap: _openMapboxControls,
               onArTap: _openArRouteCamera,
               onAiTap: _openAiAssistant,

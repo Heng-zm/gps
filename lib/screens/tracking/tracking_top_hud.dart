@@ -359,6 +359,7 @@ class _MapFirstFloatingActions extends StatelessWidget {
     required this.onMapboxTap,
     required this.onArTap,
     required this.onAiTap,
+    this.onProHubTap,
   });
 
   final ValueNotifier<_MapFollowMode> followModeN;
@@ -367,6 +368,7 @@ class _MapFirstFloatingActions extends StatelessWidget {
   final VoidCallback onMapboxTap;
   final VoidCallback onArTap;
   final VoidCallback onAiTap;
+  final VoidCallback? onProHubTap;
 
   @override
   Widget build(BuildContext context) {
@@ -402,7 +404,18 @@ class _MapFirstFloatingActions extends StatelessWidget {
           ),
           const SizedBox(height: 10),
 
-          // 3. Route Planner
+          // 3. Pro Telemetry & Security Hub (G-Force, OBD-II, Sentry, LiDAR)
+          if (onProHubTap != null) ...<Widget>[
+            _FloatingCircleButton(
+              icon: CupertinoIcons.gauge_badge_plus,
+              activeColor: _kBlueSoft,
+              semanticLabel: 'Pro Telemetry Hub',
+              onTap: onProHubTap!,
+            ),
+            const SizedBox(height: 10),
+          ],
+
+          // 4. Route Planner
           _FloatingCircleButton(
             icon: CupertinoIcons.arrow_turn_up_right,
             semanticLabel: 'Plan Route',
@@ -410,7 +423,7 @@ class _MapFirstFloatingActions extends StatelessWidget {
           ),
           const SizedBox(height: 10),
 
-          // 4. AR Route Guidance
+          // 5. AR Route Guidance
           _FloatingCircleButton(
             icon: CupertinoIcons.camera_viewfinder,
             semanticLabel: 'AR Camera',
@@ -418,7 +431,7 @@ class _MapFirstFloatingActions extends StatelessWidget {
           ),
           const SizedBox(height: 10),
 
-          // 5. AI Assistant
+          // 6. AI Assistant
           _FloatingCircleButton(
             icon: CupertinoIcons.sparkles,
             activeColor: _kBlueSoft,
@@ -509,6 +522,7 @@ class _MapFirstSpeedHud extends StatelessWidget {
     required this.autoPausedN,
     required this.posN,
     required this.settings,
+    this.onSpeedHudTap,
   });
 
   final ValueNotifier<double> speedN;
@@ -518,6 +532,7 @@ class _MapFirstSpeedHud extends StatelessWidget {
   final ValueNotifier<bool> autoPausedN;
   final ValueNotifier<LatLng?> posN;
   final SettingsService settings;
+  final VoidCallback? onSpeedHudTap;
 
   @override
   Widget build(BuildContext context) {
@@ -541,8 +556,14 @@ class _MapFirstSpeedHud extends StatelessWidget {
 
           final bool isOver = tracking && speed > settings.speedAlertMph;
 
-          return ClipRRect(
-            borderRadius: BorderRadius.circular(20),
+          return GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: () {
+              HapticFeedback.lightImpact();
+              onSpeedHudTap?.call();
+            },
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(20),
             child: BackdropFilter(
               filter: ui.ImageFilter.blur(sigmaX: 18, sigmaY: 18),
               child: Container(
@@ -581,8 +602,9 @@ class _MapFirstSpeedHud extends StatelessWidget {
                 ),
               ),
             ),
-          );
-        },
+          ),
+        );
+      },
       ),
     );
   }

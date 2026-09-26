@@ -18,3 +18,7 @@ export 'ai_scene_understanding_service.dart';
 export '../models/ai_detection_models.dart';
 
 export 'ai_tflite_object_detection_service.dart';
+export 'gforce_telemetry_service.dart';
+export 'obd2_telemetry_service.dart';
+export 'anti_theft_service.dart';
+export 'lidar_road_scanner_service.dart';
