@@ -542,7 +542,7 @@ class _MapFirstSpeedHud extends StatelessWidget {
 
     return Positioned(
       left: 14,
-      bottom: bottomSafe + 130,
+      bottom: bottomSafe + 168,
       child: ListenableBuilder(
         listenable: Listenable.merge(<Listenable>[
           speedN,

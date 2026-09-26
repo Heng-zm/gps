@@ -201,7 +201,7 @@ class _SatelliteSosSheetState extends State<SatelliteSosSheet> {
 
   Widget _buildSkyRadar(SatellitePassPrediction pass, SatelliteLinkState state) {
     return Container(
-      height: 200,
+      padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 12),
       decoration: BoxDecoration(
         color: Colors.black.withValues(alpha: 0.65),
         borderRadius: BorderRadius.circular(22),
@@ -211,11 +211,11 @@ class _SatelliteSosSheetState extends State<SatelliteSosSheet> {
               : Colors.white.withValues(alpha: 0.12),
         ),
       ),
-      child: Stack(
-        alignment: Alignment.center,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
         children: <Widget>[
           CustomPaint(
-            size: const Size(190, 190),
+            size: const Size(180, 180),
             painter: _SkyRadarPainter(
               azimuthDeg: pass.azimuthDeg,
               elevationDeg: pass.elevationDeg,
@@ -224,15 +224,28 @@ class _SatelliteSosSheetState extends State<SatelliteSosSheet> {
               isAligned: pass.isAligned,
             ),
           ),
-          Positioned(
-            bottom: 8,
+          const SizedBox(height: 10),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+            decoration: BoxDecoration(
+              color: pass.isAligned
+                  ? AppColors.green.withValues(alpha: 0.15)
+                  : Colors.white.withValues(alpha: 0.06),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: pass.isAligned
+                    ? AppColors.green.withValues(alpha: 0.4)
+                    : Colors.white.withValues(alpha: 0.10),
+              ),
+            ),
             child: Text(
               pass.isAligned
                   ? '🎯 SATELLITE LOCKED · Phone Aligned (${pass.deviceHeadingDeg.round()}° / ${pass.devicePitchDeg.round()}°)'
                   : 'Hold phone up to sky · Compass: ${pass.deviceHeadingDeg.round()}° · Tilt: ${pass.devicePitchDeg.round()}°',
+              textAlign: TextAlign.center,
               style: TextStyle(
-                color: pass.isAligned ? AppColors.green : Colors.white.withValues(alpha: 0.6),
-                fontSize: 10,
+                color: pass.isAligned ? AppColors.green : Colors.white.withValues(alpha: 0.75),
+                fontSize: 10.5,
                 fontWeight: FontWeight.w700,
               ),
             ),
@@ -355,9 +368,10 @@ class _SkyRadarPainter extends CustomPainter {
       center.dy + math.sin(radAz) * distFromCenter,
     );
 
-    // Real device physical pointing crosshair
+    // Real device physical pointing crosshair (clamped safely inside radar boundary)
     final double devRad = (deviceHeadingDeg - 90) * (math.pi / 180.0);
-    final double devDist = ((90.0 - devicePitchDeg) / 90.0).clamp(0.0, 1.0) * radius;
+    final double maxReticleRadius = math.max(0.0, radius - 14.0);
+    final double devDist = ((90.0 - devicePitchDeg) / 90.0).clamp(0.0, 1.0) * maxReticleRadius;
     final Offset devPos = Offset(
       center.dx + math.cos(devRad) * devDist,
       center.dy + math.sin(devRad) * devDist,

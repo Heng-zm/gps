@@ -1152,7 +1152,16 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
     final double minX = 8.0;
     final double maxX = math.max(minX, screen.width - hudWidth - 8.0);
     final double minY = padding.top + 72.0;
-    final double maxY = math.max(minY, screen.height - hudHeight - padding.bottom - 98.0);
+
+    // Must never overlap the bottom panel!
+    final double panelHeight = math.max(
+      _bottomPanelHeight.value,
+      _panelDockMode.isExpanded ? 240.0 : _panelDockMode.isCompact ? 180.0 : 110.0,
+    );
+    final double maxY = math.max(
+      minY,
+      screen.height - hudHeight - padding.bottom - panelHeight - 14.0,
+    );
 
     return Offset(
       value.dx.clamp(minX, maxX).toDouble(),
@@ -1512,9 +1521,9 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
 
   Widget _buildHeader(BuildContext context, double topPad) {
     final double width = MediaQuery.sizeOf(context).width;
-    final bool compact = width < 390;
-    final double iconSize = compact ? 34 : 38;
-    final double iconGap = compact ? 5 : 7;
+    final bool compact = width < 410;
+    final double iconSize = compact ? 33 : 36;
+    final double iconGap = compact ? 4 : 6;
     final Duration? elapsed = widget.tripStartTime != null
         ? DateTime.now().difference(widget.tripStartTime!)
         : null;
@@ -1571,16 +1580,19 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
                           const SizedBox(width: 6),
                         ],
                         Flexible(
-                          child: Text(
-                            widget.isLive ? 'LIVE TRACKING' : 'TRIP REPLAY',
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            softWrap: false,
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 13,
-                              fontWeight: FontWeight.w900,
-                              letterSpacing: 1.1,
+                          child: FittedBox(
+                            fit: BoxFit.scaleDown,
+                            alignment: Alignment.centerLeft,
+                            child: Text(
+                              widget.isLive ? 'LIVE TRACKING' : 'TRIP REPLAY',
+                              maxLines: 1,
+                              softWrap: false,
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 12.5,
+                                fontWeight: FontWeight.w900,
+                                letterSpacing: 0.6,
+                              ),
                             ),
                           ),
                         ),
