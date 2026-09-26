@@ -178,7 +178,7 @@ class _GlosaSpeedSheetState extends State<GlosaSpeedSheet> {
                       children: <Widget>[
                         _StatItem(label: 'DISTANCE AHEAD', value: '${snap.distanceMeters.round()}m'),
                         _StatItem(label: 'EST. FUEL SAVED', value: '~${snap.fuelSavingsEstimatePercent}%'),
-                        _StatItem(label: 'V2I LINK', value: '4.8ms (Low Latency)'),
+                        const _StatItem(label: 'V2I LINK', value: '4.8ms (Low Latency)'),
                       ],
                     ),
                   ],

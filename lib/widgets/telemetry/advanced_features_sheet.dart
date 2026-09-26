@@ -46,7 +46,7 @@ class _AdvancedFeaturesSheetState extends State<AdvancedFeaturesSheet> {
     ('Sentry', CupertinoIcons.shield_fill),
     ('LiDAR', CupertinoIcons.waveform_path_ecg),
     ('Sat SOS', CupertinoIcons.antenna_radiowaves_left_right),
-    ('GLOSA', CupertinoIcons.traffic_light),
+    ('GLOSA', Icons.traffic),
     ('Radar', CupertinoIcons.compass_fill),
   ];
 

@@ -186,7 +186,7 @@ packages:
     source: hosted
     version: "0.6.30"
   camera_avfoundation:
-    dependency: "direct overridden"
+    dependency: transitive
     description:
       name: camera_avfoundation
       sha256: "650111835d3af23568b495c2001bd542b9cfea8fc3e739bdb324ba54e177a7d3"

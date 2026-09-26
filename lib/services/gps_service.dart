@@ -135,6 +135,36 @@ class GpsService {
     return _movingSpeedSum / _movingCount;
   }
 
+  double get currentSpeedMph =>
+      latestPoint?.speedMph ??
+      (_lastRawPos != null && _lastRawPos!.speed.isFinite && _lastRawPos!.speed > 0
+          ? _lastRawPos!.speed * _kMpsToMph
+          : 0.0);
+
+  double get currentHeadingDegrees =>
+      (_lastRawPos != null && _lastRawPos!.heading.isFinite)
+          ? _lastRawPos!.heading
+          : 0.0;
+
+  LatLng? get lastKnownPosition =>
+      _lastEmittedSmoothedPos ??
+      latestPoint?.position ??
+      (_lastRawPos != null
+          ? LatLng(_lastRawPos!.latitude, _lastRawPos!.longitude)
+          : null);
+
+  double get currentAltitudeFt =>
+      latestPoint?.altitudeFt ??
+      (_lastRawPos != null && _lastRawPos!.altitude.isFinite
+          ? _lastRawPos!.altitude * _kMToFt
+          : 0.0);
+
+  double get currentAltitudeMeters =>
+      latestPoint?.altitudeMeters ??
+      (_lastRawPos != null && _lastRawPos!.altitude.isFinite
+          ? _lastRawPos!.altitude
+          : 0.0);
+
   Duration get currentTripTime => _tripSw.elapsed;
   Duration get currentStoppedTime => _stoppedSw.elapsed;
 

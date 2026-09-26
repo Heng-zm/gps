@@ -364,9 +364,9 @@ class _Obd2TelemetrySheetState extends State<Obd2TelemetrySheet> {
                 color: hasFaults ? Colors.amberAccent : AppColors.green,
               ),
               const SizedBox(width: 8),
-              Text(
+              const Text(
                 'ECU DIAGNOSTIC CODES (DTC)',
-                style: const TextStyle(
+                style: TextStyle(
                   color: Colors.white,
                   fontSize: 12,
                   fontWeight: FontWeight.w900,
@@ -512,7 +512,7 @@ class _GaugeTile extends StatelessWidget {
           ),
           Text(
             value,
-            style: TextStyle(
+            style: const TextStyle(
               color: Colors.white,
               fontSize: 16,
               fontWeight: FontWeight.w900,

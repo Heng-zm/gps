@@ -201,27 +201,39 @@ class _SatelliteSosSheetState extends State<SatelliteSosSheet> {
 
   Widget _buildSkyRadar(SatellitePassPrediction pass, SatelliteLinkState state) {
     return Container(
-      height: 190,
+      height: 200,
       decoration: BoxDecoration(
         color: Colors.black.withValues(alpha: 0.65),
         borderRadius: BorderRadius.circular(22),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.12)),
+        border: Border.all(
+          color: pass.isAligned
+              ? AppColors.green.withValues(alpha: 0.5)
+              : Colors.white.withValues(alpha: 0.12),
+        ),
       ),
       child: Stack(
         alignment: Alignment.center,
         children: <Widget>[
           CustomPaint(
-            size: const Size(180, 180),
-            painter: _SkyRadarPainter(azimuthDeg: pass.azimuthDeg, elevationDeg: pass.elevationDeg),
+            size: const Size(190, 190),
+            painter: _SkyRadarPainter(
+              azimuthDeg: pass.azimuthDeg,
+              elevationDeg: pass.elevationDeg,
+              deviceHeadingDeg: pass.deviceHeadingDeg,
+              devicePitchDeg: pass.devicePitchDeg,
+              isAligned: pass.isAligned,
+            ),
           ),
           Positioned(
-            bottom: 10,
+            bottom: 8,
             child: Text(
-              'Point phone toward clear sky (Elevation ${pass.elevationDeg.round()}°)',
+              pass.isAligned
+                  ? '🎯 SATELLITE LOCKED · Phone Aligned (${pass.deviceHeadingDeg.round()}° / ${pass.devicePitchDeg.round()}°)'
+                  : 'Hold phone up to sky · Compass: ${pass.deviceHeadingDeg.round()}° · Tilt: ${pass.devicePitchDeg.round()}°',
               style: TextStyle(
-                color: Colors.white.withValues(alpha: 0.5),
-                fontSize: 10.5,
-                fontWeight: FontWeight.w600,
+                color: pass.isAligned ? AppColors.green : Colors.white.withValues(alpha: 0.6),
+                fontSize: 10,
+                fontWeight: FontWeight.w700,
               ),
             ),
           ),
@@ -302,14 +314,24 @@ class _InfoCol extends StatelessWidget {
 }
 
 class _SkyRadarPainter extends CustomPainter {
-  const _SkyRadarPainter({required this.azimuthDeg, required this.elevationDeg});
+  const _SkyRadarPainter({
+    required this.azimuthDeg,
+    required this.elevationDeg,
+    required this.deviceHeadingDeg,
+    required this.devicePitchDeg,
+    required this.isAligned,
+  });
+
   final double azimuthDeg;
   final double elevationDeg;
+  final double deviceHeadingDeg;
+  final double devicePitchDeg;
+  final bool isAligned;
 
   @override
   void paint(Canvas canvas, Size size) {
     final Offset center = Offset(size.width / 2, size.height / 2);
-    final double radius = size.width / 2 - 12;
+    final double radius = size.width / 2 - 14;
 
     final Paint ringPaint = Paint()
       ..color = Colors.white.withValues(alpha: 0.12)
@@ -324,7 +346,7 @@ class _SkyRadarPainter extends CustomPainter {
     canvas.drawLine(Offset(center.dx, center.dy - radius), Offset(center.dx, center.dy + radius), ringPaint);
     canvas.drawLine(Offset(center.dx - radius, center.dy), Offset(center.dx + radius, center.dy), ringPaint);
 
-    // Satellite point on hemisphere (distance from center = (90 - elevation) / 90 * radius)
+    // Satellite position on hemisphere (distance from center = (90 - elevation) / 90 * radius)
     final double radAz = (azimuthDeg - 90) * (math.pi / 180.0);
     final double distFromCenter = ((90.0 - elevationDeg) / 90.0).clamp(0.0, 1.0) * radius;
 
@@ -333,18 +355,46 @@ class _SkyRadarPainter extends CustomPainter {
       center.dy + math.sin(radAz) * distFromCenter,
     );
 
+    // Real device physical pointing crosshair
+    final double devRad = (deviceHeadingDeg - 90) * (math.pi / 180.0);
+    final double devDist = ((90.0 - devicePitchDeg) / 90.0).clamp(0.0, 1.0) * radius;
+    final Offset devPos = Offset(
+      center.dx + math.cos(devRad) * devDist,
+      center.dy + math.sin(devRad) * devDist,
+    );
+
+    // Draw connection lock beam if close
+    if (isAligned) {
+      final Paint beamPaint = Paint()
+        ..color = AppColors.green.withValues(alpha: 0.45)
+        ..strokeWidth = 2.0
+        ..style = PaintingStyle.stroke;
+      canvas.drawLine(devPos, satPos, beamPaint);
+    }
+
     // Satellite Glow
+    final Color satColor = isAligned ? AppColors.green : AppColors.blueSoft;
     final Paint glowPaint = Paint()
-      ..color = AppColors.blueSoft.withValues(alpha: 0.4)
-      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 10);
-    canvas.drawCircle(satPos, 12, glowPaint);
+      ..color = satColor.withValues(alpha: 0.45)
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 12);
+    canvas.drawCircle(satPos, 14, glowPaint);
 
     // Satellite Dot
-    final Paint satPaint = Paint()..color = AppColors.blueSoft;
-    canvas.drawCircle(satPos, 6, satPaint);
+    final Paint satPaint = Paint()..color = satColor;
+    canvas.drawCircle(satPos, 6.5, satPaint);
 
     final Paint corePaint = Paint()..color = Colors.white;
     canvas.drawCircle(satPos, 2.5, corePaint);
+
+    // Device Pointer Reticle (Phone Crosshair)
+    final Paint reticlePaint = Paint()
+      ..color = isAligned ? AppColors.green : Colors.amber
+      ..strokeWidth = 1.5
+      ..style = PaintingStyle.stroke;
+
+    canvas.drawCircle(devPos, 10, reticlePaint);
+    canvas.drawLine(Offset(devPos.dx - 14, devPos.dy), Offset(devPos.dx + 14, devPos.dy), reticlePaint);
+    canvas.drawLine(Offset(devPos.dx, devPos.dy - 14), Offset(devPos.dx, devPos.dy + 14), reticlePaint);
   }
 
   @override
