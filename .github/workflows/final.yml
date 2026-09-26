@@ -391,7 +391,10 @@ jobs:
                   code
               )
 
-              # 3. Update assignment and nil reset
+              # 3. Fix optional chaining on non-optional wrapper
+              code = re.sub(r'cancelable\?\s*\.\s*cancel\(\)', 'cancelable.cancel()', code)
+
+              # 4. Update assignment and nil reset
               code = re.sub(r'\bcancelable\s*=\s*closure\b', 'cancelable.c = closure', code)
               code = re.sub(r'\bcancelable\s*=\s*nil\b', 'cancelable.c = nil', code)
               code = re.sub(r'_wrapper\.c\b', 'cancelable.c', code)
