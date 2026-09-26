@@ -14,8 +14,14 @@
 
 - [Core Highlights](#-core-highlights)
 - [Deep-Tech & Pro Telemetry Suite](#-deep-tech--pro-telemetry-suite)
-- [Screens & Architecture](#-screens--architecture)
-- [System Architecture](#-system-architecture)
+- [Screens & User Interface](#-screens--user-interface)
+- [System Architecture & Visual Workflows](#-system-architecture--visual-workflows)
+  - [1. High-Level Sensor Fusion & Telemetry Engine](#1-high-level-sensor-fusion--telemetry-engine)
+  - [2. Trip Tracking State Machine](#2-trip-tracking-state-machine)
+  - [3. Direct-to-Satellite LEO Emergency SOS Protocol](#3-direct-to-satellite-leo-emergency-sos-protocol)
+  - [4. GLOSA V2I Traffic Signal Phase & Timing Flow](#4-glosa-v2i-traffic-signal-phase--timing-flow)
+  - [5. AI Anti-Theft Sentry Threat Detection & Dispatch](#5-ai-anti-theft-sentry-threat-detection--dispatch)
+  - [6. Collimated Optical HUD Projection Pipeline](#6-collimated-optical-hud-projection-pipeline)
 - [Project Directory Structure](#-project-directory-structure)
 - [Getting Started](#-getting-started)
 - [Configuration & API Setup](#-configuration--api-setup)
@@ -83,7 +89,11 @@
 
 ---
 
-## 🏗️ System Architecture
+## 🏗️ System Architecture & Visual Workflows
+
+### 1. High-Level Sensor Fusion & Telemetry Engine
+
+The core telemetry pipeline connects real-time smartphone hardware sensors (GNSS, 6-DOF IMU, 3-Axis Magnetometer, and 60 FPS Camera Stream) to specialized deep-tech processing engines before projecting onto the presentation layer.
 
 ```mermaid
 flowchart TD
@@ -91,7 +101,7 @@ flowchart TD
         GPS["GPS / GNSS Engine"]
         IMU["6-DOF IMU (Accel & Gyro)"]
         MAG["3-Axis Magnetometer"]
-        CAM["Camera Stream"]
+        CAM["Camera Stream (60 FPS)"]
     end
 
     subgraph ServiceLayer["TrackPro Core Telemetry Services"]
@@ -129,6 +139,150 @@ flowchart TD
     LIDAR_SVC --> TRACKING_UI & AR_CAMERA_UI
     SENTRY_SVC --> SETTINGS_UI
     TFLITE_SVC --> AR_CAMERA_UI
+```
+
+---
+
+### 2. Trip Tracking State Machine
+
+The active tracking session dynamically manages power modes, background GPS sampling rates, and concurrent telemetry streams based on motion dynamics.
+
+```mermaid
+stateDiagram-v2
+    [*] --> Idle
+    Idle --> Calibrating: Start Tracking
+    Calibrating --> Tracking: Sensors Calibrated & 3D Fix Acquired
+    
+    state Tracking {
+        [*] --> HighPrecision
+        HighPrecision --> EcoMode: Stationary for 3 min
+        EcoMode --> HighPrecision: Velocity > 2 km/h
+        --
+        [*] --> TelemetryEngaged
+        TelemetryEngaged --> GForceMonitoring: IMU Stream (50 Hz)
+        TelemetryEngaged --> GlosaV2I: Signal Corridor Detected
+        TelemetryEngaged --> RoadScanning: LiDAR Surface Profiling
+    }
+
+    Tracking --> Paused: Pause Button / Auto-stop
+    Paused --> Tracking: Resume Ride
+    Tracking --> Finalizing: Finish Trip
+    Finalizing --> SummaryView: Compute AI Coach Score & Dynamics
+    SummaryView --> SavedTrip: Persist SQLite / Hive
+    SavedTrip --> Idle: Ready
+```
+
+---
+
+### 3. Direct-to-Satellite LEO Emergency SOS Protocol
+
+When cellular coverage fails, the satellite radar targets LEO passes (Iridium NEXT / Starlink Direct) via onboard sensor alignment before dispatching distress payloads.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Driver as Driver / User
+    participant App as TrackPro App UI
+    participant Sensors as Compass & Accelerometer
+    participant SatEngine as SatelliteSosService
+    participant Orbit as LEO Satellite (Iridium / Starlink)
+    participant Station as Mission Control / Dispatch
+
+    Driver->>App: Tap Direct-to-Satellite SOS
+    App->>Sensors: Request live Azimuth & Pitch Elevation
+    Sensors-->>App: Heading: 342 deg, Elevation: 48 deg
+    App->>SatEngine: Calculate pass ephemeris look-angles
+    SatEngine-->>App: Target locked (Pass window active)
+    Driver->>App: Confirm SOS Broadcast
+    App->>Orbit: Transmit binary distress packet (GPS, Alt, Battery)
+    Orbit->>Station: Relay telemetry & distress coordinates
+    Station-->>Orbit: ACK 200 OK & Search-and-Rescue Dispatched
+    Orbit-->>App: Ground station confirmation received
+    App-->>Driver: Display Rescue Confirmation Banner
+```
+
+---
+
+### 4. GLOSA V2I Traffic Signal Phase & Timing Flow
+
+The Green Light Optimal Speed Advisory (GLOSA) system syncs with arterial intersection SPaT (Signal Phase & Timing) broadcasts to ensure seamless non-stop transit.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Vehicle as Vehicle (TrackPro)
+    participant GPS as GNSS Engine
+    participant GLOSA as GlosaSpeedService
+    participant SPaT as Traffic Signal Controller (V2I)
+    participant HUD as Windshield HUD / Display
+
+    GPS->>GLOSA: Broadcast Position (Lat/Lng, Heading, Speed)
+    GLOSA->>GLOSA: Proximity check: Monivong Blvd Corridor (dist = 320m)
+    GLOSA->>SPaT: Fetch Signal Phase & Timing state
+    SPaT-->>GLOSA: Current Phase: RED, Remaining: 14s, Next: GREEN (45s)
+    GLOSA->>GLOSA: Compute optimal speed band: [38 - 44 km/h]
+    GLOSA->>HUD: Display "CRUISE AT 42 KM/H FOR GREEN"
+    Vehicle->>Vehicle: Driver adjusts velocity within green window
+    HUD-->>Vehicle: Green Wave Confirmed (0 Stop Time)
+```
+
+---
+
+### 5. AI Anti-Theft Sentry Threat Detection & Dispatch
+
+Armed sentry mode establishes a static 3-axis gravity vector baseline. If unexpected physical vibration, tilt, or geofence deviation occurs, an instant alert is pushed to Telegram.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Owner as Vehicle Owner
+    participant App as TrackPro App
+    participant Sentry as AntiTheftService
+    participant Accel as 3-Axis Accelerometer
+    participant Telegram as Telegram Bot API
+
+    Owner->>App: Arm Sentry Mode
+    App->>Sentry: Arm (Baseline: Lat/Lng, Geofence: 25m)
+    Sentry->>Accel: Calibrate resting gravity vector (X=0, Y=0, Z=9.81)
+    Note over Sentry,Accel: Sentry in Armed Standby...
+    
+    critical Vehicle Tampering Occurs
+        Accel-->>Sentry: Sudden shock / tilt detected (delta > 2.5 m/s^2)
+        Sentry->>Sentry: Geofence or tilt threshold breached
+        Sentry->>Telegram: POST /sendMessage (Bot Token, Chat ID, Live Location Pin)
+        Telegram-->>Owner: Instant Alert: "Vehicle Tamper Detected! Location: 11.5564, 104.9282"
+    end
+```
+
+---
+
+### 6. Collimated Optical HUD Projection Pipeline
+
+The Holographic HUD system flips and dark-filters vehicle telemetry so that when placed horizontally on a vehicle dashboard, it reflects sharply into the driver's forward eye line without ghosting.
+
+```mermaid
+flowchart LR
+    subgraph DataInput["Raw Vehicle Telemetry"]
+        V["Velocity & Speed Limit"]
+        G["3-Axis G-Force Vector"]
+        N["Turn Guidance & GLOSA"]
+    end
+
+    subgraph OpticalEngine["Holographic Projection Engine"]
+        T["Theme Palette Colorizer\n(Cyan / Amber / Green / OLED)"]
+        M["Horizontal Optical Mirror Flip\n(Matrix Transform)"]
+        C["High-Contrast Dark Mode Filter\n(Windshield Anti-Glare)"]
+    end
+
+    subgraph PhysicalDisplay["Windshield HUD Projection"]
+        P["Phone Screen (Horizontal on Dash)"]
+        W["Windshield Glass Reflection (45 deg)"]
+        E["Driver Collimated Virtual Eye View"]
+    end
+
+    V & G & N --> T --> M --> C --> P
+    P -->|"Light Ray (45 deg)"| W
+    W -->|"Virtual Image at Infinite Focus"| E
 ```
 
 ---
