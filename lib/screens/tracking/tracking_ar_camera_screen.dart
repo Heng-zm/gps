@@ -2651,7 +2651,7 @@ class _ArStatusStrip extends StatelessWidget {
           ),
           _ArDot(color: snapshot.hasRoute ? _kArGreen : _kArGold),
           _ArMiniStatus(
-            icon: Icons.route_rounded,
+            icon: CupertinoIcons.arrow_turn_up_right,
             label: snapshot.hasRoute
                 ? '${snapshot.routePointCount} pts'
                 : 'No route yet',

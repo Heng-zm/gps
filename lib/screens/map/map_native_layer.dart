@@ -3,11 +3,7 @@
 part of 'map_screen.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// NATIVE MAPBOX LAYER
-// ─────────────────────────────────────────────────────────────────────────────
-
-// ─────────────────────────────────────────────────────────────────────────────
-// NATIVE MAPBOX LAYER — Android/mobile only. Web uses flutter_map fallback.
+// NATIVE MAPBOX LAYER — iOS / Android Hardware Accelerated GPU Line Layer
 // ─────────────────────────────────────────────────────────────────────────────
 
 int _mapColorToInt(Color color) => color.value;
@@ -43,8 +39,13 @@ class _NativeMapboxLayerState extends State<_NativeMapboxLayer> {
   mb.PolylineAnnotationManager? _routeCoreManager;
   mb.PolylineAnnotationManager? _plannedOuterManager;
   mb.PolylineAnnotationManager? _plannedCoreManager;
+
   bool _styleLoaded = false;
   bool _disposed = false;
+  bool _routeGeoJsonInitialized = false;
+  bool _plannedGeoJsonInitialized = false;
+
+  DateTime? _lastCameraMoveAt;
 
   @override
   void didUpdateWidget(covariant _NativeMapboxLayer oldWidget) {
@@ -59,10 +60,19 @@ class _NativeMapboxLayerState extends State<_NativeMapboxLayer> {
       unawaited(_configureStandardStyle());
     }
 
-    if (!identical(oldWidget.route, widget.route) ||
-        oldWidget.replayIndex != widget.replayIndex ||
-        oldWidget.plannedRoute != widget.plannedRoute) {
+    // High performance optimization: route geometry only rebuilds when the actual
+    // route or planned route data changes. It does NOT rebuild during replay scrubber ticks!
+    final bool routeGeometryChanged = !identical(oldWidget.route, widget.route) ||
+        oldWidget.plannedRoute != widget.plannedRoute;
+
+    if (routeGeometryChanged) {
       unawaited(_rebuildRoutes());
+    }
+
+    // Camera movement during replay or live tracking
+    if (routeGeometryChanged ||
+        oldWidget.replayIndex != widget.replayIndex ||
+        oldWidget.followMode != widget.followMode) {
       unawaited(_moveCamera());
     }
   }
@@ -108,6 +118,9 @@ class _NativeMapboxLayerState extends State<_NativeMapboxLayer> {
     if (map == null) return;
 
     _styleLoaded = false;
+    _routeGeoJsonInitialized = false;
+    _plannedGeoJsonInitialized = false;
+
     try {
       await map.loadStyleURI(_styleUri(widget.mapStyle));
       if (!mounted || _disposed) return;
@@ -158,51 +171,203 @@ class _NativeMapboxLayerState extends State<_NativeMapboxLayer> {
 
   Future<void> _rebuildRoutes() async {
     final mb.MapboxMap? map = _map;
-    if (map == null || !_styleLoaded) return;
+    if (map == null || !_styleLoaded || _disposed) return;
+
+    try {
+      final PlannedRoute? planned = widget.plannedRoute;
+      if (planned != null && planned.points.length > 1) {
+        final bool gpuPlannedOk = await _updateGeoJsonLineLayer(
+          sourceId: 'map-planned-source',
+          casingLayerId: 'map-planned-casing',
+          coreLayerId: 'map-planned-core',
+          points: planned.points,
+          color: widget.mapStyle.routeColor,
+          casingWidth: 11.0,
+          coreWidth: 5.2,
+        );
+        if (!gpuPlannedOk) {
+          await _fallbackPlannedAnnotations(planned.points);
+        }
+      } else {
+        await _clearGeoJsonLineLayer('map-planned-source');
+      }
+
+      if (widget.route.smoothedPoints.length > 1) {
+        final bool gpuRouteOk = await _updateGeoJsonLineLayer(
+          sourceId: 'map-route-source',
+          casingLayerId: 'map-route-casing',
+          coreLayerId: 'map-route-core',
+          points: widget.route.smoothedPoints,
+          color: widget.mapStyle.routeColor,
+          casingWidth: 13.0,
+          coreWidth: 6.5,
+        );
+        if (!gpuRouteOk) {
+          await _fallbackRouteAnnotations(widget.route.smoothedPoints);
+        }
+      } else {
+        await _clearGeoJsonLineLayer('map-route-source');
+      }
+    } catch (error, stackTrace) {
+      debugPrint('Native Mapbox route draw error: $error\n$stackTrace');
+    }
+  }
+
+  Future<bool> _updateGeoJsonLineLayer({
+    required String sourceId,
+    required String casingLayerId,
+    required String coreLayerId,
+    required List<LatLng> points,
+    required Color color,
+    required double casingWidth,
+    required double coreWidth,
+  }) async {
+    final mb.MapboxMap? map = _map;
+    if (map == null || !_styleLoaded || _disposed) return false;
+
+    try {
+      final bool sourceExists = await map.style.styleSourceExists(sourceId);
+      if (!sourceExists) {
+        await map.style.addSource(
+          mb.GeoJsonSource(
+            id: sourceId,
+            data: jsonEncode(<String, dynamic>{
+              'type': 'FeatureCollection',
+              'features': <dynamic>[],
+            }),
+          ),
+        );
+      }
+
+      final bool casingExists = await map.style.styleLayerExists(casingLayerId);
+      if (!casingExists) {
+        await map.style.addLayer(
+          mb.LineLayer(
+            id: casingLayerId,
+            sourceId: sourceId,
+            lineColor: Colors.white.value,
+            lineWidth: casingWidth,
+            lineOpacity: 0.88,
+            lineJoin: mb.LineJoin.ROUND,
+            lineCap: mb.LineCap.ROUND,
+          ),
+        );
+      }
+
+      final bool coreExists = await map.style.styleLayerExists(coreLayerId);
+      if (!coreExists) {
+        await map.style.addLayer(
+          mb.LineLayer(
+            id: coreLayerId,
+            sourceId: sourceId,
+            lineColor: color.value,
+            lineWidth: coreWidth,
+            lineOpacity: 0.98,
+            lineJoin: mb.LineJoin.ROUND,
+            lineCap: mb.LineCap.ROUND,
+          ),
+        );
+      }
+
+      final List<List<double>> coords = points
+          .where(_isValidLatLng)
+          .map((LatLng p) => <double>[p.longitude, p.latitude])
+          .toList(growable: false);
+
+      final Map<String, dynamic> geoJson = <String, dynamic>{
+        'type': 'FeatureCollection',
+        'features': coords.length < 2
+            ? <dynamic>[]
+            : <dynamic>[
+                <String, dynamic>{
+                  'type': 'Feature',
+                  'geometry': <String, dynamic>{
+                    'type': 'LineString',
+                    'coordinates': coords,
+                  },
+                },
+              ],
+      };
+
+      await map.style.setStyleSourceProperty(
+        sourceId,
+        'data',
+        jsonEncode(geoJson),
+      );
+      return true;
+    } catch (e) {
+      debugPrint('Native Mapbox GPU LineLayer update failed for $sourceId: $e');
+      return false;
+    }
+  }
+
+  Future<void> _clearGeoJsonLineLayer(String sourceId) async {
+    final mb.MapboxMap? map = _map;
+    if (map == null || !_styleLoaded || _disposed) return;
+    try {
+      final bool sourceExists = await map.style.styleSourceExists(sourceId);
+      if (sourceExists) {
+        await map.style.setStyleSourceProperty(
+          sourceId,
+          'data',
+          jsonEncode(<String, dynamic>{
+            'type': 'FeatureCollection',
+            'features': <dynamic>[],
+          }),
+        );
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _fallbackPlannedAnnotations(List<LatLng> points) async {
+    final mb.MapboxMap? map = _map;
+    if (map == null || _disposed || !mounted) return;
 
     try {
       _plannedOuterManager ??=
           await map.annotations.createPolylineAnnotationManager();
-      if (!mounted || _disposed) return;
       _plannedCoreManager ??=
           await map.annotations.createPolylineAnnotationManager();
-      if (!mounted || _disposed) return;
-      _routeOuterManager ??=
-          await map.annotations.createPolylineAnnotationManager();
-      if (!mounted || _disposed) return;
-      _routeCoreManager ??=
-          await map.annotations.createPolylineAnnotationManager();
-      if (!mounted || _disposed) return;
 
       await _plannedOuterManager?.deleteAll();
       await _plannedCoreManager?.deleteAll();
+
+      await _drawLine(
+        outer: _plannedOuterManager,
+        core: _plannedCoreManager,
+        points: points,
+        color: widget.mapStyle.routeColor,
+        outerWidth: 11,
+        coreWidth: 5.2,
+      );
+    } catch (e) {
+      debugPrint('Fallback planned annotations error: $e');
+    }
+  }
+
+  Future<void> _fallbackRouteAnnotations(List<LatLng> points) async {
+    final mb.MapboxMap? map = _map;
+    if (map == null || _disposed || !mounted) return;
+
+    try {
+      _routeOuterManager ??=
+          await map.annotations.createPolylineAnnotationManager();
+      _routeCoreManager ??=
+          await map.annotations.createPolylineAnnotationManager();
+
       await _routeOuterManager?.deleteAll();
       await _routeCoreManager?.deleteAll();
 
-      final PlannedRoute? planned = widget.plannedRoute;
-      if (planned != null && planned.points.length > 1) {
-        await _drawLine(
-          outer: _plannedOuterManager,
-          core: _plannedCoreManager,
-          points: planned.points,
-          color: widget.mapStyle.routeColor,
-          outerWidth: 11,
-          coreWidth: 5.2,
-        );
-      }
-
-      if (widget.route.smoothedPoints.length > 1) {
-        await _drawLine(
-          outer: _routeOuterManager,
-          core: _routeCoreManager,
-          points: widget.route.smoothedPoints,
-          color: widget.mapStyle.routeColor,
-          outerWidth: 13,
-          coreWidth: 6.5,
-        );
-      }
-    } catch (error, stackTrace) {
-      debugPrint('Native Mapbox route draw error: $error\n$stackTrace');
+      await _drawLine(
+        outer: _routeOuterManager,
+        core: _routeCoreManager,
+        points: points,
+        color: widget.mapStyle.routeColor,
+        outerWidth: 13,
+        coreWidth: 6.5,
+      );
+    } catch (e) {
+      debugPrint('Fallback route annotations error: $e');
     }
   }
 
@@ -248,7 +413,17 @@ class _NativeMapboxLayerState extends State<_NativeMapboxLayer> {
 
   Future<void> _moveCamera({bool force = false}) async {
     final mb.MapboxMap? map = _map;
-    if (map == null || widget.route.rawPoints.isEmpty) return;
+    if (map == null || widget.route.rawPoints.isEmpty || _disposed || !mounted) {
+      return;
+    }
+
+    final DateTime now = DateTime.now();
+    if (!force && _lastCameraMoveAt != null) {
+      if (now.difference(_lastCameraMoveAt!) < const Duration(milliseconds: 90)) {
+        return;
+      }
+    }
+    _lastCameraMoveAt = now;
 
     final LatLng? target = widget.isLive
         ? widget.route.rawPoints.last
@@ -265,7 +440,7 @@ class _NativeMapboxLayerState extends State<_NativeMapboxLayer> {
           pitch: widget.followMode ? 48 : 0,
           bearing: widget.followMode ? -widget.route.currentBearing : 0,
         ),
-        mb.MapAnimationOptions(duration: force ? 650 : 420, startDelay: 0),
+        mb.MapAnimationOptions(duration: force ? 650 : 280, startDelay: 0),
       );
     } catch (error) {
       debugPrint('Native Mapbox camera error: $error');
@@ -279,7 +454,6 @@ class _NativeMapboxLayerState extends State<_NativeMapboxLayer> {
   }
 
   static String _styleUri(MapStyle style) => style.styleUri;
-
 
   @override
   void dispose() {
@@ -316,6 +490,8 @@ class _NativeMapboxLayerState extends State<_NativeMapboxLayer> {
       onStyleLoadedListener: (_) {
         if (!mounted || _disposed) return;
         _styleLoaded = true;
+        _routeGeoJsonInitialized = false;
+        _plannedGeoJsonInitialized = false;
         unawaited(_configureStandardStyle());
         unawaited(_rebuildRoutes());
         unawaited(_moveCamera(force: true));

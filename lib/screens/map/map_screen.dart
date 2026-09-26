@@ -1,6 +1,7 @@
 // ignore_for_file: unused_element, deprecated_member_use, prefer_final_fields, prefer_const_constructors
 
 import 'dart:async';
+import 'dart:convert';
 import 'dart:math' as math;
 import 'dart:ui' as ui;
 
@@ -1262,7 +1263,7 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
             value: DirectionsProfile.cycling,
             label: DirectionsProfile.cycling.label,
             shortLabel: 'Cycling',
-            icon: Icons.directions_bike_rounded,
+            icon: CupertinoIcons.bicycle,
           ),
         ],
         initialPreset: _mapboxPreset,
@@ -1623,7 +1624,7 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
                   setState(() => _showSpeedGradient = !_showSpeedGradient);
                 },
                 child: _GlassIconBox(
-                  icon: Icons.speed_rounded,
+                  icon: CupertinoIcons.speedometer,
                   size: iconSize,
                   active: _showSpeedGradient,
                   activeColor: _kBlue,

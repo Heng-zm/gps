@@ -371,7 +371,7 @@ class _MapFirstBottomDockState extends State<_MapFirstBottomDock> {
         Expanded(
           child: _DockActionButton(
             label: 'AI',
-            icon: Icons.auto_awesome_rounded,
+            icon: CupertinoIcons.sparkles,
             height: compact ? 43 : 46,
             onTap: widget.onAiTap,
           ),

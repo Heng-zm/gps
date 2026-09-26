@@ -1831,7 +1831,7 @@ class _BottomDock extends StatelessWidget {
                   const SizedBox(width: 10),
                   Expanded(
                     child: _SecondaryButton(
-                      icon: Icons.auto_awesome_rounded,
+                      icon: CupertinoIcons.sparkles,
                       label: 'ASK AI',
                       onTap: onAiTap,
                     ),
@@ -2109,7 +2109,7 @@ class _EmptyCard extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           children: <Widget>[
             Icon(
-              Icons.cloud_off_rounded,
+              CupertinoIcons.cloud_slash_fill,
               color: Colors.white.withValues(alpha: 0.22),
               size: 28,
             ),

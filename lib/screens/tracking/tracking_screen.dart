@@ -129,7 +129,7 @@ extension _MapFollowModeLabel on _MapFollowMode {
       case _MapFollowMode.followMe:
         return CupertinoIcons.location_fill;
       case _MapFollowMode.headingUp:
-        return Icons.navigation_rounded;
+        return CupertinoIcons.location_north_fill;
       case _MapFollowMode.northUp:
         return CupertinoIcons.compass_fill;
       case _MapFollowMode.freeView:
@@ -1174,7 +1174,7 @@ class _TrackingScreenState extends State<TrackingScreen>
               value: DirectionsProfile.cycling,
               label: DirectionsProfile.cycling.label,
               shortLabel: 'Cycling',
-              icon: Icons.directions_bike_rounded,
+              icon: CupertinoIcons.bicycle,
             ),
           ],
           initialPreset: _mapPresetN.value,

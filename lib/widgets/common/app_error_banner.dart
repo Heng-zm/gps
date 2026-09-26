@@ -1,3 +1,4 @@
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 
 import '../../theme/app_theme.dart';
@@ -9,7 +10,7 @@ class AppErrorBanner {
     BuildContext context,
     String message, {
     Color color = AppColors.red,
-    IconData icon = Icons.error_rounded,
+    IconData icon = CupertinoIcons.exclamationmark_circle_fill,
     Duration duration = const Duration(seconds: 3),
   }) {
     if (!context.mounted) return;
@@ -60,7 +61,7 @@ class AppErrorBanner {
       context,
       message,
       color: AppColors.green,
-      icon: Icons.check_circle_rounded,
+      icon: CupertinoIcons.checkmark_circle_fill,
     );
   }
 
@@ -69,7 +70,7 @@ class AppErrorBanner {
       context,
       message,
       color: AppColors.blueSoft,
-      icon: Icons.info_rounded,
+      icon: CupertinoIcons.info_circle_fill,
     );
   }
 }
