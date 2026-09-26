@@ -1183,7 +1183,7 @@ class _TrackingScreenState extends State<TrackingScreen>
               value: DirectionsProfile.cycling,
               label: DirectionsProfile.cycling.label,
               shortLabel: 'Cycling',
-              icon: CupertinoIcons.bicycle,
+              icon: Icons.directions_bike,
             ),
           ],
           initialPreset: _mapPresetN.value,

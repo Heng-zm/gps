@@ -1263,7 +1263,7 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
             value: DirectionsProfile.cycling,
             label: DirectionsProfile.cycling.label,
             shortLabel: 'Cycling',
-            icon: CupertinoIcons.bicycle,
+            icon: Icons.directions_bike,
           ),
         ],
         initialPreset: _mapboxPreset,

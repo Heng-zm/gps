@@ -36,7 +36,7 @@ class MagneticRadarReading {
   final List<double> historyWaterfall;
   final DateTime timestamp;
 
-  static const MagneticRadarReading zero = MagneticRadarReading(
+  static final MagneticRadarReading zero = MagneticRadarReading(
     totalMicroTesla: 45.0,
     xMicroTesla: 18.0,
     yMicroTesla: -22.0,
@@ -46,10 +46,8 @@ class MagneticRadarReading {
     peakMicroTesla: 45.0,
     confidenceScore: 95,
     historyWaterfall: <double>[],
-    timestamp: null ?? _kZeroTime,
+    timestamp: DateTime.fromMillisecondsSinceEpoch(0),
   );
-
-  static final DateTime _kZeroTime = DateTime(2026, 1, 1);
 }
 
 /// Service that reads real hardware 3-axis Magnetometer sensors to detect

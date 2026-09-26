@@ -43,7 +43,7 @@ class GForceReading {
 
   final DateTime timestamp;
 
-  static const GForceReading zero = GForceReading(
+  static final GForceReading zero = GForceReading(
     lateralG: 0.0,
     longitudinalG: 0.0,
     verticalG: 1.0,
@@ -52,10 +52,8 @@ class GForceReading {
     peakLateralG: 0.0,
     peakBrakingG: 0.0,
     peakAccelG: 0.0,
-    timestamp: null ?? _kZeroTime,
+    timestamp: DateTime.fromMillisecondsSinceEpoch(0),
   );
-
-  static final DateTime _kZeroTime = DateTime(2026, 1, 1);
 }
 
 /// Service that captures device accelerometer & gyroscope to compute

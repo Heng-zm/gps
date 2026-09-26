@@ -2108,7 +2108,7 @@ class _EmptyCard extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           children: <Widget>[
             Icon(
-              CupertinoIcons.cloud_slash_fill,
+              Icons.cloud_off_rounded,
               color: Colors.white.withValues(alpha: 0.22),
               size: 28,
             ),
