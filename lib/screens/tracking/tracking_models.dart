@@ -231,8 +231,7 @@ class _TempDisplay extends StatelessWidget {
 
         String value = '--';
         if (weather != null) {
-          final double temp =
-              metric ? weather.temperature : (weather.temperature * 9 / 5) + 32;
+          final double temp = weather.temperature;
           value = temp.isFinite ? temp.round().toString() : '--';
         }
 

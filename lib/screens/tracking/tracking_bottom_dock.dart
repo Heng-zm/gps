@@ -3,9 +3,7 @@
 part of 'tracking_screen.dart';
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// BOTTOM DOCK
-// UX pass: compact drag behavior, low rebuild cost via ValueListenableBuilder,
-// and map-first action controls remain isolated in this part file.
+// BOTTOM DOCK — Apple HIG Minimalist Redesign
 // ═══════════════════════════════════════════════════════════════════════════════
 
 class _MapFirstBottomDock extends StatefulWidget {
@@ -68,10 +66,10 @@ class _MapFirstBottomDock extends StatefulWidget {
 }
 
 class _MapFirstBottomDockState extends State<_MapFirstBottomDock> {
-  static const double _kMaxDockWidth = 430.0;
+  static const double _kMaxDockWidth = 440.0;
   static const double _kMinDockWidth = 300.0;
-  static const double _kDismissDragDistance = 34.0;
-  static const double _kDismissVelocity = 360.0;
+  static const double _kDismissDragDistance = 30.0;
+  static const double _kDismissVelocity = 320.0;
 
   bool _collapsed = false;
   double _dragOffset = 0.0;
@@ -89,7 +87,7 @@ class _MapFirstBottomDockState extends State<_MapFirstBottomDock> {
 
   void _handleVerticalDragUpdate(DragUpdateDetails details) {
     final double next = (_dragOffset + (details.primaryDelta ?? 0.0))
-        .clamp(-72.0, 72.0)
+        .clamp(-60.0, 60.0)
         .toDouble();
     if (next == _dragOffset) return;
     setState(() => _dragOffset = next);
@@ -116,11 +114,11 @@ class _MapFirstBottomDockState extends State<_MapFirstBottomDock> {
     final EdgeInsets safe = MediaQuery.paddingOf(context);
     final Size screen = MediaQuery.sizeOf(context);
     final bool compact = screen.width < 360.0;
-    final double sideInset = compact ? 10.0 : 12.0;
+    final double sideInset = compact ? 10.0 : 14.0;
     final double bottom = math.max(safe.bottom + 8.0, 12.0);
     final double dragShift = _collapsed
-        ? _dragOffset.clamp(-40.0, 22.0).toDouble()
-        : _dragOffset.clamp(-18.0, 54.0).toDouble();
+        ? _dragOffset.clamp(-30.0, 16.0).toDouble()
+        : _dragOffset.clamp(-16.0, 40.0).toDouble();
 
     return Positioned(
       left: sideInset,
@@ -139,13 +137,13 @@ class _MapFirstBottomDockState extends State<_MapFirstBottomDock> {
               onVerticalDragUpdate: _handleVerticalDragUpdate,
               onVerticalDragEnd: _handleVerticalDragEnd,
               child: AnimatedSlide(
-                offset: Offset(0, dragShift / 220.0),
+                offset: Offset(0, dragShift / 180.0),
                 duration: _dragOffset == 0.0
-                    ? const Duration(milliseconds: 260)
+                    ? const Duration(milliseconds: 240)
                     : Duration.zero,
                 curve: Curves.easeOutCubic,
                 child: AnimatedSize(
-                  duration: const Duration(milliseconds: 280),
+                  duration: const Duration(milliseconds: 260),
                   curve: Curves.easeOutCubic,
                   alignment: Alignment.bottomCenter,
                   child: _collapsed
@@ -161,290 +159,494 @@ class _MapFirstBottomDockState extends State<_MapFirstBottomDock> {
   }
 
   Widget _buildExpandedDock(BuildContext context, {required bool compact}) {
-    return AppGlassCard(
-      padding: EdgeInsets.fromLTRB(
-        compact ? 10 : 12,
-        7,
-        compact ? 10 : 12,
-        compact ? 10 : 12,
-      ),
-      borderRadius: 28,
-      color: _kSurface.withValues(alpha: 0.90),
-      borderColor: Colors.white.withValues(alpha: 0.10),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: <Widget>[
-          _DockDragHandle(
-            collapsed: false,
-            onTap: _toggleCollapsed,
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(24),
+      child: BackdropFilter(
+        filter: ui.ImageFilter.blur(sigmaX: 24, sigmaY: 24),
+        child: Container(
+          padding: EdgeInsets.fromLTRB(
+            compact ? 12 : 14,
+            6,
+            compact ? 12 : 14,
+            compact ? 12 : 14,
           ),
-          const SizedBox(height: 7),
-          _buildMetricRow(compact: compact),
-          ValueListenableBuilder<bool>(
-            valueListenable: widget.autoPausedN,
-            builder: (_, bool autoPaused, __) {
-              if (!autoPaused) return const SizedBox.shrink();
+          decoration: BoxDecoration(
+            color: Colors.black.withValues(alpha: 0.65),
+            borderRadius: BorderRadius.circular(24),
+            border: Border.all(
+              color: Colors.white.withValues(alpha: 0.12),
+              width: 0.8,
+            ),
+            boxShadow: <BoxShadow>[
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.35),
+                blurRadius: 20,
+                offset: const Offset(0, 6),
+              ),
+            ],
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: <Widget>[
+              // Subtle drag handle
+              _DockDragHandle(
+                collapsed: false,
+                onTap: _toggleCollapsed,
+              ),
+              const SizedBox(height: 6),
 
-              return Padding(
-                padding: const EdgeInsets.only(top: 9),
-                child: _AutoPauseBanner(
-                  stoppedN: widget.autoPauseStoppedN,
-                ),
-              );
-            },
+              // Auto-Pause alert banner if active
+              ValueListenableBuilder<bool>(
+                valueListenable: widget.autoPausedN,
+                builder: (_, bool autoPaused, __) {
+                  if (!autoPaused) return const SizedBox.shrink();
+                  return Padding(
+                    padding: const EdgeInsets.only(bottom: 8),
+                    child: _AutoPauseBanner(
+                      stoppedN: widget.autoPauseStoppedN,
+                    ),
+                  );
+                },
+              ),
+
+              // Metrics strip (Distance | Time | Avg Speed)
+              _buildMetricsStrip(context, compact: compact),
+              const SizedBox(height: 10),
+
+              // Primary Action Row
+              _buildActionRow(context, compact: compact),
+            ],
           ),
-          SizedBox(height: compact ? 8 : 10),
-          _buildPrimaryActionRow(compact: compact),
-          SizedBox(height: compact ? 7 : 8),
-          _buildSecondaryActionRow(compact: compact),
-        ],
+        ),
       ),
     );
   }
 
   Widget _buildCollapsedDock(BuildContext context, {required bool compact}) {
-    return AppGlassCard(
-      padding: EdgeInsets.fromLTRB(
-        compact ? 10 : 12,
-        7,
-        compact ? 10 : 12,
-        compact ? 9 : 10,
-      ),
-      borderRadius: 26,
-      color: _kSurface.withValues(alpha: 0.92),
-      borderColor: Colors.white.withValues(alpha: 0.11),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: <Widget>[
-          _DockDragHandle(
-            collapsed: true,
-            onTap: _toggleCollapsed,
-          ),
-          const SizedBox(height: 7),
-          Row(
-            children: <Widget>[
-              Expanded(
-                child: ValueListenableBuilder<int>(
-                  valueListenable: widget.tickN,
-                  builder: (_, __, ___) {
-                    return _CollapsedTripChip(
-                      distance: widget.settings.toDisplayDistance(
-                        widget.gps.currentDistanceMiles,
-                      ),
-                      distanceUnit: widget.settings.distanceUnit,
-                      elapsed: widget.gps.currentTripTime.inSeconds,
-                    );
-                  },
-                ),
-              ),
-              const SizedBox(width: 8),
-              SizedBox(
-                width: compact ? 116 : 132,
-                child: ValueListenableBuilder<bool>(
-                  valueListenable: widget.trackingN,
-                  builder: (_, bool tracking, __) {
-                    return ValueListenableBuilder<bool>(
-                      valueListenable: widget.actionBusyN,
-                      builder: (_, bool busy, __) {
-                        if (busy) return const _BusyTrackingButton();
-
-                        return AppActionButton(
-                          label: tracking ? 'Stop' : 'Start',
-                          icon: tracking
-                              ? CupertinoIcons.stop_fill
-                              : CupertinoIcons.play_fill,
-                          primary: true,
-                          height: 44,
-                          onTap: widget.onAction,
-                        );
-                      },
-                    );
-                  },
-                ),
-              ),
-              const SizedBox(width: 8),
-              _DockRoundIconButton(
-                icon: CupertinoIcons.chevron_up,
-                semanticLabel: 'Open controls',
-                onTap: () => _setCollapsed(false),
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(22),
+      child: BackdropFilter(
+        filter: ui.ImageFilter.blur(sigmaX: 20, sigmaY: 20),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          decoration: BoxDecoration(
+            color: Colors.black.withValues(alpha: 0.75),
+            borderRadius: BorderRadius.circular(22),
+            border: Border.all(
+              color: Colors.white.withValues(alpha: 0.12),
+              width: 0.8,
+            ),
+            boxShadow: <BoxShadow>[
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.3),
+                blurRadius: 14,
+                offset: const Offset(0, 4),
               ),
             ],
           ),
-        ],
+          child: Row(
+            children: <Widget>[
+              // Expand button
+              CupertinoButton(
+                padding: EdgeInsets.zero,
+                minSize: 32,
+                onPressed: () => _setCollapsed(false),
+                child: const Icon(
+                  CupertinoIcons.chevron_up,
+                  size: 16,
+                  color: Colors.white70,
+                ),
+              ),
+              const SizedBox(width: 4),
+
+              // Collapsed Trip stats chip
+              Expanded(
+                child: GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: () => _setCollapsed(false),
+                  child: ValueListenableBuilder<int>(
+                    valueListenable: widget.tickN,
+                    builder: (_, __, ___) {
+                      return _CollapsedTripChip(
+                        distance: widget.settings.toDisplayDistance(
+                          widget.gps.currentDistanceMiles,
+                        ),
+                        distanceUnit: widget.settings.distanceUnit,
+                        elapsed: widget.gps.currentTripTime.inSeconds,
+                      );
+                    },
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+
+              // Quick action button
+              ValueListenableBuilder<bool>(
+                valueListenable: widget.trackingN,
+                builder: (_, bool tracking, __) {
+                  return ValueListenableBuilder<bool>(
+                    valueListenable: widget.actionBusyN,
+                    builder: (_, bool busy, __) {
+                      if (busy) {
+                        return const SizedBox(
+                          width: 38,
+                          height: 38,
+                          child: Center(
+                            child: CupertinoActivityIndicator(
+                              color: Colors.white,
+                              radius: 9,
+                            ),
+                          ),
+                        );
+                      }
+                      return _PressableScale(
+                        onTap: widget.onAction,
+                        child: Container(
+                          width: 38,
+                          height: 38,
+                          decoration: BoxDecoration(
+                            gradient: tracking
+                                ? const LinearGradient(
+                                    colors: <Color>[
+                                      Color(0xFFFF3B30),
+                                      Color(0xFFD70015),
+                                    ],
+                                  )
+                                : const LinearGradient(
+                                    colors: <Color>[
+                                      Color(0xFF34C759),
+                                      Color(0xFF28CD41),
+                                    ],
+                                  ),
+                            borderRadius: BorderRadius.circular(12),
+                            boxShadow: <BoxShadow>[
+                              BoxShadow(
+                                color: (tracking
+                                        ? const Color(0xFFFF3B30)
+                                        : const Color(0xFF34C759))
+                                    .withValues(alpha: 0.4),
+                                blurRadius: 8,
+                                offset: const Offset(0, 2),
+                              ),
+                            ],
+                          ),
+                          child: Icon(
+                            tracking
+                                ? CupertinoIcons.stop_fill
+                                : CupertinoIcons.play_fill,
+                            color: Colors.white,
+                            size: 17,
+                          ),
+                        ),
+                      );
+                    },
+                  );
+                },
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
 
-  Widget _buildMetricRow({required bool compact}) {
+  Widget _buildMetricsStrip(BuildContext context, {required bool compact}) {
     return ValueListenableBuilder<int>(
       valueListenable: widget.tickN,
-      builder: (_, __, ___) {
-        return Row(
-          children: <Widget>[
-            Expanded(
-              child: _DockMetricCard(
-                label: 'Distance',
-                value:
-                    '${widget.settings.toDisplayDistance(widget.gps.currentDistanceMiles).toStringAsFixed(1)} ${widget.settings.distanceUnit}',
-                icon: CupertinoIcons.map_fill,
-                color: _kBlueSoft,
-              ),
+      builder: (BuildContext context, _, __) {
+        final double dist = widget.settings
+            .toDisplayDistance(widget.gps.currentDistanceMiles);
+        final String distStr = dist.toStringAsFixed(1);
+        final String distUnit = widget.settings.distanceUnit;
+
+        final bool isAutoPaused = widget.autoPausedN.value;
+        final int elapsedSecs = isAutoPaused
+            ? widget.autoPauseStoppedN.value
+            : widget.gps.currentTripTime.inSeconds;
+        final String timeStr = _MapFirstBottomDock._formatSeconds(elapsedSecs);
+
+        final double avgSpeed =
+            widget.settings.toDisplaySpeed(widget.gps.currentAvgSpeedMph);
+        final String avgSpeedStr = avgSpeed >= 10.0
+            ? avgSpeed.round().toString()
+            : avgSpeed.toStringAsFixed(1);
+        final String speedUnit = widget.settings.speedUnit;
+
+        return Container(
+          padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 10),
+          decoration: BoxDecoration(
+            color: Colors.white.withValues(alpha: 0.05),
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(
+              color: Colors.white.withValues(alpha: 0.07),
             ),
-            SizedBox(width: compact ? 6 : 8),
-            Expanded(
-              child: ValueListenableBuilder<bool>(
-                valueListenable: widget.autoPausedN,
-                builder: (_, bool autoPaused, __) {
-                  return _DockMetricCard(
-                    label: autoPaused ? 'Paused' : 'Time',
-                    value: _MapFirstBottomDock._formatSeconds(
-                      autoPaused
-                          ? widget.autoPauseStoppedN.value
-                          : widget.gps.currentTripTime.inSeconds,
-                    ),
-                    icon: autoPaused
-                        ? CupertinoIcons.pause_fill
-                        : CupertinoIcons.timer,
-                    color: autoPaused ? _kBlueSoft : _kGreen,
-                  );
-                },
+          ),
+          child: Row(
+            children: <Widget>[
+              // Column 1: DISTANCE
+              Expanded(
+                child: _MetricColumn(
+                  label: 'DISTANCE',
+                  value: distStr,
+                  unit: distUnit,
+                  valueColor: Colors.white,
+                ),
               ),
-            ),
-            SizedBox(width: compact ? 6 : 8),
-            Expanded(
-              child: _DockMetricCard(
-                label: 'Avg',
-                value:
-                    '${widget.settings.toDisplaySpeed(widget.gps.currentAvgSpeedMph).round()} ${widget.settings.speedUnit}',
-                icon: CupertinoIcons.speedometer,
-                color: _kBlue,
+              Container(
+                width: 0.5,
+                height: 30,
+                color: Colors.white.withValues(alpha: 0.12),
               ),
-            ),
-          ],
+              // Column 2: TIME
+              Expanded(
+                child: _MetricColumn(
+                  label: isAutoPaused ? 'PAUSED' : 'TIME',
+                  value: timeStr,
+                  unit: null,
+                  valueColor: isAutoPaused ? _kBlueSoft : Colors.white,
+                ),
+              ),
+              Container(
+                width: 0.5,
+                height: 30,
+                color: Colors.white.withValues(alpha: 0.12),
+              ),
+              // Column 3: AVG SPEED
+              Expanded(
+                child: _MetricColumn(
+                  label: 'AVG SPEED',
+                  value: avgSpeedStr,
+                  unit: speedUnit,
+                  valueColor: Colors.white,
+                ),
+              ),
+            ],
+          ),
         );
       },
     );
   }
 
-  Widget _buildPrimaryActionRow({required bool compact}) {
-    return Row(
-      children: <Widget>[
-        Expanded(
-          child: ValueListenableBuilder<_MapFollowMode>(
-            valueListenable: widget.followModeN,
-            builder: (_, _MapFollowMode mode, __) {
-              return _DockActionButton(
-                label: mode.label,
-                icon: mode.icon,
-                height: compact ? 43 : 46,
-                onTap: widget.onFollowModeTap,
-              );
-            },
-          ),
-        ),
-        SizedBox(width: compact ? 6 : 8),
-        Expanded(
-          flex: 2,
-          child: ValueListenableBuilder<bool>(
-            valueListenable: widget.trackingN,
-            builder: (_, bool tracking, __) {
-              return ValueListenableBuilder<bool>(
-                valueListenable: widget.actionBusyN,
-                builder: (_, bool busy, __) {
-                  if (busy) return const _BusyTrackingButton();
+  Widget _buildActionRow(BuildContext context, {required bool compact}) {
+    return ValueListenableBuilder<bool>(
+      valueListenable: widget.trackingN,
+      builder: (_, bool tracking, __) {
+        return ValueListenableBuilder<bool>(
+          valueListenable: widget.actionBusyN,
+          builder: (_, bool busy, __) {
+            if (busy) {
+              return const _BusyTrackingButton();
+            }
 
-                  return AppActionButton(
-                    label: tracking ? 'Stop' : 'Start',
-                    icon: tracking
-                        ? CupertinoIcons.stop_fill
-                        : CupertinoIcons.play_fill,
-                    primary: true,
-                    height: compact ? 45 : 48,
-                    onTap: widget.onAction,
-                  );
-                },
+            if (!tracking) {
+              // Idle state: Clean, prominent Apple START TRIP button
+              return _DockPrimaryButton(
+                label: 'START TRIP',
+                icon: CupertinoIcons.play_fill,
+                gradient: const LinearGradient(
+                  colors: <Color>[Color(0xFF34C759), Color(0xFF28CD41)],
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                ),
+                shadowColor: const Color(0xFF34C759).withValues(alpha: 0.35),
+                height: 48,
+                onTap: widget.onAction,
               );
-            },
-          ),
-        ),
-        SizedBox(width: compact ? 6 : 8),
-        Expanded(
-          child: _DockActionButton(
-            label: 'AI',
-            icon: CupertinoIcons.sparkles,
-            height: compact ? 43 : 46,
-            onTap: widget.onAiTap,
-          ),
-        ),
-      ],
+            }
+
+            // Tracking state: Follow/Recenter button + STOP TRIP button
+            return Row(
+              children: <Widget>[
+                // Map Recenter / Follow Mode toggle
+                ValueListenableBuilder<_MapFollowMode>(
+                  valueListenable: widget.followModeN,
+                  builder: (_, _MapFollowMode mode, __) {
+                    final bool isCentered = mode != _MapFollowMode.freeView;
+                    return _PressableScale(
+                      onTap: widget.onFollowModeTap,
+                      child: Container(
+                        width: 48,
+                        height: 48,
+                        decoration: BoxDecoration(
+                          color: isCentered
+                              ? _kBlue.withValues(alpha: 0.25)
+                              : Colors.white.withValues(alpha: 0.08),
+                          borderRadius: BorderRadius.circular(16),
+                          border: Border.all(
+                            color: isCentered
+                                ? _kBlue.withValues(alpha: 0.5)
+                                : Colors.white.withValues(alpha: 0.12),
+                          ),
+                        ),
+                        child: Icon(
+                          mode.icon,
+                          size: 20,
+                          color: isCentered ? Colors.white : Colors.white70,
+                        ),
+                      ),
+                    );
+                  },
+                ),
+                const SizedBox(width: 10),
+
+                // Expanded STOP TRIP button
+                Expanded(
+                  child: _DockPrimaryButton(
+                    label: 'STOP TRIP',
+                    icon: CupertinoIcons.stop_fill,
+                    gradient: const LinearGradient(
+                      colors: <Color>[Color(0xFFFF3B30), Color(0xFFD70015)],
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                    ),
+                    shadowColor: const Color(0xFFFF3B30).withValues(alpha: 0.35),
+                    height: 48,
+                    onTap: widget.onAction,
+                  ),
+                ),
+              ],
+            );
+          },
+        );
+      },
     );
   }
+}
 
-  Widget _buildSecondaryActionRow({required bool compact}) {
-    return Row(
+// ═══════════════════════════════════════════════════════════════════════════════
+// METRIC COLUMN (Apple Fitness HIG — No truncation)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+class _MetricColumn extends StatelessWidget {
+  const _MetricColumn({
+    required this.label,
+    required this.value,
+    this.unit,
+    this.valueColor = Colors.white,
+  });
+
+  final String label;
+  final String value;
+  final String? unit;
+  final Color valueColor;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.center,
       children: <Widget>[
-        Expanded(
-          child: _DockActionButton(
-            label: 'Map',
-            icon: CupertinoIcons.map_fill,
-            height: compact ? 37 : 40,
-            small: true,
-            onTap: widget.onMapTap,
+        Text(
+          label,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(
+            color: Colors.white.withValues(alpha: 0.48),
+            fontSize: 9.5,
+            fontWeight: FontWeight.w800,
+            letterSpacing: 0.7,
           ),
         ),
-        SizedBox(width: compact ? 6 : 8),
-        Expanded(
-          child: _DockActionButton(
-            label: 'Route',
-            icon: CupertinoIcons.location_north_line_fill,
-            height: compact ? 37 : 40,
-            small: true,
-            onTap: widget.onMapboxTap,
-          ),
-        ),
-        SizedBox(width: compact ? 6 : 8),
-        Expanded(
-          child: _DockActionButton(
-            label: 'AR',
-            icon: CupertinoIcons.camera_viewfinder,
-            height: compact ? 37 : 40,
-            small: true,
-            onTap: widget.onArTap,
-          ),
-        ),
-        SizedBox(width: compact ? 6 : 8),
-        Expanded(
-          child: _DockActionButton(
-            label: 'Weather',
-            icon: CupertinoIcons.cloud_sun_fill,
-            height: compact ? 37 : 40,
-            small: true,
-            onTap: widget.onWeatherTap,
-          ),
-        ),
-        SizedBox(width: compact ? 6 : 8),
-        Expanded(
-          child: ValueListenableBuilder<_TrackingPerformanceMode>(
-            valueListenable: widget.performanceModeN,
-            builder: (_, _TrackingPerformanceMode mode, __) {
-              return _DockActionButton(
-                label: mode == _TrackingPerformanceMode.performance
-                    ? 'Perf'
-                    : mode == _TrackingPerformanceMode.battery
-                        ? 'Save'
-                        : 'Bal',
-                icon: mode.icon,
-                height: compact ? 37 : 40,
-                small: true,
-                onTap: widget.onPerformanceTap,
-              );
-            },
+        const SizedBox(height: 3),
+        FittedBox(
+          fit: BoxFit.scaleDown,
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.baseline,
+            textBaseline: TextBaseline.alphabetic,
+            children: <Widget>[
+              Text(
+                value,
+                style: TextStyle(
+                  color: valueColor,
+                  fontSize: 20,
+                  fontWeight: FontWeight.w900,
+                  fontFeatures: const <ui.FontFeature>[
+                    ui.FontFeature.tabularFigures(),
+                  ],
+                ),
+              ),
+              if (unit != null && unit!.isNotEmpty) ...<Widget>[
+                const SizedBox(width: 3),
+                Text(
+                  unit!,
+                  style: TextStyle(
+                    color: Colors.white.withValues(alpha: 0.60),
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ],
+            ],
           ),
         ),
       ],
     );
   }
 }
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// DOCK PRIMARY BUTTON
+// ═══════════════════════════════════════════════════════════════════════════════
+
+class _DockPrimaryButton extends StatelessWidget {
+  const _DockPrimaryButton({
+    required this.label,
+    required this.icon,
+    required this.gradient,
+    required this.shadowColor,
+    required this.height,
+    required this.onTap,
+  });
+
+  final String label;
+  final IconData icon;
+  final Gradient gradient;
+  final Color shadowColor;
+  final double height;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return _PressableScale(
+      onTap: onTap,
+      child: Container(
+        height: height,
+        decoration: BoxDecoration(
+          gradient: gradient,
+          borderRadius: BorderRadius.circular(16),
+          boxShadow: <BoxShadow>[
+            BoxShadow(
+              color: shadowColor,
+              blurRadius: 14,
+              offset: const Offset(0, 4),
+            ),
+          ],
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: <Widget>[
+            Icon(icon, color: Colors.white, size: 18),
+            const SizedBox(width: 8),
+            Text(
+              label,
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 15,
+                fontWeight: FontWeight.w900,
+                letterSpacing: 0.6,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// DRAG HANDLE
+// ═══════════════════════════════════════════════════════════════════════════════
 
 class _DockDragHandle extends StatelessWidget {
   const _DockDragHandle({
@@ -459,49 +661,21 @@ class _DockDragHandle extends StatelessWidget {
   Widget build(BuildContext context) {
     return Semantics(
       button: true,
-      label: collapsed ? 'Open tracking controls' : 'Close tracking controls',
+      label: collapsed
+          ? 'Expand tracking controls'
+          : 'Minimize tracking controls',
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
         onTap: onTap,
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(24, 0, 24, 2),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: <Widget>[
-              AnimatedContainer(
-                duration: const Duration(milliseconds: 180),
-                width: collapsed ? 46 : 38,
-                height: 4,
-                decoration: BoxDecoration(
-                  color: Colors.white.withValues(alpha: collapsed ? 0.30 : 0.22),
-                  borderRadius: BorderRadius.circular(99),
-                ),
-              ),
-              const SizedBox(height: 5),
-              Row(
-                mainAxisSize: MainAxisSize.min,
-                children: <Widget>[
-                  Icon(
-                    collapsed
-                        ? CupertinoIcons.chevron_up
-                        : CupertinoIcons.chevron_down,
-                    size: 10,
-                    color: Colors.white.withValues(alpha: 0.36),
-                  ),
-                  const SizedBox(width: 5),
-                  _SafeText(
-                    collapsed ? 'SLIDE UP FOR CONTROLS' : 'SLIDE DOWN TO HIDE',
-                    maxLines: 1,
-                    style: TextStyle(
-                      color: Colors.white.withValues(alpha: 0.36),
-                      fontSize: 11,
-                      fontWeight: FontWeight.w900,
-                      letterSpacing: 0.8,
-                    ),
-                  ),
-                ],
-              ),
-            ],
+          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 3),
+          child: Container(
+            width: 36,
+            height: 4,
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.22),
+              borderRadius: BorderRadius.circular(99),
+            ),
           ),
         ),
       ),
@@ -509,92 +683,71 @@ class _DockDragHandle extends StatelessWidget {
   }
 }
 
-class _DockActionButton extends StatelessWidget {
-  const _DockActionButton({
-    required this.label,
-    required this.icon,
-    required this.height,
-    required this.onTap,
-    this.small = false,
+// ═══════════════════════════════════════════════════════════════════════════════
+// AUTO-PAUSE BANNER
+// ═══════════════════════════════════════════════════════════════════════════════
+
+class _AutoPauseBanner extends StatelessWidget {
+  const _AutoPauseBanner({
+    required this.stoppedN,
   });
 
-  final String label;
-  final IconData icon;
-  final double height;
-  final VoidCallback onTap;
-  final bool small;
+  final ValueNotifier<int> stoppedN;
 
   @override
   Widget build(BuildContext context) {
-    return _PressableScale(
-      onTap: onTap,
-      child: Container(
-        height: height,
-        padding: EdgeInsets.symmetric(horizontal: small ? 7 : 9),
-        decoration: BoxDecoration(
-          color: Colors.white.withValues(alpha: small ? 0.065 : 0.075),
-          borderRadius: BorderRadius.circular(small ? 15 : 17),
-          border: Border.all(
-            color: Colors.white.withValues(alpha: 0.09),
-          ),
-        ),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          mainAxisSize: MainAxisSize.min,
-          children: <Widget>[
-            Icon(icon, color: _kTextPrimary, size: small ? 13 : 15),
-            SizedBox(width: small ? 5 : 6),
-            Flexible(
-              child: _SafeText(
-                label,
-                maxLines: 1,
-                style: TextStyle(
-                  color: _kTextPrimary,
-                  fontSize: small ? 11 : 12,
-                  fontWeight: FontWeight.w900,
-                  letterSpacing: small ? 0.0 : 0.1,
+    return ValueListenableBuilder<int>(
+      valueListenable: stoppedN,
+      builder: (_, int seconds, __) {
+        return ClipRRect(
+          borderRadius: BorderRadius.circular(12),
+          child: BackdropFilter(
+            filter: ui.ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+            child: Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+              decoration: BoxDecoration(
+                color: _kBlueSoft.withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(
+                  color: _kBlueSoft.withValues(alpha: 0.22),
+                ),
+              ),
+              child: FittedBox(
+                fit: BoxFit.scaleDown,
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: <Widget>[
+                    const Icon(
+                      CupertinoIcons.pause_circle_fill,
+                      color: _kBlueSoft,
+                      size: 13,
+                    ),
+                    const SizedBox(width: 6),
+                    Text(
+                      'AUTO PAUSED · ${_MapFirstBottomDock._formatSeconds(seconds)} · MOVE TO RESUME',
+                      maxLines: 1,
+                      style: const TextStyle(
+                        color: _kBlueSoft,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w900,
+                        letterSpacing: 0.5,
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _DockRoundIconButton extends StatelessWidget {
-  const _DockRoundIconButton({
-    required this.icon,
-    required this.semanticLabel,
-    required this.onTap,
-  });
-
-  final IconData icon;
-  final String semanticLabel;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return Semantics(
-      button: true,
-      label: semanticLabel,
-      child: _PressableScale(
-        onTap: onTap,
-        child: Container(
-          width: 44,
-          height: 44,
-          decoration: BoxDecoration(
-            color: Colors.white.withValues(alpha: 0.075),
-            shape: BoxShape.circle,
-            border: Border.all(color: Colors.white.withValues(alpha: 0.10)),
           ),
-          child: Icon(icon, color: _kTextPrimary, size: 17),
-        ),
-      ),
+        );
+      },
     );
   }
 }
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// COLLAPSED TRIP CHIP
+// ═══════════════════════════════════════════════════════════════════════════════
 
 class _CollapsedTripChip extends StatelessWidget {
   const _CollapsedTripChip({
@@ -610,38 +763,41 @@ class _CollapsedTripChip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      height: 44,
-      padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 7),
+      height: 38,
+      padding: const EdgeInsets.symmetric(horizontal: 10),
       decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.055),
-        borderRadius: BorderRadius.circular(17),
+        color: Colors.white.withValues(alpha: 0.06),
+        borderRadius: BorderRadius.circular(12),
         border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
       ),
       child: Row(
         children: <Widget>[
-          const Icon(CupertinoIcons.map_fill, color: _kBlueSoft, size: 14),
-          const SizedBox(width: 7),
+          const Icon(CupertinoIcons.location_fill, color: _kBlueSoft, size: 14),
+          const SizedBox(width: 6),
           Expanded(
-            child: _SafeText(
+            child: Text(
               '${distance.toStringAsFixed(1)} $distanceUnit',
               maxLines: 1,
+              overflow: TextOverflow.ellipsis,
               style: const TextStyle(
-                color: _kTextPrimary,
-                fontSize: 12,
+                color: Colors.white,
+                fontSize: 13,
                 fontWeight: FontWeight.w900,
                 fontFeatures: <ui.FontFeature>[ui.FontFeature.tabularFigures()],
               ),
             ),
           ),
           const SizedBox(width: 8),
-          _SafeText(
+          Text(
             _MapFirstBottomDock._formatSeconds(elapsed),
             maxLines: 1,
-            style: const TextStyle(
-              color: _kTextMuted,
-              fontSize: 11,
+            style: TextStyle(
+              color: Colors.white.withValues(alpha: 0.65),
+              fontSize: 12,
               fontWeight: FontWeight.w800,
-              fontFeatures: <ui.FontFeature>[ui.FontFeature.tabularFigures()],
+              fontFeatures: const <ui.FontFeature>[
+                ui.FontFeature.tabularFigures(),
+              ],
             ),
           ),
         ],
@@ -650,30 +806,9 @@ class _CollapsedTripChip extends StatelessWidget {
   }
 }
 
-class _DockMetricCard extends StatelessWidget {
-  const _DockMetricCard({
-    required this.label,
-    required this.value,
-    required this.icon,
-    required this.color,
-  });
-
-  final String label;
-  final String value;
-  final IconData icon;
-  final Color color;
-
-  @override
-  Widget build(BuildContext context) {
-    return AppMetricCard(
-      label: label,
-      value: value,
-      icon: icon,
-      color: color,
-      compact: true,
-    );
-  }
-}
+// ═══════════════════════════════════════════════════════════════════════════════
+// BUSY INDICATOR
+// ═══════════════════════════════════════════════════════════════════════════════
 
 class _BusyTrackingButton extends StatelessWidget {
   const _BusyTrackingButton();
@@ -684,8 +819,8 @@ class _BusyTrackingButton extends StatelessWidget {
       height: 48,
       alignment: Alignment.center,
       decoration: BoxDecoration(
-        gradient: AppColors.blueButtonGradient,
-        borderRadius: BorderRadius.circular(18),
+        color: Colors.white.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(16),
       ),
       child: const CupertinoActivityIndicator(
         color: Colors.white,
@@ -694,165 +829,3 @@ class _BusyTrackingButton extends StatelessWidget {
     );
   }
 }
-
-class _AutoPauseBanner extends StatelessWidget {
-  const _AutoPauseBanner({
-    required this.stoppedN,
-  });
-
-  final ValueNotifier<int> stoppedN;
-
-  @override
-  Widget build(BuildContext context) {
-    return ValueListenableBuilder<int>(
-      valueListenable: stoppedN,
-      builder: (_, int seconds, __) {
-        return ClipRRect(
-          borderRadius: BorderRadius.circular(999),
-          child: BackdropFilter(
-            filter: ui.ImageFilter.blur(sigmaX: 12, sigmaY: 12),
-            child: Container(
-              width: double.infinity,
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-              decoration: BoxDecoration(
-                color: _kBlueSoft.withValues(alpha: 0.10),
-                borderRadius: BorderRadius.circular(999),
-                border: Border.all(
-                  color: _kBlueSoft.withValues(alpha: 0.18),
-                ),
-              ),
-              child: FittedBox(
-                fit: BoxFit.scaleDown,
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: <Widget>[
-                    const Icon(
-                      CupertinoIcons.pause_circle_fill,
-                      color: _kBlueSoft,
-                      size: 13,
-                    ),
-                    const SizedBox(width: 6),
-                    _SafeText(
-                      'AUTO PAUSED · ${_MapFirstBottomDock._formatSeconds(seconds)} · MOVE TO RESUME',
-                      maxLines: 1,
-                      style: const TextStyle(
-                        color: _kBlueSoft,
-                        fontSize: 11,
-                        fontWeight: FontWeight.w900,
-                        letterSpacing: 0.7,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
-        );
-      },
-    );
-  }
-}
-
-class _DockStat extends StatelessWidget {
-  const _DockStat({
-    required this.label,
-    required this.value,
-    required this.color,
-  });
-
-  final String label;
-  final String value;
-  final Color color;
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      children: <Widget>[
-        _SafeText(
-          value,
-          maxLines: 1,
-          style: const TextStyle(
-            color: _kTextPrimary,
-            fontSize: 15,
-            fontWeight: FontWeight.w900,
-            fontFeatures: <ui.FontFeature>[
-              ui.FontFeature.tabularFigures(),
-            ],
-          ),
-        ),
-        const SizedBox(height: 3),
-        _SafeText(
-          label,
-          maxLines: 1,
-          style: TextStyle(
-            color: color,
-            fontSize: 11,
-            fontWeight: FontWeight.w900,
-            letterSpacing: 0.8,
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-class _DockIconButton extends StatelessWidget {
-  const _DockIconButton({
-    required this.icon,
-    required this.label,
-    required this.onTap,
-    required this.color,
-    this.compact = false,
-  });
-
-  final IconData icon;
-  final String label;
-  final VoidCallback onTap;
-  final Color color;
-  final bool compact;
-
-  @override
-  Widget build(BuildContext context) {
-    return _PressableScale(
-      onTap: onTap,
-      child: Container(
-        height: compact ? 36 : 44,
-        decoration: BoxDecoration(
-          color: Colors.white.withValues(alpha: 0.055),
-          borderRadius: BorderRadius.circular(17),
-          border: Border.all(
-            color: Colors.white.withValues(alpha: 0.09),
-          ),
-          boxShadow: <BoxShadow>[
-            BoxShadow(
-              color: color.withValues(alpha: 0.045),
-              blurRadius: 10,
-              offset: const Offset(0, 4),
-            ),
-          ],
-        ),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: <Widget>[
-            Icon(icon, color: color, size: compact ? 12 : 14),
-            SizedBox(height: compact ? 2 : 3),
-            _SafeText(
-              label,
-              maxLines: 1,
-              style: TextStyle(
-                color: _kTextPrimary,
-                fontSize: compact ? 10.5 : 11,
-                fontWeight: FontWeight.w900,
-                letterSpacing: 0.45,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// SAFE TEXT — avoids Flutter Web EllipsisFragment hit-test assertion
-// ═══════════════════════════════════════════════════════════════════════════════

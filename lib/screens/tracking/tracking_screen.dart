@@ -1411,6 +1411,7 @@ class _TrackingScreenState extends State<TrackingScreen>
               coachTipN: _coachTipN,
               onPerformanceTap: _cyclePerformanceMode,
               settings: _settings,
+              onWeatherTap: _openFullWeather,
             ),
             _MapFirstSpeedHud(
               speedN: _speedN,
@@ -1421,7 +1422,14 @@ class _TrackingScreenState extends State<TrackingScreen>
               posN: _posN,
               settings: _settings,
             ),
-            _MapFirstFloatingModeBadge(followModeN: _followModeN),
+            _MapFirstFloatingActions(
+              followModeN: _followModeN,
+              onFollowModeTap: _cycleMapFollowMode,
+              onMapTap: _openMap,
+              onMapboxTap: _openMapboxControls,
+              onArTap: _openArRouteCamera,
+              onAiTap: _openAiAssistant,
+            ),
             _MapFirstBottomDock(
               tickN: _tickN,
               trackingN: _trackingN,

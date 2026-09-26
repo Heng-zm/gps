@@ -1,7 +1,7 @@
 part of 'tracking_screen.dart';
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// TOP HUD / SPEED HUD
+// TOP HUD / SPEED HUD / FLOATING ACTIONS — Apple HIG Minimalist Redesign
 // ═══════════════════════════════════════════════════════════════════════════════
 
 class _MapFirstGradientScrim extends StatelessWidget {
@@ -16,13 +16,12 @@ class _MapFirstGradientScrim extends StatelessWidget {
             begin: Alignment.topCenter,
             end: Alignment.bottomCenter,
             colors: <Color>[
-              Colors.black.withValues(alpha: 0.82),
-              Colors.black.withValues(alpha: 0.22),
+              Colors.black.withValues(alpha: 0.32),
               Colors.transparent,
-              Colors.black.withValues(alpha: 0.40),
-              Colors.black.withValues(alpha: 0.90),
+              Colors.transparent,
+              Colors.black.withValues(alpha: 0.38),
             ],
-            stops: const <double>[0.0, 0.18, 0.46, 0.72, 1.0],
+            stops: const <double>[0.0, 0.12, 0.82, 1.0],
           ),
         ),
       ),
@@ -39,21 +38,12 @@ class _MapFirstFloatingModeBadge extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final double bottom = MediaQuery.paddingOf(context).bottom + 168.0;
-
-    return Positioned(
-      left: 16,
-      bottom: bottom,
-      child: ValueListenableBuilder<_MapFollowMode>(
-        valueListenable: followModeN,
-        builder: (_, _MapFollowMode mode, __) {
-          return _MapModeBadge(mode: mode);
-        },
-      ),
-    );
+    // Replaced by floating action island for a cleaner, unified Apple UI.
+    return const SizedBox.shrink();
   }
 }
 
+/// Unified, ultra-clean Apple Dynamic Island-style Top HUD
 class _MapFirstTopHud extends StatelessWidget {
   const _MapFirstTopHud({
     required this.compassN,
@@ -69,6 +59,7 @@ class _MapFirstTopHud extends StatelessWidget {
     required this.coachTipN,
     required this.onPerformanceTap,
     required this.settings,
+    required this.onWeatherTap,
   });
 
   final ValueNotifier<double> compassN;
@@ -84,206 +75,252 @@ class _MapFirstTopHud extends StatelessWidget {
   final ValueNotifier<String> coachTipN;
   final VoidCallback onPerformanceTap;
   final SettingsService settings;
+  final VoidCallback onWeatherTap;
 
   @override
   Widget build(BuildContext context) {
+    final double topSafe = MediaQuery.paddingOf(context).top;
+
     return Positioned(
-      top: 0,
-      left: 0,
-      right: 0,
-      child: SafeArea(
-        bottom: false,
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
-          child: Column(
-            children: <Widget>[
-              _GlassPanel(
-                radius: 26,
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      top: topSafe + 6,
+      left: 14,
+      right: 14,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: <Widget>[
+          // Main Apple Glass Pill
+          ClipRRect(
+            borderRadius: BorderRadius.circular(24),
+            child: BackdropFilter(
+              filter: ui.ImageFilter.blur(sigmaX: 20, sigmaY: 20),
+              child: Container(
+                height: 44,
+                padding: const EdgeInsets.symmetric(horizontal: 14),
+                decoration: BoxDecoration(
+                  color: Colors.black.withValues(alpha: 0.52),
+                  borderRadius: BorderRadius.circular(24),
+                  border: Border.all(
+                    color: Colors.white.withValues(alpha: 0.12),
+                    width: 0.7,
+                  ),
+                  boxShadow: <BoxShadow>[
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.25),
+                      blurRadius: 16,
+                      offset: const Offset(0, 4),
+                    ),
+                  ],
+                ),
                 child: Row(
                   children: <Widget>[
-                    _CompassWidget(headingN: compassN),
-                    const SizedBox(width: 8),
-                    _TempDisplay(weatherN: weatherN, settings: settings),
+                    // Left: GPS / Live indicator
+                    ListenableBuilder(
+                      listenable: Listenable.merge(<Listenable>[
+                        trackingN,
+                        signalN,
+                        accuracyN,
+                        autoPausedN,
+                      ]),
+                      builder: (BuildContext context, _) {
+                        final bool tracking = trackingN.value;
+                        final bool autoPaused = autoPausedN.value;
+                        final double accuracy = accuracyN.value;
+                        final bool hasGoodGps = accuracy.isFinite && accuracy < 30.0;
+
+                        final Color dotColor = autoPaused
+                            ? _kBlueSoft
+                            : tracking
+                                ? _kGreen
+                                : hasGoodGps
+                                    ? _kBlueSoft
+                                    : Colors.orange;
+
+                        final String label = autoPaused
+                            ? 'PAUSED'
+                            : tracking
+                                ? 'LIVE'
+                                : hasGoodGps
+                                    ? 'READY'
+                                    : 'SEARCH';
+
+                        return CupertinoButton(
+                          padding: EdgeInsets.zero,
+                          minSize: 28,
+                          onPressed: onPerformanceTap,
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: <Widget>[
+                              Container(
+                                width: 8,
+                                height: 8,
+                                decoration: BoxDecoration(
+                                  color: dotColor,
+                                  shape: BoxShape.circle,
+                                  boxShadow: <BoxShadow>[
+                                    BoxShadow(
+                                      color: dotColor.withValues(alpha: 0.6),
+                                      blurRadius: 6,
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              const SizedBox(width: 6),
+                              Text(
+                                label,
+                                style: TextStyle(
+                                  color: dotColor,
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w900,
+                                  letterSpacing: 0.5,
+                                ),
+                              ),
+                            ],
+                          ),
+                        );
+                      },
+                    ),
+
                     const Spacer(),
-                    _DigitalClock(tickN: tickN),
+
+                    // Center: Compass Heading or Tracking Time
+                    ListenableBuilder(
+                      listenable: Listenable.merge(<Listenable>[
+                        trackingN,
+                        compassN,
+                        tickN,
+                      ]),
+                      builder: (BuildContext context, _) {
+                        final bool tracking = trackingN.value;
+                        final double heading = compassN.value;
+                        final String cardinal = _cardinalDirection(heading);
+
+                        return Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: <Widget>[
+                            Icon(
+                              CupertinoIcons.compass,
+                              size: 13,
+                              color: Colors.white.withValues(alpha: 0.7),
+                            ),
+                            const SizedBox(width: 4),
+                            Text(
+                              '$cardinal ${heading.round()}°',
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 12,
+                                fontWeight: FontWeight.w800,
+                                fontFeatures: <ui.FontFeature>[
+                                  ui.FontFeature.tabularFigures(),
+                                ],
+                              ),
+                            ),
+                          ],
+                        );
+                      },
+                    ),
+
+                    const Spacer(),
+
+                    // Right: Weather Pill & Battery
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: <Widget>[
+                        CupertinoButton(
+                          padding: EdgeInsets.zero,
+                          minSize: 32,
+                          onPressed: onWeatherTap,
+                          child: ValueListenableBuilder<WeatherData?>(
+                            valueListenable: weatherN,
+                            builder: (BuildContext context, WeatherData? weather, _) {
+                              final String tempStr = weather != null
+                                  ? '${weather.temperature.round()}°${settings.useKmh ? "C" : "F"}'
+                                  : '--°';
+                              return Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: <Widget>[
+                                  Icon(
+                                    CupertinoIcons.cloud_sun_fill,
+                                    size: 14,
+                                    color: Colors.amber.shade300,
+                                  ),
+                                  const SizedBox(width: 4),
+                                  Text(
+                                    tempStr,
+                                    style: const TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                                  ),
+                                ],
+                              );
+                            },
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        // Battery indicator
+                        ValueListenableBuilder<int?>(
+                          valueListenable: batteryN,
+                          builder: (BuildContext context, int? battery, _) {
+                            final int level = battery ?? 100;
+                            return Icon(
+                              level > 75
+                                  ? CupertinoIcons.battery_100
+                                  : level > 25
+                                      ? CupertinoIcons.battery_25
+                                      : CupertinoIcons.battery_0,
+                              size: 16,
+                              color: level > 20
+                                  ? Colors.white.withValues(alpha: 0.7)
+                                  : Colors.redAccent,
+                            );
+                          },
+                        ),
+                      ],
+                    ),
                   ],
                 ),
               ),
-              const SizedBox(height: 8),
-              _SlimStatusPill(
-                signalN: signalN,
-                batteryN: batteryN,
-                batteryStateN: batteryStateN,
-                accuracyN: accuracyN,
-                autoPausedN: autoPausedN,
-                trackingN: trackingN,
-              ),
-              const SizedBox(height: 7),
-              _SmartTrackingIsland(
-                performanceModeN: performanceModeN,
-                coachTipN: coachTipN,
-                onPerformanceTap: onPerformanceTap,
-              ),
-            ],
+            ),
           ),
-        ),
-      ),
-    );
-  }
-}
 
-class _SlimStatusPill extends StatelessWidget {
-  const _SlimStatusPill({
-    required this.signalN,
-    required this.batteryN,
-    required this.batteryStateN,
-    required this.accuracyN,
-    required this.autoPausedN,
-    required this.trackingN,
-  });
-
-  final ValueNotifier<int> signalN;
-  final ValueNotifier<int?> batteryN;
-  final ValueNotifier<BatteryState?> batteryStateN;
-  final ValueNotifier<double> accuracyN;
-  final ValueNotifier<bool> autoPausedN;
-  final ValueNotifier<bool> trackingN;
-
-  @override
-  Widget build(BuildContext context) {
-    final double maxWidth = MediaQuery.sizeOf(context).width * 0.9;
-    final ThemeData theme = Theme.of(context);
-
-    return ListenableBuilder(
-      listenable: Listenable.merge(<Listenable>[
-        signalN,
-        batteryN,
-        batteryStateN,
-        accuracyN,
-        autoPausedN,
-        trackingN,
-      ]),
-      builder: (BuildContext context, Widget? child) {
-        final bool tracking = trackingN.value;
-        final bool autoPaused = autoPausedN.value;
-        final int safeSignal = signalN.value.clamp(0, 4).toInt();
-        final double accuracy = accuracyN.value;
-        final int? battery = batteryN.value;
-        final BatteryState? batteryState = batteryStateN.value;
-
-        final bool hasGoodGps =
-            safeSignal >= 2 && accuracy.isFinite && accuracy < 30.0;
-
-        final Color gpsColor = hasGoodGps
-            ? _kGreen
-            : tracking
-                ? _kBlueSoft
-                : _kTextMuted;
-
-        final bool batteryCharging = batteryState == BatteryState.charging ||
-            batteryState == BatteryState.full;
-        final Color batteryColor = battery == null
-            ? _kTextMuted
-            : batteryCharging
-                ? _kBlueSoft
-                : battery > 40
-                    ? _kGreen
-                    : battery > 20
-                        ? _kBlueSoft
-                        : _kRed;
-
-        final String gpsText = accuracy.isFinite && accuracy < 40.0
-            ? 'GPS ±${accuracy.round()}m'
-            : tracking
-                ? 'GPS searching'
-                : 'GPS ready';
-
-        final String routeText = autoPaused
-            ? 'Auto paused'
-            : hasGoodGps || !tracking
-                ? 'Route ready'
-                : 'Route weak';
-
-        final Color routeColor = autoPaused ? _kBlueSoft : gpsColor;
-
-        final String batteryText = battery == null
-            ? 'Battery --%'
-            : batteryCharging
-                ? 'Charging $battery%'
-                : '$battery%';
-
-        return Align(
-          alignment: Alignment.center,
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(999),
-            child: BackdropFilter(
-              filter: ui.ImageFilter.blur(sigmaX: 14, sigmaY: 14),
-              child: ConstrainedBox(
-                constraints: BoxConstraints(maxWidth: maxWidth),
-                child: DecoratedBox(
-                  decoration: BoxDecoration(
-                    color: Colors.black.withValues(alpha: 0.48),
-                    borderRadius: BorderRadius.circular(999),
-                    border: Border.all(
-                      color: Colors.white.withValues(alpha: 0.09),
-                    ),
-                  ),
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 11,
-                      vertical: 7,
-                    ),
-                    child: DefaultTextStyle.merge(
-                      style: theme.textTheme.labelSmall?.copyWith(
-                            color: _kTextPrimary,
-                            fontSize: 11,
-                            fontWeight: FontWeight.w800,
-                            letterSpacing: 0.1,
-                          ) ??
-                          const TextStyle(
-                            color: _kTextPrimary,
-                            fontSize: 11,
-                            fontWeight: FontWeight.w800,
-                            letterSpacing: 0.1,
-                          ),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
+          // Optional subtle Coach Tip banner (only appears when tip is active)
+          ValueListenableBuilder<String>(
+            valueListenable: coachTipN,
+            builder: (BuildContext context, String tip, _) {
+              if (tip.isEmpty || tip == 'Standing by · GPS stable') {
+                return const SizedBox.shrink();
+              }
+              return Padding(
+                padding: const EdgeInsets.only(top: 6),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(16),
+                  child: BackdropFilter(
+                    filter: ui.ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+                      decoration: BoxDecoration(
+                        color: Colors.black.withValues(alpha: 0.45),
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(
+                          color: Colors.white.withValues(alpha: 0.08),
+                        ),
+                      ),
                       child: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: <Widget>[
+                          const Icon(CupertinoIcons.sparkles, size: 11, color: _kBlueSoft),
+                          const SizedBox(width: 5),
                           Flexible(
-                            flex: 4,
-                            child: _StatusSegment(
-                              icon: CupertinoIcons.location_fill,
-                              label: gpsText,
-                              color: gpsColor,
-                              textColor: _kTextPrimary,
-                            ),
-                          ),
-                          _StatusDot(color: routeColor),
-                          Flexible(
-                            flex: 4,
-                            child: _StatusSegment(
-                              icon: autoPaused
-                                  ? CupertinoIcons.pause_circle_fill
-                                  : CupertinoIcons.checkmark_circle_fill,
-                              label: routeText,
-                              color: routeColor,
-                              textColor: routeColor,
-                            ),
-                          ),
-                          _StatusDot(color: batteryColor),
-                          Flexible(
-                            flex: 3,
-                            child: _StatusSegment(
-                              icon: batteryCharging
-                                  ? CupertinoIcons.bolt_fill
-                                  : CupertinoIcons.battery_100,
-                              label: batteryText,
-                              color: batteryColor,
-                              textColor: _kTextPrimary,
+                            child: Text(
+                              tip,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 11,
+                                fontWeight: FontWeight.w600,
+                              ),
                             ),
                           ),
                         ],
@@ -291,114 +328,167 @@ class _SlimStatusPill extends StatelessWidget {
                     ),
                   ),
                 ),
-              ),
-            ),
+              );
+            },
           ),
-        );
-      },
+        ],
+      ),
+    );
+  }
+
+  static String _cardinalDirection(double deg) {
+    if (!deg.isFinite) return 'N';
+    final double d = (deg % 360 + 360) % 360;
+    if (d >= 337.5 || d < 22.5) return 'N';
+    if (d < 67.5) return 'NE';
+    if (d < 112.5) return 'E';
+    if (d < 157.5) return 'SE';
+    if (d < 202.5) return 'S';
+    if (d < 247.5) return 'SW';
+    if (d < 292.5) return 'W';
+    return 'NW';
+  }
+}
+
+/// Sleek floating action column on the right edge (Apple Maps / Google Maps style)
+class _MapFirstFloatingActions extends StatelessWidget {
+  const _MapFirstFloatingActions({
+    required this.followModeN,
+    required this.onFollowModeTap,
+    required this.onMapTap,
+    required this.onMapboxTap,
+    required this.onArTap,
+    required this.onAiTap,
+  });
+
+  final ValueNotifier<_MapFollowMode> followModeN;
+  final VoidCallback onFollowModeTap;
+  final VoidCallback onMapTap;
+  final VoidCallback onMapboxTap;
+  final VoidCallback onArTap;
+  final VoidCallback onAiTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final double topSafe = MediaQuery.paddingOf(context).top;
+
+    return Positioned(
+      right: 14,
+      top: topSafe + 64,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: <Widget>[
+          // 1. Follow / Compass Mode
+          ValueListenableBuilder<_MapFollowMode>(
+            valueListenable: followModeN,
+            builder: (BuildContext context, _MapFollowMode mode, _) {
+              final bool isCentered = mode != _MapFollowMode.freeView;
+              return _FloatingCircleButton(
+                icon: mode.icon,
+                active: isCentered,
+                activeColor: _kBlue,
+                semanticLabel: mode.label,
+                onTap: onFollowModeTap,
+              );
+            },
+          ),
+          const SizedBox(height: 10),
+
+          // 2. Map Layers / 3D
+          _FloatingCircleButton(
+            icon: CupertinoIcons.map_fill,
+            semanticLabel: 'Map Layers',
+            onTap: onMapTap,
+          ),
+          const SizedBox(height: 10),
+
+          // 3. Route Planner
+          _FloatingCircleButton(
+            icon: CupertinoIcons.arrow_turn_up_right,
+            semanticLabel: 'Plan Route',
+            onTap: onMapboxTap,
+          ),
+          const SizedBox(height: 10),
+
+          // 4. AR Route Guidance
+          _FloatingCircleButton(
+            icon: CupertinoIcons.camera_viewfinder,
+            semanticLabel: 'AR Camera',
+            onTap: onArTap,
+          ),
+          const SizedBox(height: 10),
+
+          // 5. AI Assistant
+          _FloatingCircleButton(
+            icon: CupertinoIcons.sparkles,
+            activeColor: _kBlueSoft,
+            semanticLabel: 'AI Coach',
+            onTap: onAiTap,
+          ),
+        ],
+      ),
     );
   }
 }
 
-
-class _SmartTrackingIsland extends StatelessWidget {
-  const _SmartTrackingIsland({
-    required this.performanceModeN,
-    required this.coachTipN,
-    required this.onPerformanceTap,
+/// Circular frosted glass button (Apple Maps standard 44x44pt)
+class _FloatingCircleButton extends StatelessWidget {
+  const _FloatingCircleButton({
+    required this.icon,
+    required this.onTap,
+    required this.semanticLabel,
+    this.active = false,
+    this.activeColor = _kBlue,
   });
 
-  final ValueNotifier<_TrackingPerformanceMode> performanceModeN;
-  final ValueNotifier<String> coachTipN;
-  final VoidCallback onPerformanceTap;
+  final IconData icon;
+  final VoidCallback onTap;
+  final String semanticLabel;
+  final bool active;
+  final Color activeColor;
 
   @override
   Widget build(BuildContext context) {
-    final double maxWidth = MediaQuery.sizeOf(context).width * 0.92;
-
-    return Align(
-      alignment: Alignment.center,
-      child: ConstrainedBox(
-        constraints: BoxConstraints(maxWidth: maxWidth),
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(999),
-          child: BackdropFilter(
-            filter: ui.ImageFilter.blur(sigmaX: 14, sigmaY: 14),
-            child: DecoratedBox(
+    return Semantics(
+      label: semanticLabel,
+      button: true,
+      child: ClipOval(
+        child: BackdropFilter(
+          filter: ui.ImageFilter.blur(sigmaX: 16, sigmaY: 16),
+          child: CupertinoButton(
+            padding: EdgeInsets.zero,
+            minSize: 44,
+            onPressed: () {
+              HapticFeedback.lightImpact();
+              onTap();
+            },
+            child: Container(
+              width: 44,
+              height: 44,
               decoration: BoxDecoration(
-                color: Colors.black.withValues(alpha: 0.40),
-                borderRadius: BorderRadius.circular(999),
-                border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+                shape: BoxShape.circle,
+                color: active
+                    ? activeColor.withValues(alpha: 0.28)
+                    : Colors.black.withValues(alpha: 0.48),
+                border: Border.all(
+                  color: active
+                      ? activeColor.withValues(alpha: 0.55)
+                      : Colors.white.withValues(alpha: 0.12),
+                  width: active ? 1.2 : 0.8,
+                ),
+                boxShadow: <BoxShadow>[
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.22),
+                    blurRadius: 10,
+                    offset: const Offset(0, 3),
+                  ),
+                ],
               ),
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(9, 6, 6, 6),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: <Widget>[
-                    const Icon(
-                      CupertinoIcons.sparkles,
-                      color: _kBlueSoft,
-                      size: 13,
-                    ),
-                    const SizedBox(width: 6),
-                    Expanded(
-                      child: ValueListenableBuilder<String>(
-                        valueListenable: coachTipN,
-                        builder: (_, String tip, __) {
-                          return _SafeText(
-                            tip,
-                            maxLines: 1,
-                            style: const TextStyle(
-                              color: _kTextPrimary,
-                              fontSize: 11,
-                              fontWeight: FontWeight.w800,
-                              letterSpacing: 0.1,
-                            ),
-                          );
-                        },
-                      ),
-                    ),
-                    const SizedBox(width: 7),
-                    ValueListenableBuilder<_TrackingPerformanceMode>(
-                      valueListenable: performanceModeN,
-                      builder: (_, _TrackingPerformanceMode mode, __) {
-                        return CupertinoButton(
-                          padding: EdgeInsets.zero,
-                          minSize: 28,
-                          pressedOpacity: 0.78,
-                          onPressed: onPerformanceTap,
-                          child: Container(
-                            height: 28,
-                            padding: const EdgeInsets.symmetric(horizontal: 8),
-                            decoration: BoxDecoration(
-                              color: _kBlue.withValues(alpha: 0.16),
-                              borderRadius: BorderRadius.circular(999),
-                              border: Border.all(
-                                color: _kBlueSoft.withValues(alpha: 0.22),
-                              ),
-                            ),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: <Widget>[
-                                Icon(mode.icon, color: _kBlueSoft, size: 12),
-                                const SizedBox(width: 4),
-                                _SafeText(
-                                  mode.label,
-                                  maxLines: 1,
-                                  style: const TextStyle(
-                                    color: _kBlueSoft,
-                                    fontSize: 11,
-                                    fontWeight: FontWeight.w900,
-                                    letterSpacing: 0.5,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        );
-                      },
-                    ),
-                  ],
+              child: Center(
+                child: Icon(
+                  icon,
+                  size: 20,
+                  color: active ? Colors.white : Colors.white.withValues(alpha: 0.90),
                 ),
               ),
             ),
@@ -409,62 +499,7 @@ class _SmartTrackingIsland extends StatelessWidget {
   }
 }
 
-class _StatusSegment extends StatelessWidget {
-  const _StatusSegment({
-    required this.icon,
-    required this.label,
-    required this.color,
-    required this.textColor,
-  });
-
-  final IconData icon;
-  final String label;
-  final Color color;
-  final Color textColor;
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: <Widget>[
-        Icon(icon, size: 12, color: color),
-        const SizedBox(width: 5),
-        Flexible(
-          child: _SafeText(
-            label,
-            maxLines: 1,
-            style: TextStyle(
-              color: textColor,
-              fontSize: 11,
-              fontWeight: FontWeight.w800,
-              letterSpacing: 0.1,
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-class _StatusDot extends StatelessWidget {
-  const _StatusDot({required this.color});
-
-  final Color color;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: 3,
-      height: 3,
-      margin: const EdgeInsets.symmetric(horizontal: 7),
-      decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.80),
-        shape: BoxShape.circle,
-      ),
-    );
-  }
-}
-
+/// Compact, elegant Speedometer HUD floating on the bottom-left above the dock
 class _MapFirstSpeedHud extends StatelessWidget {
   const _MapFirstSpeedHud({
     required this.speedN,
@@ -489,83 +524,61 @@ class _MapFirstSpeedHud extends StatelessWidget {
     final double bottomSafe = MediaQuery.paddingOf(context).bottom;
 
     return Positioned(
-      right: 14,
-      bottom: bottomSafe + 214,
+      left: 14,
+      bottom: bottomSafe + 130,
       child: ListenableBuilder(
         listenable: Listenable.merge(<Listenable>[
           speedN,
           trackingN,
           autoPausedN,
-          signalN,
-          accuracyN,
-          posN,
         ]),
-        builder: (BuildContext context, Widget? child) {
+        builder: (BuildContext context, _) {
           final double speed = speedN.value;
           final bool tracking = trackingN.value;
-          final bool autoPaused = autoPausedN.value;
-          final int signal = signalN.value.clamp(0, 4);
-          final double accuracy = accuracyN.value;
-          final bool hasPosition = posN.value != null;
-          final bool hasUsableGps =
-              hasPosition && signal >= 1 && accuracy.isFinite && accuracy < 40;
+          if (!tracking && speed <= 0.5) {
+            return const SizedBox.shrink();
+          }
 
           final bool isOver = tracking && speed > settings.speedAlertMph;
 
-          final String statusLabel = autoPaused
-              ? 'AUTO PAUSE'
-              : tracking
-                  ? 'LIVE'
-                  : hasUsableGps
-                      ? 'READY'
-                      : 'GPS';
-
-          final Color statusColor = isOver
-              ? _kRed
-              : autoPaused
-                  ? _kBlueSoft
-                  : tracking
-                      ? _kGreen
-                      : hasUsableGps
-                          ? Colors.white54
-                          : _kBlueSoft;
-
-          final IconData statusIcon = autoPaused
-              ? CupertinoIcons.pause_fill
-              : tracking
-                  ? CupertinoIcons.location_fill
-                  : hasUsableGps
-                      ? CupertinoIcons.checkmark_alt
-                      : CupertinoIcons.location_slash;
-
-          return AnimatedScale(
-            duration: _kAnimMed,
-            curve: Curves.easeOutCubic,
-            scale: isOver ? 1.04 : 1.0,
-            child: AppGlassCard(
-              padding: const EdgeInsets.fromLTRB(12, 12, 12, 10),
-              borderRadius: 26,
-              color: Colors.black.withValues(alpha: isOver ? 0.66 : 0.48),
-              borderColor: isOver
-                  ? _kRed.withValues(alpha: 0.50)
-                  : Colors.white.withValues(alpha: 0.10),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: <Widget>[
-                  SpeedometerWidget(
-                    speedMph: speed,
-                    isOverLimit: isOver,
-                    compact: true,
-                    showUnit: true,
-                    showOverLimitBadge: false,
+          return ClipRRect(
+            borderRadius: BorderRadius.circular(20),
+            child: BackdropFilter(
+              filter: ui.ImageFilter.blur(sigmaX: 18, sigmaY: 18),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                decoration: BoxDecoration(
+                  color: isOver
+                      ? Colors.red.shade900.withValues(alpha: 0.65)
+                      : Colors.black.withValues(alpha: 0.52),
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(
+                    color: isOver
+                        ? _kRed.withValues(alpha: 0.6)
+                        : Colors.white.withValues(alpha: 0.12),
+                    width: 0.8,
                   ),
-                  const SizedBox(height: 7),
-                  AppStatusPill(
-                    label: statusLabel,
-                    color: statusColor,
-                    icon: statusIcon,
-                  ),
-                ],
+                  boxShadow: <BoxShadow>[
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.25),
+                      blurRadius: 12,
+                      offset: const Offset(0, 3),
+                    ),
+                  ],
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: <Widget>[
+                    SpeedometerWidget(
+                      speedMph: speed,
+                      isOverLimit: isOver,
+                      compact: true,
+                      showUnit: true,
+                      showOverLimitBadge: false,
+                    ),
+                  ],
+                ),
               ),
             ),
           );
