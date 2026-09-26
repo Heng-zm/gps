@@ -45,7 +45,7 @@ class AppMetricCard extends StatelessWidget {
                     overflow: TextOverflow.ellipsis,
                     style: const TextStyle(
                       color: AppColors.white54,
-                      fontSize: 10,
+                      fontSize: 11,
                       fontWeight: FontWeight.w900,
                       letterSpacing: 0.7,
                     ),
@@ -84,7 +84,7 @@ class AppMetricCard extends StatelessWidget {
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(
                           color: color,
-                          fontSize: compact ? 10 : 11,
+                          fontSize: compact ? 11 : 12,
                           fontWeight: FontWeight.w900,
                         ),
                       ),

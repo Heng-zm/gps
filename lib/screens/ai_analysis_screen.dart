@@ -332,9 +332,9 @@ class _NavItem extends StatelessWidget {
               style: TextStyle(
                 color:
                     active ? Colors.white : Colors.white.withValues(alpha: 0.3),
-                fontSize: 9,
-                fontWeight: active ? FontWeight.w800 : FontWeight.w500,
-                letterSpacing: 0.8,
+                fontSize: 10.5,
+                fontWeight: active ? FontWeight.w800 : FontWeight.w600,
+                letterSpacing: 0.6,
               )),
           const SizedBox(height: 4),
           AnimatedContainer(

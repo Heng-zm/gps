@@ -535,7 +535,7 @@ class _TripContextMiniCard extends StatelessWidget {
                   item.unit,
                   style: const TextStyle(
                     color: AppColors.blueSoft,
-                    fontSize: 9,
+                    fontSize: 11,
                     fontWeight: FontWeight.w900,
                   ),
                 ),
@@ -549,7 +549,7 @@ class _TripContextMiniCard extends StatelessWidget {
             overflow: TextOverflow.ellipsis,
             style: const TextStyle(
               color: AppColors.white54,
-              fontSize: 8,
+              fontSize: 11,
               fontWeight: FontWeight.w900,
               letterSpacing: 0.55,
             ),

@@ -475,9 +475,9 @@ class _NavItem extends StatelessWidget {
                 curve: Curves.easeOut,
                 style: TextStyle(
                   color: labelColor,
-                  fontSize: 9,
+                  fontSize: 10.5,
                   fontWeight: active ? FontWeight.w800 : FontWeight.w600,
-                  letterSpacing: 0.85,
+                  letterSpacing: 0.6,
                   height: 1,
                 ),
                 child: Text(label),

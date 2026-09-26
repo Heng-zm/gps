@@ -1567,7 +1567,7 @@ class _ApiMethodChip extends StatelessWidget {
                 style: TextStyle(
                   color:
                       selected ? color : Colors.white.withValues(alpha: 0.46),
-                  fontSize: 9.5,
+                  fontSize: 10.5,
                   fontWeight: FontWeight.w900,
                   fontFamily: 'monospace',
                 ),

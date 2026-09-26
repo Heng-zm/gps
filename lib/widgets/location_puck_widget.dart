@@ -609,7 +609,7 @@ class _SpeedBadge extends StatelessWidget {
           overflow: TextOverflow.ellipsis,
           style: const TextStyle(
             color: Colors.white,
-            fontSize: 9,
+            fontSize: 10.5,
             fontWeight: FontWeight.w900,
             fontFeatures: <ui.FontFeature>[
               ui.FontFeature.tabularFigures(),

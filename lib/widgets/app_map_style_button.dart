@@ -78,7 +78,7 @@ class AppMapStyleButton extends StatelessWidget {
                                 softWrap: false,
                                 style: const TextStyle(
                                   color: Colors.white,
-                                  fontSize: 10,
+                                  fontSize: 11,
                                   fontWeight: FontWeight.w900,
                                   letterSpacing: 0.7,
                                 ),

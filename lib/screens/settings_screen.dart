@@ -450,9 +450,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 SliverSafeArea(
                   top: false,
                   bottom: true,
+                  minimum: EdgeInsets.only(
+                    bottom: MediaQuery.paddingOf(context).bottom + 80.0,
+                  ),
                   sliver: SliverToBoxAdapter(
                     child: Padding(
-                      padding: const EdgeInsets.fromLTRB(16, 10, 16, 44),
+                      padding: const EdgeInsets.fromLTRB(16, 10, 16, 24),
                       child: Column(
                         children: <Widget>[
                           _HeroStatusCard(
@@ -869,7 +872,7 @@ class _MiniActionButton extends StatelessWidget {
                   maxLines: 1,
                   style: TextStyle(
                     color: color,
-                    fontSize: 10,
+                    fontSize: 11,
                     fontWeight: FontWeight.w900,
                     letterSpacing: 0.55,
                   ),
@@ -1052,7 +1055,7 @@ class _HeroMiniStat extends StatelessWidget {
               textAlign: TextAlign.center,
               style: const TextStyle(
                 color: Colors.white38,
-                fontSize: 8,
+                fontSize: 11,
                 fontWeight: FontWeight.w900,
                 letterSpacing: 0.8,
               ),
@@ -1453,7 +1456,7 @@ class _StatusPill extends StatelessWidget {
         child: _SafeText(
           label,
           maxLines: 1,
-          style: TextStyle(color: color, fontSize: 10, fontWeight: FontWeight.w900, letterSpacing: 0.6),
+          style: TextStyle(color: color, fontSize: 11, fontWeight: FontWeight.w900, letterSpacing: 0.6),
         ),
       ),
     );

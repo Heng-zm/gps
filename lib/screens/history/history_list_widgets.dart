@@ -271,9 +271,9 @@ class _LifetimeSummary extends StatelessWidget {
                             style: TextStyle(
                               decoration: TextDecoration.none,
                               color: color,
-                              fontSize: 9,
+                              fontSize: 11,
                               fontWeight: FontWeight.w900,
-                              letterSpacing: 0.7,
+                              letterSpacing: 0.5,
                             ),
                           ),
                         ],
@@ -405,10 +405,10 @@ class _SummaryMetric extends StatelessWidget {
                   child: _SafeText(
                     unit,
                     maxLines: 1,
-                    style: const TextStyle(decoration: TextDecoration.none,
-
-                      color: Colors.white54,
-                      fontSize: 10,
+                    style: const TextStyle(
+                      decoration: TextDecoration.none,
+                      color: Colors.white60,
+                      fontSize: 11,
                       fontWeight: FontWeight.w900,
                     ),
                   ),
@@ -416,16 +416,16 @@ class _SummaryMetric extends StatelessWidget {
               ],
             ),
           ),
-          const SizedBox(height: 3),
+          const SizedBox(height: 4),
           _SafeText(
             label.toUpperCase(),
             maxLines: 1,
-            style: const TextStyle(decoration: TextDecoration.none,
-
-              color: Colors.white38,
-              fontSize: 8,
-              fontWeight: FontWeight.w900,
-              letterSpacing: 0.7,
+            style: const TextStyle(
+              decoration: TextDecoration.none,
+              color: Colors.white54,
+              fontSize: 11,
+              fontWeight: FontWeight.w800,
+              letterSpacing: 0.5,
             ),
           ),
         ],
@@ -854,12 +854,12 @@ class _TripStatusPill extends StatelessWidget {
       child: _SafeText(
         hasRoute ? 'ROUTE' : 'DATA',
         maxLines: 1,
-        style: TextStyle(decoration: TextDecoration.none,
-
+        style: TextStyle(
+          decoration: TextDecoration.none,
           color: color,
-          fontSize: 8,
+          fontSize: 11,
           fontWeight: FontWeight.w900,
-          letterSpacing: 0.7,
+          letterSpacing: 0.5,
         ),
       ),
     );
@@ -1045,22 +1045,23 @@ class _TripMiniStat extends StatelessWidget {
               _SafeText(
                 unit,
                 maxLines: 1,
-                style: const TextStyle(decoration: TextDecoration.none,
-
-                    color: Colors.white38,
-                    fontSize: 8,
-                    fontWeight: FontWeight.w900),
+                style: const TextStyle(
+                  decoration: TextDecoration.none,
+                  color: Colors.white54,
+                  fontSize: 11,
+                  fontWeight: FontWeight.w800,
+                ),
               ),
             const SizedBox(height: 5),
             _SafeText(
               label.toUpperCase(),
               maxLines: 1,
-              style: const TextStyle(decoration: TextDecoration.none,
-
-                color: Colors.white30,
-                fontSize: 8,
-                fontWeight: FontWeight.w900,
-                letterSpacing: 0.6,
+              style: const TextStyle(
+                decoration: TextDecoration.none,
+                color: Colors.white54,
+                fontSize: 11,
+                fontWeight: FontWeight.w800,
+                letterSpacing: 0.5,
               ),
             ),
           ],

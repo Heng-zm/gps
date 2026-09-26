@@ -487,7 +487,7 @@ class _UnitBadge extends StatelessWidget {
           maxLines: 1,
           style: const TextStyle(
             color: Colors.white38,
-            fontSize: 9,
+            fontSize: 11,
             fontWeight: FontWeight.w900,
             letterSpacing: 1.5,
           ),
@@ -683,7 +683,7 @@ class _TemperatureBlock extends StatelessWidget {
           maxLines: 1,
           style: TextStyle(
             color: Colors.white30,
-            fontSize: 10,
+            fontSize: 11,
             fontWeight: FontWeight.w900,
             letterSpacing: 2,
           ),
@@ -819,7 +819,7 @@ class _HumidityBadge extends StatelessWidget {
           maxLines: 1,
           style: const TextStyle(
             color: _kBlue,
-            fontSize: 10,
+            fontSize: 11,
             fontWeight: FontWeight.bold,
           ),
         ),
@@ -905,7 +905,7 @@ class _DetailChip extends StatelessWidget {
                       maxLines: 1,
                       style: const TextStyle(
                         color: Colors.white24,
-                        fontSize: 8,
+                        fontSize: 11,
                         fontWeight: FontWeight.w900,
                         letterSpacing: 0.8,
                       ),
@@ -957,7 +957,7 @@ class _ForecastCol extends StatelessWidget {
               maxLines: 1,
               style: const TextStyle(
                 color: Colors.white24,
-                fontSize: 9,
+                fontSize: 11,
                 fontWeight: FontWeight.w900,
                 letterSpacing: 1,
               ),

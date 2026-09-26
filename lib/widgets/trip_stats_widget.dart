@@ -297,7 +297,7 @@ class _QualityPill extends StatelessWidget {
               maxLines: 1,
               style: TextStyle(
                 color: quality.color,
-                fontSize: 10,
+                fontSize: 11,
                 fontWeight: FontWeight.w900,
                 letterSpacing: 0.4,
               ),
@@ -537,7 +537,7 @@ class _NumberBlock extends StatelessWidget {
           maxLines: 1,
           style: TextStyle(
             color: color.withValues(alpha: 0.80),
-            fontSize: 9,
+            fontSize: 11,
             fontWeight: FontWeight.w900,
             letterSpacing: 1.0,
           ),
@@ -668,7 +668,7 @@ class _TimeItem extends StatelessWidget {
           textAlign: TextAlign.center,
           style: TextStyle(
             color: color.withValues(alpha: 0.82),
-            fontSize: 9,
+            fontSize: 11,
             fontWeight: FontWeight.w900,
             letterSpacing: 0.9,
           ),
@@ -778,7 +778,7 @@ class _ChartSection extends StatelessWidget {
                 maxLines: 1,
                 style: TextStyle(
                   color: color.withValues(alpha: 0.78),
-                  fontSize: 10,
+                  fontSize: 11,
                   fontWeight: FontWeight.w900,
                   letterSpacing: 1.2,
                 ),
@@ -929,7 +929,7 @@ class _UnitPill extends StatelessWidget {
         maxLines: 1,
         style: TextStyle(
           color: color,
-          fontSize: 9,
+          fontSize: 11,
           fontWeight: FontWeight.w900,
           letterSpacing: 0.8,
         ),

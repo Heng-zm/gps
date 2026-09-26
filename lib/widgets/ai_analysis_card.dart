@@ -606,9 +606,9 @@ class _ResultBody extends StatelessWidget {
               'AI GENERATED',
               style: TextStyle(
                 color: _Gold.dark.withValues(alpha: 0.6),
-                fontSize: 9,
+                fontSize: 11,
                 fontWeight: FontWeight.w700,
-                letterSpacing: 2.5,
+                letterSpacing: 2.0,
               ),
             ),
           ],

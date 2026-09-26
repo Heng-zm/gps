@@ -336,8 +336,8 @@ class _HistoryScreenState extends State<HistoryScreen> {
   Widget build(BuildContext context) {
     final List<SavedTrip> visibleTrips = _visibleTrips;
     final bool showSummary = !_loading && _trips.isNotEmpty;
-    final double topSafe = MediaQuery.viewPaddingOf(context).top;
-    final double bottomSafe = MediaQuery.viewPaddingOf(context).bottom;
+    final double topSafe = MediaQuery.paddingOf(context).top;
+    final double bottomSafe = MediaQuery.paddingOf(context).bottom;
 
     return AnnotatedRegion<SystemUiOverlayStyle>(
       value: SystemUiOverlayStyle.light,
@@ -409,7 +409,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
                     SliverSafeArea(
                       top: false,
                       minimum: EdgeInsets.only(
-                        bottom: math.max(24.0, bottomSafe + 24.0),
+                        bottom: math.max(120.0, bottomSafe + 36.0),
                       ),
                       sliver: SliverPadding(
                         padding: const EdgeInsets.fromLTRB(20, 0, 20, 18),

@@ -649,7 +649,7 @@ class _AppShellState extends State<AppShell>
     final double barOffset =
         bottomPad > 0 ? _kBarOffsetWithNav : _kBarOffsetWithoutNav;
 
-    final double pagePaddingBottom = bottomPad + _kBarHeight + barOffset + 10.0;
+    final double pagePaddingBottom = bottomPad + _kBarHeight + barOffset + 16.0;
 
     return Scaffold(
       backgroundColor: Colors.black,
@@ -1239,9 +1239,9 @@ class _NavItem extends StatelessWidget {
                   curve: Curves.easeOut,
                   style: TextStyle(
                     color: isActive ? Colors.white : inactiveText,
-                    fontSize: 9.0,
-                    fontWeight: isActive ? FontWeight.w800 : FontWeight.w500,
-                    letterSpacing: 1.0,
+                    fontSize: 10.5,
+                    fontWeight: isActive ? FontWeight.w800 : FontWeight.w600,
+                    letterSpacing: 0.6,
                     height: 1.0,
                   ),
                   child: Text(label),

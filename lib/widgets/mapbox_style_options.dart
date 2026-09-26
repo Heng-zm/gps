@@ -143,7 +143,7 @@ class _MapboxStyleOptionTile extends StatelessWidget {
                       softWrap: false,
                       style: const TextStyle(
                         color: AppColors.white54,
-                        fontSize: 9,
+                        fontSize: 11,
                         fontWeight: FontWeight.w800,
                       ),
                     ),

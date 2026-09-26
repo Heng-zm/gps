@@ -792,7 +792,7 @@ class _PlannerSectionTitle extends StatelessWidget {
                 overflow: TextOverflow.ellipsis,
                 style: const TextStyle(
                   color: AppColors.white54,
-                  fontSize: 10,
+                  fontSize: 11,
                   fontWeight: FontWeight.w700,
                 ),
               ),
@@ -1238,7 +1238,7 @@ class _RoutePlannerHintChip extends StatelessWidget {
         overflow: TextOverflow.clip,
         style: const TextStyle(
           color: _RoutePlannerSheetState._textMuted,
-          fontSize: 9,
+          fontSize: 11,
           fontWeight: FontWeight.w800,
         ),
       ),
@@ -1297,7 +1297,7 @@ class _SelectedDestinationCard extends StatelessWidget {
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(
                     color: _RoutePlannerSheetState._textMuted,
-                    fontSize: 10,
+                    fontSize: 11,
                     fontWeight: FontWeight.w700,
                     height: 1.15,
                   ),
@@ -1366,7 +1366,7 @@ class _RoutePlannerShortcutChip extends StatelessWidget {
               textAlign: TextAlign.center,
               style: const TextStyle(
                 color: Colors.white38,
-                fontSize: 8,
+                fontSize: 11,
                 fontWeight: FontWeight.w700,
               ),
             ),
@@ -1529,7 +1529,7 @@ class _RoutePlannerSelectCard extends StatelessWidget {
             overflow: TextOverflow.ellipsis,
             style: const TextStyle(
               color: Colors.white38,
-              fontSize: 9,
+              fontSize: 11,
               fontWeight: FontWeight.w700,
             ),
           ),
@@ -1650,7 +1650,7 @@ class _PlannedRouteSummaryCard<T> extends StatelessWidget {
                       overflow: TextOverflow.clip,
                       style: TextStyle(
                         color: _RoutePlannerSheetState._textPrimary,
-                        fontSize: 10,
+                        fontSize: 11,
                         fontWeight: FontWeight.w800,
                       ),
                     ),
@@ -1802,7 +1802,7 @@ class _RouteMetric extends StatelessWidget {
           overflow: TextOverflow.ellipsis,
           style: const TextStyle(
             color: Colors.white38,
-            fontSize: 9,
+            fontSize: 11,
             fontWeight: FontWeight.w700,
           ),
         ),
@@ -2133,7 +2133,7 @@ class _RoutePlannerPlaceTile extends StatelessWidget {
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(
                         color: _RoutePlannerSheetState._textMuted,
-                        fontSize: 10,
+                        fontSize: 11,
                         fontWeight: FontWeight.w700,
                         height: 1.15,
                       ),

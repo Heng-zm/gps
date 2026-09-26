@@ -387,7 +387,7 @@ class _SmartTrackingIsland extends StatelessWidget {
                                   maxLines: 1,
                                   style: const TextStyle(
                                     color: _kBlueSoft,
-                                    fontSize: 9,
+                                    fontSize: 11,
                                     fontWeight: FontWeight.w900,
                                     letterSpacing: 0.5,
                                   ),

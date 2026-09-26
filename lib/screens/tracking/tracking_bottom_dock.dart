@@ -494,7 +494,7 @@ class _DockDragHandle extends StatelessWidget {
                     maxLines: 1,
                     style: TextStyle(
                       color: Colors.white.withValues(alpha: 0.36),
-                      fontSize: 8.5,
+                      fontSize: 11,
                       fontWeight: FontWeight.w900,
                       letterSpacing: 0.8,
                     ),
@@ -550,7 +550,7 @@ class _DockActionButton extends StatelessWidget {
                 maxLines: 1,
                 style: TextStyle(
                   color: _kTextPrimary,
-                  fontSize: small ? 10 : 11,
+                  fontSize: small ? 11 : 12,
                   fontWeight: FontWeight.w900,
                   letterSpacing: small ? 0.0 : 0.1,
                 ),
@@ -737,7 +737,7 @@ class _AutoPauseBanner extends StatelessWidget {
                       maxLines: 1,
                       style: const TextStyle(
                         color: _kBlueSoft,
-                        fontSize: 9,
+                        fontSize: 11,
                         fontWeight: FontWeight.w900,
                         letterSpacing: 0.7,
                       ),
@@ -786,7 +786,7 @@ class _DockStat extends StatelessWidget {
           maxLines: 1,
           style: TextStyle(
             color: color,
-            fontSize: 9,
+            fontSize: 11,
             fontWeight: FontWeight.w900,
             letterSpacing: 0.8,
           ),
@@ -841,7 +841,7 @@ class _DockIconButton extends StatelessWidget {
               maxLines: 1,
               style: TextStyle(
                 color: _kTextPrimary,
-                fontSize: compact ? 7.5 : 8.5,
+                fontSize: compact ? 10.5 : 11,
                 fontWeight: FontWeight.w900,
                 letterSpacing: 0.45,
               ),
