@@ -523,6 +523,7 @@ class _MapFirstSpeedHud extends StatelessWidget {
     required this.posN,
     required this.settings,
     this.onSpeedHudTap,
+    this.onSpeedHudLongPress,
   });
 
   final ValueNotifier<double> speedN;
@@ -533,6 +534,7 @@ class _MapFirstSpeedHud extends StatelessWidget {
   final ValueNotifier<LatLng?> posN;
   final SettingsService settings;
   final VoidCallback? onSpeedHudTap;
+  final VoidCallback? onSpeedHudLongPress;
 
   @override
   Widget build(BuildContext context) {
@@ -561,6 +563,10 @@ class _MapFirstSpeedHud extends StatelessWidget {
             onTap: () {
               HapticFeedback.lightImpact();
               onSpeedHudTap?.call();
+            },
+            onLongPress: () {
+              HapticFeedback.heavyImpact();
+              onSpeedHudLongPress?.call();
             },
             child: ClipRRect(
               borderRadius: BorderRadius.circular(20),

@@ -22,3 +22,7 @@ export 'gforce_telemetry_service.dart';
 export 'obd2_telemetry_service.dart';
 export 'anti_theft_service.dart';
 export 'lidar_road_scanner_service.dart';
+export 'satellite_sos_service.dart';
+export 'glosa_speed_service.dart';
+export 'ferromagnetic_radar_service.dart';
+export 'holographic_hud_service.dart';

@@ -36,6 +36,7 @@ import '../../widgets/common/app_glass_card.dart';
 import '../../widgets/common/app_metric_card.dart';
 import '../../widgets/common/app_status_pill.dart';
 import '../../widgets/telemetry/advanced_features_sheet.dart';
+import '../../widgets/telemetry/holographic_hud_screen.dart';
 import '../../services/anti_theft_service.dart';
 
 part 'tracking_map_layer.dart';
@@ -1430,6 +1431,7 @@ class _TrackingScreenState extends State<TrackingScreen>
               posN: _posN,
               settings: _settings,
               onSpeedHudTap: _openProHub,
+              onSpeedHudLongPress: () => HolographicHudScreen.open(context),
             ),
             _MapFirstFloatingActions(
               followModeN: _followModeN,
